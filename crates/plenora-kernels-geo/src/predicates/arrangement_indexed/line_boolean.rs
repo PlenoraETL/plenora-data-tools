@@ -4,7 +4,8 @@
 //! seguono GOP-015A: binary64 piu' vicino, meta' al pari, errore <= 1/2 ulp
 //! per ordinata. Verifica topologica dopo arrotondamento, senza tolleranze.
 //! Le parti sono segmenti atomici, orientati e ordinati lessicograficamente
-//! XY; nessuna fusione ai nodi, neppure collineari. Vertici originali invariati.
+//! XY; i nodi costruiti collineari senza incidenze sono eliminati.
+//! Vertici originali invariati.
 //! Per siti coincidenti con zeri di segno diverso prevale il primo in ingresso.
 //! Profilo binario: Point, `MultiPoint`, `LineString`, `MultiLineString`, Polygon;
 //! almeno una linea oppure entrambi puntuali. Nessuna booleana area/area.
@@ -67,9 +68,9 @@ const fn dimension(g: &Geometry<f64>) -> Result<u8, LineBooleanError> {
 /// multi omogenei; collezioni miste in dimensione crescente; vuoto generale
 /// `GeometryCollection` e vuoto filtrato multi tipizzato. La differenza conserva
 /// la chiusura: poligono meno linea conserva il poligono. Le coordinate del
-/// poligono conservato mantengono l'ordine originale. I tratti lineari sono
-/// atomici, senza duplicati e senza fusione. Cancellazione precede deadline,
-/// come in relate e `point_boolean`; ogni ciclo ha checkpoint contati.
+/// poligono seguono il pubblicatore comune delle booleane generali. I tratti
+/// lineari non hanno duplicati o nodi costruiti superflui. Ogni ciclo ha
+/// checkpoint contati, con deadline prima della cancellazione.
 /// Limiti contabili e scratch aritmetici esclusi come in `RelateLimits`.
 ///
 /// # Errors
@@ -88,6 +89,7 @@ pub fn boolean_with_limits(
         right,
         operation,
         output_dimension,
+        limits,
         &mut Work::new(limits, cancelled),
     )
 }
@@ -137,7 +139,6 @@ fn select_edges(
     a: &Shape,
     b: &Shape,
     op: LineBooleanOp,
-    polygon: Option<&Shape>,
     work: &mut Work<'_>,
 ) -> Result<CountedVec<Edge>, PredicateError> {
     let mut edges = CountedVec::new();
@@ -155,11 +156,6 @@ fn select_edges(
             ) {
                 continue;
             }
-            if let Some(polygon) = polygon {
-                if polygon.position(&mid, work)? != 2 {
-                    continue;
-                }
-            }
             let (start, end) = if point_cmp(&pair[0], &pair[1])?.is_gt() {
                 (&pair[1], &pair[0])
             } else {
@@ -175,7 +171,19 @@ fn select_edges(
             )?;
         }
     }
-    Ok(edges)
+    let ids = ordered_ids(&edges, edge_cmp, work)?;
+    let mut unique = CountedVec::new();
+    for id in ids {
+        work.nodes(2)?;
+        work.push(
+            &mut unique,
+            Edge {
+                a: edges[id].a.try_clone()?,
+                b: edges[id].b.try_clone()?,
+            },
+        )?;
+    }
+    Ok(unique)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -184,6 +192,7 @@ fn execute(
     right: &Geometry<f64>,
     op: LineBooleanOp,
     filter: Option<u8>,
+    limits: RelateLimits,
     work: &mut Work<'_>,
 ) -> Result<Geometry<f64>, LineBooleanError> {
     work.step()?;
@@ -204,26 +213,44 @@ fn execute(
             super::relate(&empty, right, work)?;
         }
     }
+    if ld == 2 || rd == 2 {
+        use super::polygon_boolean::{execute_many, PolygonBooleanError, PolygonBooleanLimits};
+        return execute_many(
+            std::slice::from_ref(left),
+            std::slice::from_ref(right),
+            op,
+            filter,
+            &mut PolygonBooleanLimits {
+                work: limits,
+                // Ogni elemento addebita almeno uno step: nessun tetto aggiunto.
+                max_edges: limits.max_steps,
+                max_faces: limits.max_steps,
+                max_rings: limits.max_steps,
+            },
+            work,
+        )
+        .map_err(|error| match error {
+            PolygonBooleanError::UnsupportedOperands => LineBooleanError::UnsupportedOperands,
+            PolygonBooleanError::InvalidOutputDimension => LineBooleanError::InvalidOutputDimension,
+            PolygonBooleanError::InvalidRoundedTopology => LineBooleanError::InvalidRoundedTopology,
+            PolygonBooleanError::CoordinateOutOfRange => LineBooleanError::CoordinateOutOfRange,
+            PolygonBooleanError::Predicate(error) => LineBooleanError::Predicate(error),
+        });
+    }
     let mut a = Shape::default();
     let mut b = Shape::default();
     a.geometry(left, work)?;
     b.geometry(right, work)?;
     a.build_indices(work)?;
     b.build_indices(work)?;
-    let polygon = if ld == 2 && matches!(op, LineBooleanOp::Union | LineBooleanOp::Difference) {
-        Some((&a, left))
-    } else if rd == 2 && op == LineBooleanOp::Union {
-        Some((&b, right))
-    } else {
-        None
-    };
     let mut source = CountedVec::new();
     for edge in a.edges().chain(b.edges()) {
         work.push(&mut source, edge)?;
     }
     let originals = Originals::new(left, right, work)?;
     let nodes = crate::noding::node(&source, work)?;
-    let edges = select_edges(&nodes, &a, &b, op, polygon.map(|p| p.0), work)?;
+    let edges = select_edges(&nodes, &a, &b, op, work)?;
+    let edges = super::polygon_boolean::carried_edges(&edges, &[], &originals, work)?;
     let edge_ids = ordered_ids(&edges, edge_cmp, work)?;
     let index = IntervalIndex::new(edges.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
     let mut candidates = CountedVec::new();
@@ -243,11 +270,6 @@ fn execute(
         let p = candidates[id];
         if !selected(op, a.position(p, work)? != 2, b.position(p, work)? != 2) {
             continue;
-        }
-        if let Some((shape, _)) = polygon {
-            if shape.position(p, work)? != 2 {
-                continue;
-            }
         }
         let mut covered = false;
         for id in index.candidates(&p.x, work)? {
@@ -302,71 +324,6 @@ fn execute(
                 Geometry::MultiLineString(MultiLineString::new(lines)),
             )?;
         }
-    }
-    if filter.is_none_or(|d| d == 2) {
-        if let Some((_, original)) = polygon {
-            if let Some(g) = super::point_boolean::copy_higher(original, work)? {
-                work.push(&mut components, g)?;
-            }
-        }
-    }
-    // I confini copiati sono suddivisi solo ai siti effettivamente pubblicati.
-    // I nodi eliminati dalla selezione non partecipano al certificato.
-    let mut boundary = CountedVec::new();
-    if !published.is_empty() && filter.is_none_or(|d| d == 2) {
-        if let Some((shape, _)) = polygon {
-            let mut endpoints = CountedVec::new();
-            for edge in &published {
-                for p in edge.exact {
-                    work.push(&mut endpoints, p)?;
-                }
-            }
-            let ids = ordered_ids(&endpoints, |a, b| point_cmp(a, b), work)?;
-            let start = if ld == 2 { 0 } else { a.edges().count() };
-            for (path, original) in nodes[start..].iter().zip(shape.edges()) {
-                let mut previous = None;
-                for (position, p) in path.iter().enumerate() {
-                    work.step()?;
-                    let (mut low, mut high) = (0, ids.len());
-                    while low < high {
-                        work.step()?;
-                        let mid = low + (high - low) / 2;
-                        if point_cmp(endpoints[ids[mid]], p)?.is_lt() {
-                            low = mid + 1;
-                        } else {
-                            high = mid;
-                        }
-                    }
-                    let published = low < ids.len() && endpoints[ids[low]] == p;
-                    if position != 0 && position + 1 != path.len() && !published {
-                        continue;
-                    }
-                    if let Some(before) = previous {
-                        work.nodes(2)?;
-                        work.push(
-                            &mut boundary,
-                            (
-                                Edge {
-                                    a: P::try_clone(before)?,
-                                    b: p.try_clone()?,
-                                },
-                                original,
-                            ),
-                        )?;
-                    }
-                    previous = Some(p);
-                }
-            }
-        }
-    }
-    for (edge, support) in &boundary {
-        let coords = [
-            originals.coordinate(&edge.a, work)?,
-            originals.coordinate(&edge.b, work)?,
-        ];
-        let mut publication = PublishedEdge::new(edge, coords, work)?;
-        publication.support = Some(support);
-        work.push(&mut published, publication)?;
     }
     verify_publication(&published, &originals, false, None, work)?;
     finish(components, filter, work)
@@ -649,6 +606,19 @@ impl Originals {
         }
         Ok(())
     }
+    pub(super) fn contains(&self, p: &P, work: &mut Work<'_>) -> Result<bool, PredicateError> {
+        let (mut low, mut high) = (0, self.ids.len());
+        while low < high {
+            work.step()?;
+            let mid = low + (high - low) / 2;
+            match point_cmp(&self.values[self.ids[mid]].0, p)? {
+                Ordering::Equal => return Ok(true),
+                Ordering::Less => low = mid + 1,
+                Ordering::Greater => high = mid,
+            }
+        }
+        Ok(false)
+    }
     pub(crate) fn coordinate(
         &self,
         p: &P,
@@ -677,7 +647,7 @@ pub(crate) struct PublishedEdge<'a> {
     rounded: Edge,
     coords: [Coord<f64>; 2],
     noded: bool,
-    // Lato immutato cui il segmento pubblicato deve restare aderente.
+    // Supporto di provenienza esatta; i nodi pubblicati seguono GOP-015A.
     pub(crate) support: Option<&'a Edge>,
     pub(crate) surface: bool,
     pub(crate) component: bool,
@@ -904,7 +874,7 @@ pub(crate) fn verify_publication(
             }
             if let Some(support) = edge.support {
                 work.pair()?;
-                if !support.contains(rounded)? {
+                if !support.contains(exact)? {
                     return Err(LineBooleanError::InvalidRoundedTopology);
                 }
             }

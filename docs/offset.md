@@ -60,11 +60,16 @@ cambio di concorrenza dopo rounding e' `InvalidRoundedTopology`.
 
 ## Limiti
 
-Il certificato della discretizzazione e' conservativo: i pezzi estranei
-alle due tangenti incidenti devono restare fuori dal disco dell'arco,
-maggiorato della tolleranza degli altri archi. Se non riesce a provare questa
-separazione, restituisce `AccuracyUnproven`, anche se una costruzione piu'
-sofisticata potrebbe riuscire. Non elimina incroci nella lente arco/corda.
+Il certificato della discretizzazione considera ogni lente fra corda e arco,
+contenuta nel triangolo formato dalla corda e dalle tangenti agli estremi.
+Certifica la separazione fra queste regioni e i segmenti estranei; ammette
+un attraversamento trasverso arco/segmento quando gli estremi dell'arco
+sono su lati opposti della retta e gli estremi del segmento fuori dal
+triangolo. Certifica al massimo un attraversamento per lente: piu' incroci
+richiedono anche una prova del loro ordine. Le lenti di archi distinti sono
+confrontate fra loro.
+Un contatto o una separazione non dimostrabili producono `AccuracyUnproven`.
+Non elimina incroci nella lente arco/corda.
 
 Le bisezioni provano successivamente 80, 160, 320, 640, 1280 e 2560 passi per
 radice. Una cancellazione algebrica non riconosciuta, una tangente irrazionale

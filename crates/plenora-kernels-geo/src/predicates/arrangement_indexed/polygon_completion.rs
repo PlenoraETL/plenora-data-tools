@@ -388,6 +388,60 @@ fn output_ring(
     Ok(LineString::new(values.export(work)?))
 }
 
+// Le facce conservano solo le incidenze pubblicate, con la stessa regola
+// delle booleane. Area e provenienza restano quelle del grafo esatto.
+fn simplify_selected_rings(
+    graph: &mut FaceGraph,
+    faces: &[OutputFace],
+    originals: &Originals,
+    work: &mut Work<'_>,
+) -> Result<(), PredicateError> {
+    let mut selected = CountedVec::new();
+    for face in faces {
+        for &id in std::iter::once(&face.shell).chain(&face.holes) {
+            work.push(&mut selected, id)?;
+        }
+    }
+    for &id in &selected {
+        let mut edges = CountedVec::new();
+        let mut incident = CountedVec::new();
+        for &other in &selected {
+            let ring = &graph.rings[other];
+            for i in 0..ring.vertices.len() {
+                work.nodes(2)?;
+                let edge = Edge {
+                    a: graph.points[ring.vertices[i]].try_clone()?,
+                    b: graph.points[ring.vertices[(i + 1) % ring.vertices.len()]].try_clone()?,
+                };
+                work.push(
+                    if id == other {
+                        &mut edges
+                    } else {
+                        &mut incident
+                    },
+                    edge,
+                )?;
+            }
+        }
+        let reduced = super::polygon_boolean::carried_edges(&edges, &incident, originals, work)?;
+        let mut vertices = CountedVec::new();
+        let mut atoms = CountedVec::new();
+        for edge in reduced {
+            for (i, &vertex) in graph.rings[id].vertices.iter().enumerate() {
+                work.step()?;
+                if graph.points[vertex] == edge.a {
+                    work.push(&mut vertices, vertex)?;
+                    work.push(&mut atoms, graph.rings[id].atoms[i])?;
+                    break;
+                }
+            }
+        }
+        graph.rings[id].vertices = vertices;
+        graph.rings[id].atoms = atoms;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn execute(
     polygons: &[Polygon<f64>],
@@ -451,6 +505,7 @@ fn execute(
         _ => return Err(PolygonCompletionError::UnsupportedLinework),
     }
     let originals = Originals::from_coords(input_coords.iter().copied(), work)?;
+    simplify_selected_rings(&mut graph, &faces, &originals, work)?;
     let mut coords = CountedVec::new();
     for p in &graph.points {
         work.nodes(1)?;
@@ -564,13 +619,13 @@ fn execute(
     };
     let mut polygons = CountedVec::new();
     for geometry in output.0 {
-        // Verifica la disgiunzione dall'area originale, che non viene arrotondata.
+        // L'area occupata non e' un output modificabile del completamento.
+        // GOP-020 richiede disgiunzione anche dopo il rounding dei nodi nuovi.
         for original in &copies {
             if super::relate(&geometry, original, work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::InvalidRoundedTopology);
             }
         }
-
         let Geometry::Polygon(polygon) = geometry else {
             return Err(PolygonCompletionError::InvalidRoundedTopology);
         };

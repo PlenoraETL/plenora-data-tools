@@ -582,3 +582,98 @@ fn rational_disjoint_edges_fraction_oracle() {
         LineString::from(vec![(0., 0.), (1., 0.)])
     );
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn rounded_lenses_preserve_short_edges_and_true_crossings() {
+    // GOP-017, raccolta D2: due quarti di cerchio disgiunti e un incrocio
+    // trasverso dell'ansa aperta, senza semplificare l'uscita.
+    for (coords, distance, expected) in [
+        (
+            vec![(0., 0.), (10., 0.), (10., 0.1), (0., 0.1)],
+            1.,
+            include_str!("../../tests/oracles/hairpin_fraction.txt"),
+        ),
+        (
+            vec![
+                (-5., 0.),
+                (0., 0.),
+                (0., -5.),
+                (3., -5.),
+                (3., 2.),
+                (-5., 2.),
+            ],
+            -1.1,
+            include_str!("../../tests/oracles/crossing_fraction.txt"),
+        ),
+    ] {
+        let input = line(&coords);
+        let result = offset_with_limits(
+            &input,
+            OffsetOptions {
+                distance,
+                join: OffsetJoin::Rounded,
+                arc_tolerance: 0.01,
+            },
+            RelateLimits::default(),
+            None,
+        )
+        .unwrap();
+        let expected: Vec<Coord<f64>> = expected
+            .lines()
+            .map(|row| {
+                let values: Vec<f64> = row.split_whitespace().map(|v| v.parse().unwrap()).collect();
+                Coord {
+                    x: values[0],
+                    y: values[1],
+                }
+            })
+            .collect();
+        assert_eq!(result.line.0, expected);
+        assert!(result.line.0.len() > coords.len());
+        assert_eq!(
+            result.line.0.first().unwrap().x.to_bits(),
+            coords[0].0.to_bits()
+        );
+    }
+    // Oracolo Decimal a 200 cifre del lettore, raggio 10 e lati circa 0.1.
+    let parse = |text: &str| -> Vec<(f64, f64)> {
+        text.lines()
+            .map(|row| {
+                let values: Vec<f64> = row.split_whitespace().map(|v| v.parse().unwrap()).collect();
+                (values[0], values[1])
+            })
+            .collect()
+    };
+    let coords = parse(include_str!("../../tests/oracles/dense_input.txt"));
+    let expected = parse(include_str!("../../tests/oracles/dense_offset.txt"));
+    let result = run(&line(&coords), 1., OffsetJoin::Rounded);
+    assert_eq!(result.line, LineString::from(expected));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn lens_bounds_match_generic_separating_sides() {
+    // SAT esatto generico: triangoli convessi e segmenti, incluse tangenze.
+    let mut work = Work::new(RelateLimits::default(), None);
+    let exact = |x, y| EnclosedPoint::exact(&P::of_in(Coord { x, y }, &work).unwrap()).unwrap();
+    let a = [exact(0., 0.), exact(2., 0.), exact(1., 1.)];
+    for x in -4..=4 {
+        for y in -4..=4 {
+            let exact =
+                |x, y| EnclosedPoint::exact(&P::of_in(Coord { x, y }, &work).unwrap()).unwrap();
+            let b = [
+                exact(f64::from(x), f64::from(y)),
+                exact(f64::from(x + 2), f64::from(y)),
+                exact(f64::from(x + 1), f64::from(y + 1)),
+            ];
+            for count in [2, 3] {
+                let fast = separated(&a, &b[..count], &mut work).unwrap()
+                    || separated(&b[..count], &a, &mut work).unwrap();
+                let generic = separated_by_sides(&a, &b[..count], &mut work).unwrap()
+                    || separated_by_sides(&b[..count], &a, &mut work).unwrap();
+                assert_eq!(fast, generic);
+            }
+        }
+    }
+}

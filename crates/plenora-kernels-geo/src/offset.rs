@@ -22,6 +22,7 @@ use crate::predicates::arrangement_indexed::line_boolean::{
 };
 use crate::predicates::{PredicateError, RelateLimits};
 use geo::{Coord, Geometry, LineString};
+use std::cmp::Ordering;
 use std::sync::atomic::AtomicBool;
 
 mod enclosure;
@@ -617,10 +618,117 @@ struct ArcRegion<'a> {
     center: &'a P,
 }
 
-// Certificato conservativo: ogni pezzo estraneo deve restare fuori dal disco
-// dell'arco, maggiorato della tolleranza degli altri archi. Le due tangenti
-// incidenti sono escluse: il raccordo minore non puo' incontrarle altrove.
-// Cosi' la lente fra corda e arco non puo' creare o cancellare un contatto.
+// La lente circolare e' contenuta nel triangolo formato dalla corda e
+// dalle tangenti ai suoi estremi. Separare questi triangoli certifica anche
+// archi vicini; un attraversamento trasverso conserva l'unico incrocio.
+fn lens_triangle(
+    a: &EnclosedPoint,
+    b: &EnclosedPoint,
+    center: &P,
+    square: &Enclosure,
+    work: &Work<'_>,
+) -> Result<[EnclosedPoint; 3], OffsetError> {
+    let center = EnclosedPoint::exact(center)?;
+    let u = a.sub(&center)?;
+    let v = b.sub(&center)?;
+    let scale = square.div(&square.add(&u.dot(&v)?)?, work)?;
+    Ok([
+        a.copy()?,
+        b.copy()?,
+        center.add(&u.add(&v)?.scale(&scale)?)?,
+    ])
+}
+
+fn side(a: &EnclosedPoint, b: &EnclosedPoint, p: &EnclosedPoint) -> Result<Enclosure, OffsetError> {
+    b.sub(a)?.cross(&p.sub(a)?)
+}
+
+fn strict_side(value: &Enclosure) -> Option<Ordering> {
+    if value.low.sign().is_gt() {
+        Some(Ordering::Greater)
+    } else if value.high.sign().is_lt() {
+        Some(Ordering::Less)
+    } else {
+        None
+    }
+}
+
+fn separated(
+    a: &[EnclosedPoint],
+    b: &[EnclosedPoint],
+    work: &mut Work<'_>,
+) -> Result<bool, OffsetError> {
+    for x in [true, false] {
+        let bounds = |points: &[EnclosedPoint]| -> Result<_, OffsetError> {
+            let first = if x { &points[0].x } else { &points[0].y };
+            let (mut low, mut high) = (first.low.try_clone()?, first.high.try_clone()?);
+            for point in &points[1..] {
+                let value = if x { &point.x } else { &point.y };
+                if value.low.try_cmp(&low)?.is_lt() {
+                    low = value.low.try_clone()?;
+                }
+                if value.high.try_cmp(&high)?.is_gt() {
+                    high = value.high.try_clone()?;
+                }
+            }
+            Ok((low, high))
+        };
+        work.step()?;
+        let (al, ah) = bounds(a)?;
+        let (bl, bh) = bounds(b)?;
+        if ah.try_cmp(&bl)?.is_lt() || bh.try_cmp(&al)?.is_lt() {
+            return Ok(true);
+        }
+    }
+    work.pair()?;
+    separated_by_sides(a, b, work)
+}
+
+fn separated_by_sides(
+    a: &[EnclosedPoint],
+    b: &[EnclosedPoint],
+    work: &mut Work<'_>,
+) -> Result<bool, OffsetError> {
+    for i in 0..a.len() {
+        work.step()?;
+        let start = &a[i];
+        let end = &a[(i + 1) % a.len()];
+        let mut own = None;
+        for (j, point) in a.iter().enumerate() {
+            if j != i && j != (i + 1) % a.len() {
+                own = strict_side(&side(start, end, point)?);
+            }
+        }
+        let mut other = None;
+        let mut same = true;
+        for point in b {
+            let sign = strict_side(&side(start, end, point)?);
+            if sign.is_none() || (other.is_some() && other != sign) {
+                same = false;
+                break;
+            }
+            other = sign;
+        }
+        if same && other.is_some() && (a.len() == 2 || (own.is_some() && own != other)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn outside_triangle(p: &EnclosedPoint, triangle: &[EnclosedPoint; 3]) -> Result<bool, OffsetError> {
+    for i in 0..3 {
+        let a = &triangle[i];
+        let b = &triangle[(i + 1) % 3];
+        let own = strict_side(&side(a, b, &triangle[(i + 2) % 3])?);
+        let other = strict_side(&side(a, b, p)?);
+        if own.is_some() && other.is_some() && own != other {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn certify_arcs(
     points: &[EnclosedPoint],
     arcs: &[ArcRegion<'_>],
@@ -630,31 +738,53 @@ fn certify_arcs(
     if arcs.is_empty() {
         return Ok(());
     }
-    let radius =
-        rational(options.distance.abs(), work)?.try_add(&rational(options.arc_tolerance, work)?)?;
+    let radius = rational(options.distance.abs(), work)?;
     let square = Enclosure::exact(radius.try_mul(&radius)?)?;
-    for arc in arcs {
-        let center = EnclosedPoint::exact(arc.center)?;
-        for (i, pair) in points.windows(2).enumerate() {
+    let mut lenses = CountedVec::new();
+    for (i, pair) in points.windows(2).enumerate() {
+        let mut lens = None;
+        for arc in arcs {
             work.step()?;
-            if i + 1 >= arc.first && i <= arc.last {
-                continue;
+            if i >= arc.first && i < arc.last {
+                lens = Some(lens_triangle(
+                    &pair[0], &pair[1], arc.center, &square, work,
+                )?);
+                break;
             }
-            work.pair()?;
-            let a = pair[0].sub(&center)?;
-            let b = pair[1].sub(&center)?;
-            let direction = b.sub(&a)?;
-            let from = a.dot(&direction)?;
-            let to = b.dot(&direction)?;
-            let distance_square = if from.sign()?.is_ge() {
-                a.dot(&a)?
-            } else if to.sign()?.is_le() {
-                b.dot(&b)?
-            } else {
-                let cross = a.cross(&direction)?;
-                cross.mul(&cross)?.div(&direction.dot(&direction)?, work)?
-            };
-            if !distance_square.sub(&square)?.sign()?.is_gt() {
+        }
+        work.push(&mut lenses, lens)?;
+    }
+    for arc in arcs {
+        for chord in arc.first..arc.last {
+            let triangle = lenses[chord]
+                .as_ref()
+                .ok_or(OffsetError::AccuracyUnproven)?;
+            let mut crossing = false;
+            for (i, pair) in points.windows(2).enumerate() {
+                work.step()?;
+                if i + 1 >= arc.first && i <= arc.last {
+                    continue;
+                }
+                let other = lenses[i].as_ref().map_or(pair, |triangle| &triangle[..]);
+                if separated(triangle, other, work)? || separated(other, triangle, work)? {
+                    continue;
+                }
+                if lenses[i].is_none() {
+                    let a = strict_side(&side(&pair[0], &pair[1], &triangle[0])?);
+                    let b = strict_side(&side(&pair[0], &pair[1], &triangle[1])?);
+                    if a.is_some()
+                        && b.is_some()
+                        && a != b
+                        && outside_triangle(&pair[0], triangle)?
+                        && outside_triangle(&pair[1], triangle)?
+                        && !crossing
+                    {
+                        // Un solo attraversamento per lente evita scambi d'ordine
+                        // fra incroci durante la deformazione arco/corda.
+                        crossing = true;
+                        continue;
+                    }
+                }
                 return Err(OffsetError::AccuracyUnproven);
             }
         }

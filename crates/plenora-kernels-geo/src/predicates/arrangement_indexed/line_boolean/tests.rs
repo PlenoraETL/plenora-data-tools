@@ -54,7 +54,7 @@ fn overlaps_crossings_and_direction() {
     // Fonte C1: GOP-015 sottrarre un punto non apre gli estremi rappresentati.
     assert_eq!(
         run(&a, &b, LineBooleanOp::Difference),
-        g("MULTILINESTRING((-1 0,0 0),(0 0,1 0))")
+        g("MULTILINESTRING((-1 0,1 0))")
     );
 }
 
@@ -77,6 +77,7 @@ fn polygon_hole_boundary_touch_and_mixed_union() {
     // Fonte C1: GOP-015 chiusura; il taglio di dimensione inferiore conserva l'area.
     assert_eq!(run(&polygon, &line, LineBooleanOp::Difference), higher);
     // Fonte C1: GOP-014 unione mista, linee esterne prima del poligono.
+    let higher = g("MULTIPOLYGON(((0 0,6 0,6 3,6 6,0 6,0 3,0 0),(2 2,2 3,2 4,4 4,4 3,4 2,2 2)))");
     let expected = Geometry::GeometryCollection(GeometryCollection(vec![outside, higher]));
     assert_eq!(run(&line, &polygon, LineBooleanOp::Union), expected);
     assert_eq!(run(&polygon, &line, LineBooleanOp::Union), expected);
@@ -250,7 +251,15 @@ fn exact_thresholds_cancellation_and_deadline() {
     let a = g("LINESTRING(0 0,4 4)");
     let b = g("LINESTRING(0 4,4 0)");
     let mut work = Work::new(RelateLimits::default(), None);
-    let expected = execute(&a, &b, LineBooleanOp::Union, None, &mut work).unwrap();
+    let expected = execute(
+        &a,
+        &b,
+        LineBooleanOp::Union,
+        None,
+        RelateLimits::default(),
+        &mut work,
+    )
+    .unwrap();
     for field in 0..4 {
         let exact = [work.steps, work.nodes, work.pairs, work.peak_bytes()][field];
         for delta in [-1_i64, 0, 1] {

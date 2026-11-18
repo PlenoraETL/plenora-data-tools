@@ -1733,7 +1733,9 @@
       "exact_mitre_limit_and_clockwise_arc",
       "disjoint_collinearity_fraction_oracle",
       "finite_overflow_rounding_and_unused_tolerance",
-      "rational_disjoint_edges_fraction_oracle"
+      "rational_disjoint_edges_fraction_oracle",
+      "rounded_lenses_preserve_short_edges_and_true_crossings",
+      "lens_bounds_match_generic_separating_sides"
     ],
     "crates/plenora-kernels-geo/src/operations.rs": [
       "l_area_si_scala_con_il_quadrato",
@@ -1871,7 +1873,7 @@
       "deadline_precedence_is_shared",
       "cancellation_and_deadline_after_work_started",
       "unpublished_intersections_do_not_force_rounding",
-      "rounded_boundary_node_outside_original_support_is_rejected",
+      "rounded_boundary_node_uses_shared_publication",
       "canonical_area_and_sequence_ties",
       "existing_role_on_hole_and_subnormal_collapse",
       "open_input_rings_are_not_implicitly_closed",

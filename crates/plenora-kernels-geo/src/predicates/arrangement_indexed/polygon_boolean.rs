@@ -262,6 +262,81 @@ fn boundary(
     })
 }
 
+// Un nodo costruito di grado due su un supporto rettilineo non appartiene
+// alla topologia pubblicata. I vertici originali e le incidenze restano.
+pub(super) fn carried_edges(
+    edges: &[Edge],
+    incident: &[Edge],
+    originals: &Originals,
+    work: &mut Work<'_>,
+) -> Result<CountedVec<Edge>, PredicateError> {
+    let mut used = CountedVec::new();
+    for _ in edges {
+        work.push(&mut used, false)?;
+    }
+    let mut result = CountedVec::new();
+    for (id, edge) in edges.iter().enumerate() {
+        work.step()?;
+        if used[id] {
+            continue;
+        }
+        used[id] = true;
+        let mut a = edge.a.try_clone()?;
+        let mut b = edge.b.try_clone()?;
+        for at_start in [true, false] {
+            loop {
+                work.step()?;
+                let at = if at_start { &a } else { &b };
+                if originals.contains(at, work)? {
+                    break;
+                }
+                let mut degree = 0;
+                let mut next = None;
+                for (other, candidate) in edges.iter().enumerate() {
+                    work.step()?;
+                    if candidate.a == *at || candidate.b == *at {
+                        degree = (degree + 1).min(3);
+                        if !used[other] {
+                            next = Some(other);
+                        }
+                    }
+                }
+                for candidate in incident {
+                    work.step()?;
+                    if candidate.a == *at || candidate.b == *at {
+                        degree = (degree + 1).min(3);
+                    }
+                }
+                if degree != 2 {
+                    break;
+                }
+                let Some(next) = next else {
+                    break;
+                };
+                let candidate = &edges[next];
+                let end = if candidate.a == *at {
+                    &candidate.b
+                } else {
+                    &candidate.a
+                };
+                if !b.try_sub(&a)?.try_cross(&end.try_sub(at)?)?.sign().is_eq() {
+                    break;
+                }
+                let end = end.try_clone()?;
+                used[next] = true;
+                if at_start {
+                    a = end;
+                } else {
+                    b = end;
+                }
+            }
+        }
+        work.nodes(2)?;
+        work.push(&mut result, Edge { a, b })?;
+    }
+    Ok(result)
+}
+
 struct Cycle {
     shell: bool,
     index: IntervalIndex,
@@ -523,7 +598,31 @@ fn assemble_result(
     originals: &Originals,
     work: &mut Work<'_>,
 ) -> Result<Geometry<f64>, PolygonBooleanError> {
-    let boundary = boundary(a, b, op, limits, work)?;
+    let mut boundary = boundary(a, b, op, limits, work)?;
+    if filter.is_none_or(|d| d == 2) {
+        boundary.edges = carried_edges(
+            &boundary.edges,
+            if filter.is_none() {
+                &boundary.contacts
+            } else {
+                &[]
+            },
+            originals,
+            work,
+        )?;
+    }
+    if filter.is_none_or(|d| d == 1) {
+        boundary.contacts = carried_edges(
+            &boundary.contacts,
+            if filter.is_none() {
+                &boundary.edges
+            } else {
+                &[]
+            },
+            originals,
+            work,
+        )?;
+    }
     let rings = cycles(&boundary.edges, limits, work)?;
     let polygons = if filter.is_none_or(|d| d == 2) {
         assemble(&rings, originals, work)?

@@ -333,22 +333,21 @@ fn unpublished_intersections_do_not_force_rounding() {
 }
 
 #[test]
-fn rounded_boundary_node_outside_original_support_is_rejected() {
+fn rounded_boundary_node_uses_shared_publication() {
     let p = polygon("POLYGON((0 0,3 1,0 2,0 0))");
-    let line = geometry("LINESTRING(1 0,1 -1,3 -1,3 1)");
-    // Fonte GOP-015A: nodo (1,1/3) non rappresentabile sul bordo y=x/3.
-    // La prima coordinata deve attraversare il bordo, non terminare sotto.
-    let line = match line {
-        Geometry::LineString(mut l) => {
-            l.0[0].y = 1.;
-            Geometry::LineString(l)
-        }
-        _ => unreachable!(),
-    };
-    assert!(matches!(
-        polygon_completion_with_limits(&[p], &line, RelateLimits::default(), None),
-        Err(PolygonCompletionError::InvalidRoundedTopology)
-    ));
+    let line = geometry("LINESTRING(1 1,1 -1,3 -1,3 1)");
+    // GOP-015A/020: float(Fraction(1,3)) e' il nodo pubblicato del bordo.
+    let expected = Polygon::new(
+        LineString::from(vec![
+            (1., -1.),
+            (3., -1.),
+            (3., 1.),
+            (1., 1. / 3.),
+            (1., -1.),
+        ]),
+        vec![],
+    );
+    assert_eq!(run(&[p], &line), vec![expected]);
 }
 
 #[test]
