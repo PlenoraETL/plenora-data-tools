@@ -1,7 +1,7 @@
 //! Profilo esatto dei buffer degeneri GOP-008: vuoti e punti/linee a raggio zero.
 //!
-//! Non espone buffer non degeneri. Non costruisce coordinate. I vertici
-//! del confine di un buffer geodetico ricadono nel certificato GOP-006;
+//! Il profilo vuoto non costruisce coordinate; [`point`] espone il disco locale.
+//! I vertici del confine di un buffer geodetico ricadono nel certificato GOP-006;
 //! GOP-015A riguarda invece i nodi delle booleane e i punti dell'editing.
 
 #![allow(clippy::float_cmp, reason = "Identita e simmetrie geodetiche esatte")]
@@ -15,6 +15,8 @@ use plenora_core::crs::{CrsKind, ResolvedCrs};
 use thiserror::Error;
 
 use crate::geodetica::EllissoideGeodetico;
+
+pub mod point;
 
 /// Budget cumulativi finiti; zero consente zero lavoro o zero output.
 #[derive(Clone, Copy, Debug)]
@@ -125,6 +127,21 @@ pub enum DegenerateBufferError {
     /// Categoria execution, codice `GEOMETRY_ACCURACY_UNPROVEN`.
     #[error("GEOMETRY_ACCURACY_UNPROVEN")]
     AccuracyUnproven,
+    /// Dominio locale del disco, poli o antimeridiano esclusi.
+    #[error("superficie del buffer geodetico non supportata")]
+    UnsupportedSurface,
+    /// Tolleranza non finita o non positiva.
+    #[error("tolleranza del buffer geodetico non valida")]
+    InvalidTolerance,
+    /// Coordinate emesse, compresa la chiusura.
+    #[error("limite di vertici del buffer superato")]
+    VertexLimit,
+    /// Memoria richiesta prima della crescita.
+    #[error("limite di memoria del buffer superato")]
+    MemoryLimit,
+    /// Prenotazione fallita.
+    #[error("allocazione del buffer fallita")]
+    Allocation,
     /// Categoria `resource_limit`.
     #[error("limite di lavoro del buffer superato")]
     WorkLimit,

@@ -8063,6 +8063,12 @@
       "classification": "non riceve dati esterni",
       "reason": "API geo XY e sequenza di poligoni vuoti; nessun ingresso di buffer o celle Arrow.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs::geodesic_point_buffer_with_limits": {
+      "signature": "pub fn geodesic_point_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, limits: PointBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<PointBufferResult<'a>, DegenerateBufferError>",
+      "classification": "non riceve dati esterni",
+      "reason": "API geo XY e dischi geodetici; nessun ingresso di buffer o celle Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {
