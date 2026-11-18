@@ -1,7 +1,8 @@
 //! Profilo esatto dei buffer degeneri GOP-008: vuoti e punti/linee a raggio zero.
 //!
-//! Non espone buffer non degeneri. Non costruisce coordinate: GOP-015A e'
-//! soddisfatto senza approssimare il risultato di una primitiva direct.
+//! Non espone buffer non degeneri. Non costruisce coordinate. I vertici
+//! del confine di un buffer geodetico ricadono nel certificato GOP-006;
+//! GOP-015A riguarda invece i nodi delle booleane e i punti dell'editing.
 
 #![allow(clippy::float_cmp, reason = "Identita e simmetrie geodetiche esatte")]
 
@@ -288,7 +289,8 @@ impl BufferWork<'_> {
 /// GOP-008 prescrive il vuoto poligonale anche per punti/linee non vuoti
 /// a raggio zero. Il certificato confronta questo output normativo con
 /// se stesso (Hausdorff esteso d(vuoto,vuoto)=0), non con l'insieme lineare.
-/// GOP-005 e GOP-015A sono vacui sull'output senza anelli o coordinate.
+/// GOP-005 e' vacuo sull'output senza anelli. GOP-015A non governa
+/// l'approssimazione del confine di un buffer geodetico.
 /// Nessuna riparazione, trasformazione o serializzazione e' implicita.
 ///
 /// Distanze in metri, ordine distance-major/input-major; `union_results`
