@@ -8154,26 +8154,8 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::boolean_with_limits": {
-      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: PointBooleanOp, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::difference_with_limits": {
-      "signature": "pub fn difference_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::intersection_with_limits": {
-      "signature": "pub fn intersection_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::union_with_limits": {
-      "signature": "pub fn union_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
+    "crates/plenora-kernels-geo/src/geodesic_densify.rs::geodesic_densify_with_limits": {
+      "signature": "pub fn geodesic_densify_with_limits( parts: &[LineString<f64>], crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError>",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -8202,22 +8184,46 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::boolean_with_limits": {
+      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: PointBooleanOp, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::difference_with_limits": {
+      "signature": "pub fn difference_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::intersection_with_limits": {
+      "signature": "pub fn intersection_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::union_with_limits": {
+      "signature": "pub fn union_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
     "crates/plenora-kernels-geo/src/noding/faces.rs::enumerate": {
       "signature": "pub fn enumerate( nodes: &[CountedVec<P>], work: &mut Work<'_>, ) -> Result<FaceGraph, PredicateError>",
       "classification": "non riceve dati esterni",
-      "reason": "Enumerazione interna su percorsi razionali del noder comune; nessun ingresso Arrow.",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion.rs::from": {
       "signature": "fn from(error: LineBooleanError) -> Self",
       "classification": "non riceve dati esterni",
-      "reason": "API Rust XY su geometrie tipizzate; nessun buffer o cella Arrow.",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion.rs::polygon_completion_with_limits": {
       "signature": "pub fn polygon_completion_with_limits( polygons: &[Polygon<f64>], linework: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<Polygon<f64>>, PolygonCompletionError>",
       "classification": "non riceve dati esterni",
-      "reason": "API Rust XY su geometrie tipizzate; nessun buffer o cella Arrow.",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     }
   },
