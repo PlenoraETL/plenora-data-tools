@@ -8015,6 +8015,30 @@
       "classification": "non riceve dati esterni",
       "reason": "Primitiva geodetica su parti lineari Rust e CRS risolto; nessun dato Arrow ricevuto.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_distance.rs::eq": {
+      "signature": "fn eq(&self, other: &Self) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "Kernel su geometrie Rust e CRS risolto, oppure ordinamento interno delle celle metriche; nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_distance.rs::partial_cmp": {
+      "signature": "fn partial_cmp(&self, other: &Self) -> Option<Ordering>",
+      "classification": "non riceve dati esterni",
+      "reason": "Kernel su geometrie Rust e CRS risolto, oppure ordinamento interno delle celle metriche; nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_distance.rs::cmp": {
+      "signature": "fn cmp(&self, other: &Self) -> Ordering",
+      "classification": "non riceve dati esterni",
+      "reason": "Kernel su geometrie Rust e CRS risolto, oppure ordinamento interno delle celle metriche; nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_distance.rs::geodesic_distance_with_limits": {
+      "signature": "pub fn geodesic_distance_with_limits( a: &Geometry, b: &Geometry, crs: &ResolvedCrs, limits: GeodesicDistanceLimits, cancelled: Option<&AtomicBool>, ) -> Result<GeodesicDistanceResult, GeodesicDistanceError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Kernel su geometrie Rust e CRS risolto, oppure ordinamento interno delle celle metriche; nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
     }
   },
   "python": {

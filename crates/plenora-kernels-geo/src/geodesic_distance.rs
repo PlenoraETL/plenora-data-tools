@@ -1,0 +1,702 @@
+//! Distanza fra insiemi sull'ellissoide del CRS geografico.
+//!
+//! Modello `shortest_geodesic`, GOP-004/005/006/026/028. Le primitive
+//! direct/inverse sono G1 Karney 2013, G2 `GeographicLib`, non un oracolo
+//! di minimizzazione: il minimo globale usa intervalli metrici conservativi.
+
+#![allow(
+    clippy::suboptimal_flops,
+    reason = "Ordine esplicito delle operazioni nelle maggiorazioni numeriche"
+)]
+#![allow(
+    clippy::float_cmp,
+    reason = "Identita e simmetrie del modello geodetico"
+)]
+
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+
+use geo::{Coord, Geometry, LineString, Polygon};
+use geographiclib_rs::{DirectGeodesic, InverseGeodesic};
+use plenora_core::crs::{CrsKind, ResolvedCrs};
+use thiserror::Error;
+
+use crate::geodetica::EllissoideGeodetico;
+
+mod surface;
+
+/// Budget finiti, cumulativi; zero ammette zero lavoro.
+#[derive(Clone, Copy, Debug)]
+pub struct GeodesicDistanceLimits {
+    /// Operazioni effettive: coordinate lette, primitive direct/inverse,
+    /// aree di lati, visite dell'indice e iterazioni di raffinamento.
+    pub max_work: u64,
+    /// Capacita' dei vettori e della coda. Esclusi input preso in prestito,
+    /// stack (profondita' limitata) e overhead dell'allocatore.
+    pub max_reserved_bytes: u64,
+    /// Scadenza monotona; prevale sull'annullamento allo stesso checkpoint.
+    pub deadline: Option<Instant>,
+}
+
+/// Risultato in metri; il certificato assoluto e' [`ABSOLUTE_ERROR_M`].
+#[derive(Clone, Copy, Debug)]
+pub struct GeodesicDistanceResult {
+    /// Minimo fra gli insiemi pieni, inclusi gli interni dei poligoni.
+    pub metres: f64,
+    /// Lavoro effettivamente addebitato, compresa la validazione.
+    pub work: u64,
+    /// Massima capacita' viva addebitata.
+    pub peak_reserved_bytes: u64,
+}
+
+/// Errore assoluto in metri; errore relativo zero, nessuna trasformazione CRS.
+pub const ABSOLUTE_ERROR_M: f64 = 0.01;
+const GAP_M: f64 = 0.004;
+// G2 Background: <15 nm per primitiva terrestre. Il margine di 1 micrometro
+// copre anche composizione direct/inverse e arrotondamenti dei bounds.
+const ROUND_M: f64 = 1e-6;
+
+/// Errori bounded senza valori delle geometrie.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum GeodesicDistanceError {
+    /// Dominio CRS errato.
+    #[error("distanza geodetica richiede un CRS geografico")]
+    GeographicRequired,
+    /// Ellissoide fuori dal dominio terrestre qualificato.
+    #[error("ellissoide non supportato")]
+    UnsupportedEllipsoid,
+    /// Coordinate o struttura non valide.
+    #[error("geometria geografica non valida")]
+    InvalidGeometry,
+    /// Operando vuoto.
+    #[error("distanza da geometria vuota non definita")]
+    EmptyGeometry,
+    /// Tipo fuori dalla superficie XY Simple Features.
+    #[error("tipo geometrico non supportato")]
+    UnsupportedGeometry,
+    /// Percorso minimo non unico.
+    #[error("geodetica minima ambigua")]
+    AmbiguousGeodesic,
+    /// Topologia, ramo numerico o precisione non certificabile.
+    #[error("accuratezza geodetica non dimostrata")]
+    AccuracyUnproven,
+    /// Anelli che si toccano/incrociano o complemento ambiguo.
+    #[error("superficie geodetica non supportata")]
+    UnsupportedSurface,
+    /// Lavoro esaurito.
+    #[error("limite di lavoro geodetico superato")]
+    WorkLimit,
+    /// Capacita' viva esaurita.
+    #[error("limite di memoria geodetica superato")]
+    MemoryLimit,
+    /// Prenotazione fallita.
+    #[error("allocazione geodetica fallita")]
+    Allocation,
+    /// Annullamento cooperativo.
+    #[error("distanza geodetica annullata")]
+    Cancelled,
+    /// Deadline raggiunta.
+    #[error("scadenza della distanza geodetica raggiunta")]
+    DeadlineExceeded,
+}
+
+struct Work<'a> {
+    limits: GeodesicDistanceLimits,
+    cancel: Option<&'a AtomicBool>,
+    count: u64,
+    bytes: u64,
+    peak: u64,
+    ellipsoid: EllissoideGeodetico,
+    taylor: bool,
+}
+
+impl Work<'_> {
+    fn checkpoint(&self) -> Result<(), GeodesicDistanceError> {
+        if self
+            .limits
+            .deadline
+            .is_some_and(|end| Instant::now() >= end)
+        {
+            return Err(GeodesicDistanceError::DeadlineExceeded);
+        }
+        if self
+            .cancel
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(GeodesicDistanceError::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn step(&mut self) -> Result<(), GeodesicDistanceError> {
+        self.checkpoint()?;
+        self.count = self
+            .count
+            .checked_add(1)
+            .ok_or(GeodesicDistanceError::WorkLimit)?;
+        if self.count > self.limits.max_work {
+            return Err(GeodesicDistanceError::WorkLimit);
+        }
+        Ok(())
+    }
+
+    fn reserve(&mut self, bytes: usize) -> Result<(), GeodesicDistanceError> {
+        self.checkpoint()?;
+        let bytes = u64::try_from(bytes).map_err(|_| GeodesicDistanceError::MemoryLimit)?;
+        self.bytes = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or(GeodesicDistanceError::MemoryLimit)?;
+        if self.bytes > self.limits.max_reserved_bytes {
+            return Err(GeodesicDistanceError::MemoryLimit);
+        }
+        self.peak = self.peak.max(self.bytes);
+        Ok(())
+    }
+
+    fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), GeodesicDistanceError> {
+        self.checkpoint()?;
+        if values.len() == values.capacity() {
+            let growth = values.capacity().max(1);
+            self.reserve(
+                growth
+                    .checked_mul(size_of::<T>())
+                    .ok_or(GeodesicDistanceError::MemoryLimit)?,
+            )?;
+            values
+                .try_reserve_exact(growth)
+                .map_err(|_| GeodesicDistanceError::Allocation)?;
+        }
+        values.push(value);
+        Ok(())
+    }
+
+    fn inverse(
+        &mut self,
+        a: Coord,
+        b: Coord,
+    ) -> Result<(f64, f64, f64, f64), GeodesicDistanceError> {
+        self.step()?;
+        let result: (f64, f64, f64, f64) = self.ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);
+        if !(result.0.is_finite()
+            && result.1.is_finite()
+            && result.2.is_finite()
+            && result.3.is_finite())
+        {
+            return Err(GeodesicDistanceError::AccuracyUnproven);
+        }
+        Ok(result)
+    }
+
+    fn at(&mut self, arc: ArcPiece, offset: f64) -> Result<Coord, GeodesicDistanceError> {
+        if offset == 0.0 {
+            return Ok(arc.origin);
+        }
+        self.step()?;
+        let (lat, lon): (f64, f64) =
+            self.ellipsoid
+                .geodetica()
+                .direct(arc.origin.y, arc.origin.x, arc.azimuth, offset);
+        coordinate(Coord { x: lon, y: lat })
+    }
+}
+
+fn coordinate(point: Coord) -> Result<Coord, GeodesicDistanceError> {
+    if !((-180.0..=180.0).contains(&point.x) && (-90.0..=90.0).contains(&point.y)) {
+        return Err(GeodesicDistanceError::InvalidGeometry);
+    }
+    Ok(point)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ArcPiece {
+    origin: Coord,
+    azimuth: f64,
+    lo: f64,
+    hi: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MetricBall {
+    centre: Coord,
+    radius: f64,
+    tangent: f64,
+    arc: ArcPiece,
+    children: Option<(usize, usize)>,
+}
+
+impl MetricBall {
+    const fn point(point: Coord) -> Self {
+        Self {
+            centre: point,
+            radius: 0.0,
+            tangent: 0.0,
+            arc: ArcPiece {
+                origin: point,
+                azimuth: 0.0,
+                lo: 0.0,
+                hi: 0.0,
+            },
+            children: None,
+        }
+    }
+
+    fn piece(arc: ArcPiece, work: &mut Work<'_>) -> Result<Self, GeodesicDistanceError> {
+        work.step()?;
+        let middle = (arc.hi - arc.lo).mul_add(0.5, arc.lo);
+        let (lat, lon, tangent): (f64, f64, f64) =
+            work.ellipsoid
+                .geodetica()
+                .direct(arc.origin.y, arc.origin.x, arc.azimuth, middle);
+        if !tangent.is_finite() {
+            return Err(GeodesicDistanceError::AccuracyUnproven);
+        }
+        Ok(Self {
+            centre: coordinate(Coord { x: lon, y: lat })?,
+            tangent,
+            radius: (arc.hi - arc.lo) * 0.5 + ROUND_M,
+            arc,
+            children: None,
+        })
+    }
+
+    fn split(
+        self,
+        nodes: &[Self],
+        work: &mut Work<'_>,
+    ) -> Result<(Self, Self), GeodesicDistanceError> {
+        work.step()?;
+        if let Some((left, right)) = self.children {
+            return Ok((nodes[left], nodes[right]));
+        }
+        let mid = self.arc.lo + (self.arc.hi - self.arc.lo) * 0.5;
+        if mid <= self.arc.lo || mid >= self.arc.hi {
+            return Err(GeodesicDistanceError::AccuracyUnproven);
+        }
+        Ok((
+            Self::piece(
+                ArcPiece {
+                    hi: mid,
+                    ..self.arc
+                },
+                work,
+            )?,
+            Self::piece(
+                ArcPiece {
+                    lo: mid,
+                    ..self.arc
+                },
+                work,
+            )?,
+        ))
+    }
+}
+
+fn edge(a: Coord, b: Coord, work: &mut Work<'_>) -> Result<MetricBall, GeodesicDistanceError> {
+    let (length, azimuth, final_azimuth, _) = work.inverse(a, b)?;
+    if length == 0.0 {
+        return Ok(MetricBall::point(a));
+    }
+    // G2 Multiple shortest geodesics, ellissoide oblato.
+    if a.y == -b.y && (a.y.abs() == 90.0 || azimuth != final_azimuth) {
+        return Err(GeodesicDistanceError::AmbiguousGeodesic);
+    }
+    let gap = (a.x - b.x).abs();
+    if gap.min(360.0 - gap) > 178.0
+        && (a.y + b.y).abs() < 1e-12
+        && a.y != -b.y
+        && azimuth != final_azimuth
+    {
+        return Err(GeodesicDistanceError::AccuracyUnproven);
+    }
+    MetricBall::piece(
+        ArcPiece {
+            origin: a,
+            azimuth,
+            lo: 0.0,
+            hi: length,
+        },
+        work,
+    )
+}
+
+struct GeometryIndex {
+    nodes: Vec<MetricBall>,
+    rings: Vec<surface::SurfaceRing>,
+    root: usize,
+}
+
+impl GeometryIndex {
+    fn line(
+        &mut self,
+        line: &LineString,
+        ring: bool,
+        work: &mut Work<'_>,
+    ) -> Result<(), GeodesicDistanceError> {
+        if line.0.len() < 2 {
+            return Err(GeodesicDistanceError::InvalidGeometry);
+        }
+        for &point in &line.0 {
+            work.step()?;
+            coordinate(point)?;
+        }
+        for pair in line.0.windows(2) {
+            let ball = edge(pair[0], pair[1], work)?;
+            if ring {
+                surface::append_short_pieces(ball, &mut self.nodes, work, 0)?;
+            } else {
+                work.push(&mut self.nodes, ball)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn polygon(
+        &mut self,
+        polygon: &Polygon,
+        work: &mut Work<'_>,
+    ) -> Result<(), GeodesicDistanceError> {
+        let shell = self.rings.len();
+        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            let begin = self.nodes.len();
+            self.line(ring, true, work)?;
+            let area = surface::ring_area(ring, work)?;
+            work.push(
+                &mut self.rings,
+                surface::SurfaceRing {
+                    begin,
+                    end: self.nodes.len(),
+                    area,
+                    shell,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn new(geometry: &Geometry, work: &mut Work<'_>) -> Result<Self, GeodesicDistanceError> {
+        let mut index = Self {
+            nodes: Vec::new(),
+            rings: Vec::new(),
+            root: 0,
+        };
+        match geometry {
+            Geometry::Point(point) => {
+                work.step()?;
+                work.push(&mut index.nodes, MetricBall::point(coordinate(point.0)?))?;
+            }
+            Geometry::MultiPoint(points) => {
+                for point in points {
+                    work.step()?;
+                    work.push(&mut index.nodes, MetricBall::point(coordinate(point.0)?))?;
+                }
+            }
+            Geometry::LineString(line) => index.line(line, false, work)?,
+            Geometry::MultiLineString(lines) => {
+                for line in lines {
+                    index.line(line, false, work)?;
+                }
+            }
+            Geometry::Polygon(polygon) => index.polygon(polygon, work)?,
+            Geometry::MultiPolygon(polygons) => {
+                for polygon in polygons {
+                    index.polygon(polygon, work)?;
+                }
+            }
+            _ => return Err(GeodesicDistanceError::UnsupportedGeometry),
+        }
+        if index.nodes.is_empty() {
+            return Err(GeodesicDistanceError::EmptyGeometry);
+        }
+        surface::validate(&index, work)?;
+        index.root = index.branch(0, index.nodes.len(), work)?;
+        Ok(index)
+    }
+
+    fn branch(
+        &mut self,
+        begin: usize,
+        end: usize,
+        work: &mut Work<'_>,
+    ) -> Result<usize, GeodesicDistanceError> {
+        work.step()?;
+        if end - begin == 1 {
+            return Ok(begin);
+        }
+        let middle = begin + (end - begin) / 2;
+        let left = self.branch(begin, middle, work)?;
+        let right = self.branch(middle, end, work)?;
+        let a = self.nodes[left];
+        let b = self.nodes[right];
+        let radius = a
+            .radius
+            .max(work.inverse(a.centre, b.centre)?.0 + b.radius + ROUND_M);
+        let position = self.nodes.len();
+        work.push(
+            &mut self.nodes,
+            MetricBall {
+                radius,
+                children: Some((left, right)),
+                ..a
+            },
+        )?;
+        Ok(position)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Candidate {
+    a: MetricBall,
+    b: MetricBall,
+    lower: f64,
+    serial: u64,
+}
+
+impl PartialEq for Candidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for Candidate {}
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .lower
+            .total_cmp(&self.lower)
+            .then_with(|| other.serial.cmp(&self.serial))
+    }
+}
+
+struct SearchQueue {
+    heap: BinaryHeap<Candidate>,
+    serial: u64,
+    best: f64,
+    separation_only: bool,
+}
+
+// G1, equazioni della deviazione geodetica: la Hessiana della distanza
+// fra due geodetiche ha coefficienti M12/m12, M21/m12 e -1/m12,
+// moltiplicati per seni delle tangenti. Nel dominio d<1000 km,
+// 0<K<1/(5.9e6)^2 implica 0<M<=1 e m>=R*sin(d/R)>0.99*d.
+// Per ogni punto della cella d>=lower: il resto di Taylor e' quindi
+// <= (r1+r2)^2/lower; il fattore 2 maggiora anche il round-off.
+// Oltre questo dominio rimane il bound metrico senza ipotesi locali.
+fn taylor_lower(
+    a: MetricBall,
+    b: MetricBall,
+    distance: f64,
+    azi1: f64,
+    azi2: f64,
+    lower: f64,
+) -> f64 {
+    let derivative_error = 16.0 * ROUND_M / lower + 1e-9;
+    let da = (a.tangent - azi1).to_radians().cos().abs() + derivative_error;
+    let db = (b.tangent - azi2).to_radians().cos().abs() + derivative_error;
+    distance
+        - da * a.radius
+        - db * b.radius
+        - 2.0 * (a.radius + b.radius).powi(2) / lower
+        - 8.0 * ROUND_M
+}
+
+impl SearchQueue {
+    fn add(
+        &mut self,
+        a: MetricBall,
+        b: MetricBall,
+        work: &mut Work<'_>,
+    ) -> Result<(), GeodesicDistanceError> {
+        let (distance, azi1, azi2, _) = work.inverse(a.centre, b.centre)?;
+        self.best = self.best.min(distance + 4.0 * ROUND_M);
+        let mut lower = (distance - a.radius - b.radius - 4.0 * ROUND_M).max(0.0);
+        if work.taylor
+            && a.children.is_none()
+            && b.children.is_none()
+            && lower > 1.0
+            && distance + a.radius + b.radius < 1_000_000.0
+        {
+            lower = lower.max(taylor_lower(a, b, distance, azi1, azi2, lower));
+        }
+        if if self.separation_only {
+            lower > GAP_M
+        } else {
+            lower >= self.best - GAP_M
+        } {
+            return Ok(());
+        }
+        if self.heap.len() == self.heap.capacity() {
+            let growth = self.heap.capacity().max(1);
+            work.reserve(
+                growth
+                    .checked_mul(size_of::<Candidate>())
+                    .ok_or(GeodesicDistanceError::MemoryLimit)?,
+            )?;
+            self.heap
+                .try_reserve_exact(growth)
+                .map_err(|_| GeodesicDistanceError::Allocation)?;
+        }
+        self.serial = self
+            .serial
+            .checked_add(1)
+            .ok_or(GeodesicDistanceError::WorkLimit)?;
+        self.heap.push(Candidate {
+            a,
+            b,
+            lower,
+            serial: self.serial,
+        });
+        Ok(())
+    }
+}
+
+fn minimum(
+    a: MetricBall,
+    b: MetricBall,
+    left: &[MetricBall],
+    right: &[MetricBall],
+    separation_only: bool,
+    work: &mut Work<'_>,
+) -> Result<f64, GeodesicDistanceError> {
+    let before = work.bytes;
+    let mut queue = SearchQueue {
+        heap: BinaryHeap::new(),
+        serial: 0,
+        best: f64::INFINITY,
+        separation_only,
+    };
+    queue.add(a, b, work)?;
+    while let Some(candidate) = queue.heap.pop() {
+        work.step()?;
+        if queue.best <= if separation_only { 2.0 * GAP_M } else { GAP_M } {
+            break;
+        }
+        if !separation_only && candidate.lower >= queue.best - GAP_M {
+            continue;
+        }
+        if separation_only && candidate.lower > GAP_M {
+            continue;
+        }
+        if candidate.a.radius >= candidate.b.radius {
+            let (one, two) = candidate.a.split(left, work)?;
+            queue.add(one, candidate.b, work)?;
+            queue.add(two, candidate.b, work)?;
+        } else {
+            let (one, two) = candidate.b.split(right, work)?;
+            queue.add(candidate.a, one, work)?;
+            queue.add(candidate.a, two, work)?;
+        }
+    }
+    let best = queue.best;
+    drop(queue);
+    work.bytes = before;
+    Ok(
+        if best <= if separation_only { 2.0 * GAP_M } else { GAP_M } {
+            0.0
+        } else {
+            best
+        },
+    )
+}
+
+/// Minima distanza geodetica fra Point, `MultiPoint`, `LineString`,
+/// `MultiLineString`, Polygon e `MultiPolygon` XY, in metri sul datum risolto.
+///
+/// Lati come geodetiche minime, interni pieni meno i buchi, anelli semplici
+/// con regione minore di mezzo ellissoide (GOP-004/005). Nessuna proiezione
+/// o riparazione implicita. Vuoti e strutture non valide sono errori.
+/// Il percorso planare e le API punto-punto esistenti restano indipendenti.
+///
+/// Certificato GOP-006: errore assoluto 0.01 m, relativo zero. Ricerca
+/// globale branch-and-bound, non ottimizzazione locale: un arco di lunghezza
+/// L e' nella palla ellissoidica (punto medio,L/2); per due palle il limite
+/// inferiore e' max(0,d(c1,c2)-r1-r2), con margini numerici. L'indice unisce
+/// palle per disuguaglianza triangolare. Sotto 1000 km usa anche il bound
+/// di Taylor della distanza, con Hessiana maggiorata tramite m12 e M12
+/// (G1, campi di Jacobi); il percorso metrico generico resta l'oracolo.
+/// Raffina finche' upper-lower <=4 mm.
+/// I risultati entro 4 mm sono zero, inclusi incroci e contatti. Il margine
+/// numerico delle primitive direct/inverse e' 1 micrometro; non c'e' errore
+/// di trasformazione. Dominio qualificato: 6e6<=a<=7e6 m, 250<=1/f<=350.
+///
+/// I lati non unici G2 falliscono, mentre la distanza fra punti antipodali
+/// rimane definita. Come nel densify, la fascia numerica delta lon>178 gradi,
+/// 0<abs(lat1+lat2)<1e-12 gradi con azimut estremi diversi non e' certificata.
+/// Le superfici con bordi non adiacenti entro 8 mm possono essere rifiutate;
+/// orientamento/area o classificazione non certificabili falliscono.
+///
+/// Nessun prodotto di cardinalita' decide l'ammissione. Ogni primitiva,
+/// lettura di coordinate, visita e raffinamento controlla deadline e cancel;
+/// al piu' una primitiva `GeographicLib` tra controlli, anche in validazione.
+/// Risultato atomico; output scalare sullo stack, nessuna serializzazione.
+///
+/// # Errors
+/// [`GeodesicDistanceError`] distingue CRS, dominio, struttura, ambiguita',
+/// accuratezza, risorse, cancellazione e deadline.
+pub fn geodesic_distance_with_limits(
+    a: &Geometry,
+    b: &Geometry,
+    crs: &ResolvedCrs,
+    limits: GeodesicDistanceLimits,
+    cancelled: Option<&AtomicBool>,
+) -> Result<GeodesicDistanceResult, GeodesicDistanceError> {
+    // Il checkpoint precede la validazione del CRS anche se manca l'ellissoide.
+    if limits.deadline.is_some_and(|end| Instant::now() >= end) {
+        return Err(GeodesicDistanceError::DeadlineExceeded);
+    }
+    if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+        return Err(GeodesicDistanceError::Cancelled);
+    }
+    if crs.kind() != CrsKind::Geographic {
+        return Err(GeodesicDistanceError::GeographicRequired);
+    }
+    let ellipsoid = EllissoideGeodetico::da_crs(crs)
+        .map_err(|_| GeodesicDistanceError::UnsupportedEllipsoid)?;
+    let parameters = ellipsoid.parametri();
+    if !(6e6..=7e6).contains(&parameters.semi_major_axis_metre)
+        || !(250.0..=350.0).contains(&parameters.inverse_flattening)
+    {
+        return Err(GeodesicDistanceError::UnsupportedEllipsoid);
+    }
+    let mut work = Work {
+        limits,
+        cancel: cancelled,
+        count: 0,
+        bytes: 0,
+        peak: 0,
+        ellipsoid,
+        taylor: true,
+    };
+    let left = GeometryIndex::new(a, &mut work)?;
+    let right = GeometryIndex::new(b, &mut work)?;
+    let mut metres = minimum(
+        left.nodes[left.root],
+        right.nodes[right.root],
+        &left.nodes,
+        &right.nodes,
+        false,
+        &mut work,
+    )?;
+    if metres > 0.0
+        && (surface::contains_any(&left, &right, &mut work)?
+            || surface::contains_any(&right, &left, &mut work)?)
+    {
+        metres = 0.0;
+    }
+    work.checkpoint()?;
+    Ok(GeodesicDistanceResult {
+        metres,
+        work: work.count,
+        peak_reserved_bytes: work.peak,
+    })
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod tests;

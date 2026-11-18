@@ -39,6 +39,7 @@ pub mod extensions;
 pub mod extensions2;
 pub mod extensions3;
 pub mod geodesic_densify;
+pub mod geodesic_distance;
 pub mod geodetica;
 pub mod geometry_contract;
 pub mod margine;

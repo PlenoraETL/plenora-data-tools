@@ -2307,5 +2307,11 @@
     "[[\"token\",\";\"],[\"token\",\"validate\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"evaluate_unchecked\"],[\"token\",\"(\"]]",
     "[[\"token\",\"[\"],[\"token\",\"serde\"],[\"token\",\"(\"],[\"token\",\"rename_all\"],[\"token\",\"=\"],[\"string\",\"snake_case\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"pub\"],[\"token\",\"enum\"],[\"token\",\"SpatialPredicate\"]]",
     "[[\"token\",\"{\"],[\"token\",\"validate\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"validate\"],[\"token\",\"(\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_distance/tests.rs": [
+    "[[\"token\",\"b\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
+    "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
+    "[[\"token\",\"b\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:3857\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
+    "[[\"token\",\"crossed\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
   ]
 }
