@@ -131,47 +131,14 @@ pub fn boolean_with_limits(
         operation,
         output_dimension,
         limits,
-        &mut Work::with_deadline_precedence(limits.work, cancelled),
+        &mut Work::new(limits.work, cancelled),
     )
 }
 
 fn supported(g: &Geometry<f64>, work: &mut Work<'_>) -> Result<(), PolygonBooleanError> {
     work.step()?;
     match g {
-        Geometry::Polygon(_) => Ok(()),
-        Geometry::MultiPolygon(polygons) => {
-            for (i, a) in polygons.0.iter().enumerate() {
-                for b in polygons.0.iter().skip(i + 1) {
-                    work.step()?;
-                    // Shape consente la validazione senza clonare le geometrie.
-                    let mut shape = Shape::default();
-                    shape.polygon(a, work)?;
-                    shape.polygon(b, work)?;
-                    let mut refs = CountedVec::new();
-                    for edge in shape.edges() {
-                        work.push(&mut refs, edge)?;
-                    }
-                    let mut split = 0;
-                    if let Some(rings) = shape.polygons.first() {
-                        for ring in rings {
-                            work.step()?;
-                            split += ring.len();
-                        }
-                    }
-                    let mut touches = false;
-                    crate::noding::visit(&refs, work, |i, j, hits, _| {
-                        if (i < split) != (j < split) && hits[0].is_some() {
-                            touches = true;
-                        }
-                        Ok(())
-                    })?;
-                    if touches {
-                        return Err(PolygonBooleanError::UnsupportedOperands);
-                    }
-                }
-            }
-            Ok(())
-        }
+        Geometry::Polygon(_) | Geometry::MultiPolygon(_) => Ok(()),
         _ => Err(PolygonBooleanError::UnsupportedOperands),
     }
 }

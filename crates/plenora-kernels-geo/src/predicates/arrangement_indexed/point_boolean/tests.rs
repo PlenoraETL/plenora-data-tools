@@ -191,7 +191,9 @@ fn exact_limits_and_interruptions() {
             limits,
             Some(&cancelled)
         ),
-        Err(PointBooleanError::Predicate(PredicateError::Cancelled))
+        Err(PointBooleanError::Predicate(
+            PredicateError::DeadlineExceeded
+        ))
     ));
     // Fonte: RelateLimits deadline monotona inclusiva.
     assert!(matches!(
@@ -346,4 +348,40 @@ fn polygon_pair_budget_exact_threshold() {
         ),
         Err(PointBooleanError::Predicate(PredicateError::WorkLimit))
     ));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn original_zero_bits_match_general_boolean() {
+    let a = Geometry::Point(Point::new(-0.0, 0.0));
+    let b = Geometry::Point(Point::new(0.0, -0.0));
+    for (op, general_op) in [
+        (
+            PointBooleanOp::Union,
+            crate::general_boolean::GeneralBooleanOp::Union,
+        ),
+        (
+            PointBooleanOp::Intersection,
+            crate::general_boolean::GeneralBooleanOp::Intersection,
+        ),
+    ] {
+        let actual = boolean_with_limits(&a, &b, op, None, RelateLimits::default(), None).unwrap();
+        let expected = crate::general_boolean::boolean_with_limits(
+            &a,
+            &b,
+            general_op,
+            None,
+            crate::general_boolean::GeneralBooleanLimits::default(),
+            None,
+        )
+        .unwrap();
+        for output in [actual, expected] {
+            let Geometry::MultiPoint(points) = output else {
+                panic!("punti attesi")
+            };
+            assert_eq!(points.0.len(), 1);
+            assert_eq!(points.0[0].x().to_bits(), (-0.0_f64).to_bits());
+            assert_eq!(points.0[0].y().to_bits(), 0.0_f64.to_bits());
+        }
+    }
 }

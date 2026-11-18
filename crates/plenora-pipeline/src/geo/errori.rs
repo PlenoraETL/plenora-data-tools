@@ -27,6 +27,8 @@ use plenora_kernels_geo::topology::TopologyError;
 /// Categoria di un errore di kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Classe {
+    /// Certificazione del calcolo non conclusa.
+    Esecuzione,
     /// Calcolo o validazione non conclusi, invariante violata.
     Interna,
     /// Spostamento oltre la precisione dichiarata.
@@ -48,6 +50,12 @@ pub trait ErroreKernel: std::fmt::Display {
 /// L'errore nella categoria giusta, con il nome dell'operazione.
 pub fn del_kernel(op: &str, errore: &impl ErroreKernel) -> PlenoraError {
     match errore.classe() {
+        Classe::Esecuzione => PlenoraError::Execution {
+            node: String::new(),
+            operation: op.to_owned(),
+            execution_id: String::new(),
+            reason: errore.to_string(),
+        },
         Classe::Interna => PlenoraError::Internal(format!("{op}: {errore}")),
         Classe::Precisione => PlenoraError::Unsupported(format!("{op}: {errore}")),
         Classe::Limite => PlenoraError::ResourceLimit(format!("{op}: {errore}")),
@@ -221,7 +229,8 @@ impl ErroreKernel for PredicateError {
             Self::Cancelled => Classe::Annullata,
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             // GOP-015A: l'arrotondamento al binary64 cambierebbe la topologia promessa.
-            Self::InvalidRoundedTopology => Classe::Precisione,
+            Self::InvalidRoundedTopology | Self::UnsupportedGeometry => Classe::Precisione,
+            Self::AccuracyUnproven => Classe::Esecuzione,
             Self::NonFiniteCoordinate { .. } | Self::InvalidGeometry { .. } => Classe::Piano,
         }
     }
@@ -251,6 +260,19 @@ mod tests {
         assert_eq!(
             del_kernel("op", &PredicateError::Cancelled).category(),
             ErrorCategory::Cancelled
+        );
+    }
+
+    #[test]
+    #[deny(clippy::disallowed_methods)]
+    fn unsupported_and_accuracy_categories() {
+        assert_eq!(
+            del_kernel("op", &PredicateError::UnsupportedGeometry).category(),
+            ErrorCategory::Unsupported
+        );
+        assert_eq!(
+            del_kernel("op", &PredicateError::AccuracyUnproven).category(),
+            ErrorCategory::Execution
         );
     }
 

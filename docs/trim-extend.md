@@ -79,7 +79,7 @@ La normalizzazione interna di ogni primitiva ha interi limitati a 145173 bit,
 indipendentemente dai vertici. Allocazioni e drop non sono unita' di questa
 misura; non si garantisce una latenza wall-clock. Le verifiche possono essere quadratiche
 nei candidati effettivi. GOP-028: deadline scaduta precede cancellazione
-osservata al medesimo checkpoint. Le altre API mantengono la loro precedenza.
+osservata al medesimo checkpoint. La stessa precedenza vale per tutte le API del noder comune.
 Errori senza dati, nessun successo parziale o effetto remoto.
 
 ## Prove

@@ -8,8 +8,8 @@ Non e' un buffer e non applica parametri o default di servizi esterni.
 
 ## Semantica
 
-`OffsetOptions` richiede distanza finita, raccordo e tolleranza degli archi
-positiva finita. `OffsetOptions::new(distance, arc_tolerance)` sceglie `Rounded`, come
+`OffsetOptions` richiede distanza finita e raccordo. La tolleranza degli
+archi deve essere positiva finita solo quando la costruzione contiene archi. `OffsetOptions::new(distance, arc_tolerance)` sceglie `Rounded`, come
 `OffsetJoin::default()`; le altre varianti sono
 `Bevelled` e `Mitered { limit }`, con limite finito almeno uno. Estremi butt,
 positivo a destra e negativo a sinistra seguendo l'ordine dei vertici.
@@ -79,18 +79,19 @@ incroci possono essere quadratiche o maggiori nel numero di siti effettivi:
 si contano visite e confronti eseguiti, senza rifiuti preventivi basati sul
 prodotto delle dimensioni. Zero consente zero lavoro; soglia inclusiva.
 
-Ogni ciclo ha checkpoint. Fra due check resta un numero costante di
-operazioni su interi di al massimo 145173 bit, indipendente dal numero di
-vertici. Addizione, sottrazione, prodotto e shift controllano questo tetto
-prima di allocare; un DAG troppo profondo fallisce con errore aritmetico.
+Fra due checkpoint esterni si eseguono al massimo 256 primitive Q su
+interi di al massimo 145173 bit. Ogni gcd controlla inoltre la deadline
+ad ogni divisione euclidea e termina in meno di 290346 divisioni (limite
+di Lame). Il controllo del flag resta al checkpoint esterno. Addizione, sottrazione, prodotto e shift controllano questo tetto
+prima di allocare; il tetto interno da' `AccuracyUnproven`, senza
+confonderlo con l'esaurimento del budget del chiamante.
 Le ricevute degli interi, dei contenitori e dell'output condividono il
 bilancio; valgono le esclusioni di scratch privati, capacita' interne di
 num-bigint e overhead di `RelateLimits`. Non e' un tetto RSS.
 
 Cancellazione e deadline sono controllate all'ingresso, durante tutte le
-fasi e prima del ritorno. Come nelle API esistenti con `RelateLimits`, la
-cancellazione precede la deadline; questa precedenza non adotta GOP-028
-integralmente. Non esiste un risultato parziale dopo un errore.
+fasi e prima del ritorno. Il costruttore comune di `Work` applica GOP-028:
+la deadline scaduta precede la cancellazione. Non esiste un risultato parziale dopo un errore.
 
 ## Prove
 

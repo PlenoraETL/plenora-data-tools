@@ -102,21 +102,26 @@ fn holes_are_clockwise_sorted_and_input_permutation_invariant() {
 
 #[test]
 fn unsupported_provenance_overlap_and_nonsimple_lines() {
-    for lines in [
-        "LINESTRING(0 0,2 0)",
-        "MULTILINESTRING((2 0,4 0),(4 0,2 0))",
-    ] {
-        // Fonte GOP-020: coincidenze nuovo/esistente o duplicati hanno provenienza ambigua.
-        assert!(matches!(
-            polygon_completion_with_limits(
-                &[base()],
-                &geometry(lines),
-                RelateLimits::default(),
-                None
-            ),
-            Err(PolygonCompletionError::AmbiguousProvenance)
-        ));
-    }
+    // Fonte GOP-020: solo la coincidenza nuovo/esistente ha provenienza ambigua.
+    assert!(matches!(
+        polygon_completion_with_limits(
+            &[base()],
+            &geometry("LINESTRING(0 0,2 0)"),
+            RelateLimits::default(),
+            None
+        ),
+        Err(PolygonCompletionError::AmbiguousProvenance)
+    ));
+    // GOP-020 richiede linework semplice: parti nuove sovrapposte sono escluse.
+    assert!(matches!(
+        polygon_completion_with_limits(
+            &[base()],
+            &geometry("MULTILINESTRING((2 0,4 0),(4 0,2 0))"),
+            RelateLimits::default(),
+            None
+        ),
+        Err(PolygonCompletionError::UnsupportedLinework)
+    ));
     for other in [base(), polygon("POLYGON((1 1,3 1,3 3,1 3,1 1))")] {
         // Fonte GOP-020: interni sovrapposti, incluso duplicato, sono unsupported.
         assert!(matches!(
@@ -177,7 +182,7 @@ fn rational_constructed_coordinates_and_original_bits() {
     let result = run(&[p], &geometry("LINESTRING(0 0,3 1,3 2,1 2)"));
     // Fonte GOP-015A: y=x/3 interseca x=1 in (1,1/3), nearest-even.
     assert_eq!(result[0].exterior().0[0], geo::Coord { x: 1., y: 1. / 3. });
-    let work = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let work = Work::new(RelateLimits::default(), None);
     let exact = work
         .integer(1)
         .expect("fixture uno")
@@ -214,7 +219,7 @@ fn rational_constructed_coordinates_and_original_bits() {
 fn exact_resource_thresholds() {
     let polygons = [base()];
     let lines = extension();
-    let mut measured = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let mut measured = Work::new(RelateLimits::default(), None);
     execute(&polygons, &lines, &mut measured).expect("fixture misura");
     for (which, threshold) in [
         (0, measured.steps),
@@ -255,7 +260,7 @@ fn exact_resource_thresholds() {
 }
 
 #[test]
-fn deadline_precedence_is_local_to_completion() {
+fn deadline_precedence_is_shared() {
     let flag = AtomicBool::new(true);
     let limits = RelateLimits {
         deadline: Some(Instant::now()),
@@ -268,10 +273,10 @@ fn deadline_precedence_is_local_to_completion() {
             PredicateError::DeadlineExceeded
         ))
     ));
-    // Fonte compatibilita': Work::new conserva la politica delle API precedenti.
+    // GOP-028: un solo costruttore impone la medesima precedenza.
     assert!(matches!(
         Work::new(limits, Some(&flag)).step(),
-        Err(PredicateError::Cancelled)
+        Err(PredicateError::DeadlineExceeded)
     ));
     assert!(matches!(
         polygon_completion_with_limits(
@@ -412,4 +417,18 @@ fn open_input_rings_are_not_implicitly_closed() {
             PredicateError::InvalidGeometry { .. }
         ))
     ));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn adjacent_existing_polygons_and_null_line_edges() {
+    let existing = [base(), polygon("POLYGON((2 0,4 0,4 2,2 2,2 0))")];
+    // GOP-020: il rettangolo [1,3] x [-1,0] e' l'unica faccia nuova.
+    let expected = vec![polygon("POLYGON((1 -1,3 -1,3 0,2 0,1 0,1 -1))")];
+    for text in [
+        "LINESTRING(1 0,1 -1,3 -1,3 0)",
+        "LINESTRING(1 0,1 0,1 -1,1 -1,3 -1,3 0,3 0)",
+    ] {
+        assert_eq!(run(&existing, &geometry(text)), expected);
+    }
 }

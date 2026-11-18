@@ -42,7 +42,7 @@ pub fn boolean_with_limits(
     mut limits: GeneralBooleanLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Geometry<f64>, GeneralBooleanError> {
-    let mut work = Work::with_deadline_precedence(limits.work, cancelled);
+    let mut work = Work::new(limits.work, cancelled);
     polygon_boolean::execute_many(
         std::slice::from_ref(left),
         std::slice::from_ref(right),
@@ -63,7 +63,7 @@ pub fn union_with_limits(
     mut limits: GeneralBooleanLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Geometry<f64>, GeneralBooleanError> {
-    let mut work = Work::with_deadline_precedence(limits.work, cancelled);
+    let mut work = Work::new(limits.work, cancelled);
     polygon_boolean::execute_many(
         inputs,
         &[],
@@ -82,7 +82,7 @@ fn array(
     mut limits: GeneralBooleanLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<Geometry<f64>>, GeneralBooleanError> {
-    let mut work = Work::with_deadline_precedence(limits.work, cancelled);
+    let mut work = Work::new(limits.work, cancelled);
     work.step()?;
     if filter.is_some_and(|d| d > 2) {
         return Err(GeneralBooleanError::InvalidOutputDimension);

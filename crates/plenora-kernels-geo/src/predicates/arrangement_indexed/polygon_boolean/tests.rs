@@ -164,7 +164,7 @@ fn exact_resource_thresholds() {
     let a = rect(0., 0., 3., 2.);
     let b = rect(2., 0., 5., 2.);
     let limits = PolygonBooleanLimits::default();
-    let mut work = Work::with_deadline_precedence(limits.work, None);
+    let mut work = Work::new(limits.work, None);
     execute(&a, &b, PolygonBooleanOp::Union, None, limits, &mut work).unwrap();
     let measured = [work.steps, work.nodes, work.pairs, work.peak_bytes()];
     for (field, measured) in measured.iter().enumerate() {
@@ -348,12 +348,9 @@ fn independent_rational_cell_oracle_area_and_de9im() {
             }
             assert_eq!(area(&result), f64::from(expected_area));
             let expected = oracle_matrix(a, b, op);
-            assert_eq!(
-                crate::predicates::relate_matrix(&result, &ga)
-                    .unwrap()
-                    .cells(),
-                expected
-            );
+            assert!(geo::Relate::relate(&result, &ga)
+                .matches(std::str::from_utf8(&expected).unwrap())
+                .unwrap());
             // AGENTS 3: percorso indicizzato contro enumerazione generica.
             let generic = crate::predicates::arrangement_exhaustive::relate(
                 &result,
@@ -371,12 +368,9 @@ fn independent_rational_cell_oracle_area_and_de9im() {
                 None,
             )
             .unwrap();
-            assert_eq!(
-                crate::predicates::relate_matrix(&general, &ga)
-                    .unwrap()
-                    .cells(),
-                expected
-            );
+            assert!(geo::Relate::relate(&general, &ga)
+                .matches(std::str::from_utf8(&expected).unwrap())
+                .unwrap());
             assert_eq!(
                 rational_twice_area(&general).cmp(&Fraction::integer(2 * expected_area)),
                 Ordering::Equal
@@ -505,7 +499,7 @@ fn cancellation_and_deadline_during_work() {
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
         });
         let limits = PolygonBooleanLimits::default();
-        let mut work = Work::with_deadline_precedence(limits.work, Some(&flag));
+        let mut work = Work::new(limits.work, Some(&flag));
         let result = execute(
             &polygon,
             &polygon,
@@ -522,7 +516,7 @@ fn cancellation_and_deadline_during_work() {
     });
     let mut limits = PolygonBooleanLimits::default();
     limits.work.deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(20));
-    let mut work = Work::with_deadline_precedence(limits.work, None);
+    let mut work = Work::new(limits.work, None);
     assert!(matches!(
         execute(
             &polygon,
@@ -565,7 +559,7 @@ fn deterministic_interruptions_across_the_call() {
     let a = rect(0., 0., 3., 2.);
     let b = rect(2., 0., 5., 2.);
     let limits = PolygonBooleanLimits::default();
-    let mut measure = Work::with_deadline_precedence(limits.work, None);
+    let mut measure = Work::new(limits.work, None);
     execute(&a, &b, PolygonBooleanOp::Union, None, limits, &mut measure).unwrap();
     for at in [
         1,
@@ -576,7 +570,7 @@ fn deterministic_interruptions_across_the_call() {
     ] {
         for deadline in [false, true] {
             let flag = AtomicBool::new(false);
-            let mut work = Work::with_deadline_precedence(limits.work, Some(&flag));
+            let mut work = Work::new(limits.work, Some(&flag));
             work.interrupt_at = Some((at, deadline));
             let result = execute(&a, &b, PolygonBooleanOp::Union, None, limits, &mut work);
             if deadline {
@@ -725,4 +719,21 @@ fn polygon_combs_have_independent_combinatorial_counts() {
             Err(PolygonBooleanError::Predicate(PredicateError::WorkLimit))
         ));
     }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn multipolygon_point_contact_is_supported() {
+    use wkt::TryFromWkt;
+    let input =
+        Geometry::try_from_wkt_str("MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((1 1,2 1,2 2,1 2,1 1)))")
+            .unwrap();
+    let result = run(
+        &input,
+        &rect(-1., -1., 3., 3.),
+        PolygonBooleanOp::Intersection,
+    );
+    // OGC: due quadrati unitari con interni disgiunti e un vertice comune.
+    assert_eq!(area(&result), 2.0);
+    assert!(matches!(result, Geometry::MultiPolygon(ref ps) if ps.0.len() == 2));
 }

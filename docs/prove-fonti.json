@@ -1477,7 +1477,8 @@
       "invalid_coordinates_are_explicit",
       "rounded_triangle_cannot_silently_become_collinear",
       "gop015a_face_nodes_ties_and_subnormals",
-      "gop015a_nondyadic_faces_and_discarded_dangles"
+      "gop015a_nondyadic_faces_and_discarded_dangles",
+      "excluded_point_is_typed_unsupported"
     ],
     "crates/plenora-kernels-geo/src/extended_algorithms/split_limited/tests.rs": [
       "transverse_rational_endpoints_and_600",
@@ -1490,7 +1491,8 @@
       "gop015a_nondyadic_nodes_have_half_ulp_certificate",
       "gop015a_ties_subnormals_and_collapse",
       "source_crossings_overlaps_and_original_bits_are_preserved",
-      "splitter_vertex_preserves_signed_zero"
+      "splitter_vertex_preserves_signed_zero",
+      "excluded_line_cutter_is_typed_unsupported"
     ],
     "crates/plenora-kernels-geo/src/extensions.rs": [
       "from_wkt_column_parses_preserves_nulls_and_decodes_back",
@@ -1728,7 +1730,10 @@
       "triple_node_created_by_rounding_is_rejected",
       "cancellation_and_deadline_during_work",
       "arc_lens_and_rounded_collapse_are_not_silent",
-      "exact_mitre_limit_and_clockwise_arc"
+      "exact_mitre_limit_and_clockwise_arc",
+      "disjoint_collinearity_fraction_oracle",
+      "finite_overflow_rounding_and_unused_tolerance",
+      "rational_disjoint_edges_fraction_oracle"
     ],
     "crates/plenora-kernels-geo/src/operations.rs": [
       "l_area_si_scala_con_il_quadrato",
@@ -1801,7 +1806,8 @@
       "arrays_atomic_order_and_cumulative_limits",
       "entry_deadline_cancellation_and_filter",
       "measured_limits_and_interruptions",
-      "many_overlapping_rectangles_combinatorial_grid"
+      "many_overlapping_rectangles_combinatorial_grid",
+      "rounded_isolated_point_cannot_enter_surface"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean/tests.rs": [
       "overlaps_crossings_and_direction",
@@ -1820,7 +1826,8 @@
       "constructed_faces_share_edges_but_not_interiors",
       "noded_publication_rejects_split_sites_and_mixed_certificates",
       "editing_provenance_counts_empty_parts_and_nested_collections",
-      "noded_certificates_cannot_bypass_surface_or_path_verification"
+      "noded_certificates_cannot_bypass_surface_or_path_verification",
+      "directed_cycle_cannot_reverse_at_rounded_node"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean/tests.rs": [
       "c1_sets_boundaries_holes_and_closure",
@@ -1830,7 +1837,8 @@
       "vertical_sites_default_limits",
       "polygon_union_filters_and_typed_errors",
       "point_sets_against_generic_matrix",
-      "polygon_pair_budget_exact_threshold"
+      "polygon_pair_budget_exact_threshold",
+      "original_zero_bits_match_general_boolean"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean/tests.rs": [
       "rectangles_and_directional_difference",
@@ -1848,7 +1856,8 @@
       "deterministic_interruptions_across_the_call",
       "mixed_dimensions_empty_and_filter_before_publication",
       "serialized_surface_is_bound_to_the_certificate",
-      "polygon_combs_have_independent_combinatorial_counts"
+      "polygon_combs_have_independent_combinatorial_counts",
+      "multipolygon_point_contact_is_supported"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion/tests.rs": [
       "one_and_two_faces_canonical_and_valid",
@@ -1859,13 +1868,14 @@
       "invalid_inputs_are_typed_and_without_data",
       "rational_constructed_coordinates_and_original_bits",
       "exact_resource_thresholds",
-      "deadline_precedence_is_local_to_completion",
+      "deadline_precedence_is_shared",
       "cancellation_and_deadline_after_work_started",
       "unpublished_intersections_do_not_force_rounding",
       "rounded_boundary_node_outside_original_support_is_rejected",
       "canonical_area_and_sequence_ties",
       "existing_role_on_hole_and_subnormal_collapse",
-      "open_input_rings_are_not_implicitly_closed"
+      "open_input_rings_are_not_implicitly_closed",
+      "adjacent_existing_polygons_and_null_line_edges"
     ],
     "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
       "sparse_queries_have_analytic_work",
@@ -2101,7 +2111,8 @@
       "positive_distance_threshold",
       "exact_resource_thresholds",
       "cancellation_deadline_entry_and_during_work",
-      "reused_signs_do_not_charge_candidates_and_overflow_is_typed"
+      "reused_signs_do_not_charge_candidates_and_overflow_is_typed",
+      "degenerate_guide_is_invalid_geometry"
     ],
     "crates/plenora-kernels-geo/src/validazione_ogc/tests.rs": [
       "quadrato_semplice_nessuna_autointersezione",
@@ -3043,6 +3054,7 @@
     ],
     "crates/plenora-pipeline/src/geo/errori.rs": [
       "de9im_resource_and_cancellation_categories",
+      "unsupported_and_accuracy_categories",
       "le_categorie_seguono_la_regola_dei_kernel"
     ],
     "crates/plenora-pipeline/src/geo/mod.rs": [

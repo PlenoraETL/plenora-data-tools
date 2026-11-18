@@ -75,7 +75,8 @@
 //! sub(C,C) e orientamenti cross(sub(C,C),sub(C,C)). Per assegnare i buchi,
 //! `ring_contains` riceve lati C, punto X e direzione nulla: sub(X,C) =
 //! (16848,15821), cross(sub(C,C),sub(X,C)) = (54789,52734).
-//! Nessuna area viene accumulata: il verso si decide al minimo lessicografico.
+//! Il limite riguarda questi predicati locali; le somme d'area delle facce
+//! hanno denominatori dipendenti da n e non sono coperte da questa derivazione.
 //! Tutti questi intermedi restano sotto il massimo globale indipendente da n.
 //! Questa proprieta' e' indispensabile: rinodare segmenti con estremi
 //! razionali richiederebbe un'altra derivazione, non la stessa costante.
@@ -99,7 +100,7 @@
 // e copia non crescono; gcd usa resti decrescenti. Per induzione nessun
 // valore, compreso un temporaneo prima del rifiuto, supera INTERMEDIATE_BITS.
 // Il dominio e' fisso e indipendente dal numero di lati. Una somma che
-// richieda di superarlo fallisce con ReservationLimit, mai con approssimazione.
+// richieda di superarlo fallisce con AccuracyUnproven, mai con approssimazione.
 // I controlli usano limiti superiori per singola primitiva: possono rifiutare
 // una cancellazione il cui risultato ridotto sarebbe piccolo. Non sono una
 // stima di ammissione dell'operazione o una prenotazione per vertice.

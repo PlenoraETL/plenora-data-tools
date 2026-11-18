@@ -145,11 +145,7 @@ fn cutters(
                     _ => return Err(PredicateError::CalcoloNonConcluso("tipo poligonale")),
                 }
             }
-            _ => {
-                return Err(PredicateError::CalcoloNonConcluso(
-                    "tipo di tagliatore non supportato",
-                ))
-            }
+            _ => return Err(PredicateError::UnsupportedGeometry),
         }
     }
     Ok(())

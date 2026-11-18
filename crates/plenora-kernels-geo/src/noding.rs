@@ -18,9 +18,11 @@ mod oracle;
 mod storage;
 pub use storage::CountedVec;
 
+/// Checkpoint esterni entro 256 primitive Q; ogni gcd ha meno di
+/// 290346 resti su interi di al massimo 145173 bit e controlla la deadline
+/// a ogni resto. Il flag e' osservato dal checkpoint esterno.
 pub struct Work<'a> {
     limits: RelateLimits,
-    deadline_first: bool,
     cancelled: Option<&'a std::sync::atomic::AtomicBool>,
     pub steps: u64,
     pub pairs: u64,
@@ -32,26 +34,19 @@ pub struct Work<'a> {
 }
 impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
+        let mut budget = storage::Budget::new(limits.max_reserved_bytes);
+        budget.deadline = limits.deadline;
         Self {
             limits,
-            deadline_first: false,
             cancelled,
             steps: 0,
             pairs: 0,
-            budget: Rc::new(storage::Budget::new(limits.max_reserved_bytes)),
+            budget: Rc::new(budget),
             nodes: 0,
             exports: CountedVec::new(),
             #[cfg(test)]
             interrupt_at: None,
         }
-    }
-    pub(crate) fn with_deadline_precedence(
-        limits: RelateLimits,
-        cancelled: Option<&'a std::sync::atomic::AtomicBool>,
-    ) -> Self {
-        let mut work = Self::new(limits, cancelled);
-        work.deadline_first = true;
-        work
     }
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
         Q::int_in(value, &self.budget)
@@ -68,11 +63,10 @@ impl<'a> Work<'a> {
                 }
             }
         }
-        if self.deadline_first
-            && self
-                .limits
-                .deadline
-                .is_some_and(|d| std::time::Instant::now() >= d)
+        if self
+            .limits
+            .deadline
+            .is_some_and(|d| std::time::Instant::now() >= d)
         {
             return Err(PredicateError::DeadlineExceeded);
         }
@@ -81,13 +75,6 @@ impl<'a> Work<'a> {
             .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
         {
             return Err(PredicateError::Cancelled);
-        }
-        if self
-            .limits
-            .deadline
-            .is_some_and(|d| std::time::Instant::now() >= d)
-        {
-            return Err(PredicateError::DeadlineExceeded);
         }
         self.steps = self
             .steps
@@ -701,7 +688,10 @@ mod tests {
         assert_eq!(expired.steps, 0);
         let flag = AtomicBool::new(true);
         let mut cancelled = Work::new(limits, Some(&flag));
-        assert!(matches!(cancelled.step(), Err(PredicateError::Cancelled)));
+        assert!(matches!(
+            cancelled.step(),
+            Err(PredicateError::DeadlineExceeded)
+        ));
     }
 
     /// GOP-026/027 e O-M1/M3: reticolo 3x3, pettine, strisce e segmenti

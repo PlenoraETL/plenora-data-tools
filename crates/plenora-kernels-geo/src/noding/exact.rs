@@ -1,13 +1,10 @@
 //! Aritmetica fallibile: ogni intero, compresi gcd e prodotti dei confronti,
 //! possiede una ricevuta sul bilancio vivo dei contenitori.
 //!
-//! GOP-027: `check_bits` e' l'unica regola del dominio fisso. Prima della
-//! creazione, un limite superiore oltre `MAX_BITS` e' `ReservationLimit`
-//! (Limite nella pipeline), anche se una cancellazione darebbe un valore
-//! piccolo. L'accumulatore d'area dipende dal numero di lati/buchi; gli
-//! editor riusano Q con DAG e raffinazioni non coperti dalla dimostrazione
-//! del noder in bounds.rs. Per entrambi il tetto e' una risorsa imposta,
-//! non una prova che ogni calcolo sull'ingresso debba starci.
+//! Il tetto interno `MAX_BITS` non e' un budget del chiamante: il suo
+//! superamento preventivo e' `AccuracyUnproven`. Le prenotazioni vive restano
+//! una risorsa distinta. Il gcd controlla la deadline ad ogni resto;
+//! per Lame effettua meno di 2 * `MAX_BITS` divisioni euclidee per Q.
 //! Dopo la creazione, invece, `MAX_BITS` e' un'invariante dimostrata dai
 //! precontrolli di add/sub/mul/shift e dalla non crescita delle altre
 //! primitive (sqrt inclusa): violarla e' `CalcoloNonConcluso` (Interna).
@@ -158,19 +155,19 @@ mod tests {
         let attempted = budget.attempted_peak();
         assert!(matches!(
             large.sub(&large),
-            Err(PredicateError::ReservationLimit)
+            Err(PredicateError::AccuracyUnproven)
         ));
         assert!(matches!(
             large.mul(&two),
-            Err(PredicateError::ReservationLimit)
+            Err(PredicateError::AccuracyUnproven)
         ));
         assert!(matches!(
             large.add(&large),
-            Err(PredicateError::ReservationLimit)
+            Err(PredicateError::AccuracyUnproven)
         ));
         assert!(matches!(
             large.shift(1),
-            Err(PredicateError::ReservationLimit)
+            Err(PredicateError::AccuracyUnproven)
         ));
         assert_eq!(budget.live(), live);
         assert_eq!(budget.attempted_peak(), attempted);
@@ -201,7 +198,7 @@ mod tests {
                     value = next;
                     count += 1;
                 }
-                Err(PredicateError::ReservationLimit) => break,
+                Err(PredicateError::AccuracyUnproven) => break,
                 Err(error) => panic!("errore inatteso: {error}"),
             }
         }
@@ -210,7 +207,7 @@ mod tests {
         let before = budget.attempted_peak();
         assert!(matches!(
             value.try_add(&value),
-            Err(PredicateError::ReservationLimit)
+            Err(PredicateError::AccuracyUnproven)
         ));
         assert_eq!(before, budget.attempted_peak());
         drop(value);
@@ -220,11 +217,11 @@ mod tests {
         let two = CountedInt::int(2, &budget).expect("due");
         assert!(matches!(
             largest.mul(&two),
-            Err(PredicateError::ReservationLimit)
+            Err(PredicateError::AccuracyUnproven)
         ));
         assert!(matches!(
             largest.shift(1),
-            Err(PredicateError::ReservationLimit)
+            Err(PredicateError::AccuracyUnproven)
         ));
     }
 
@@ -328,7 +325,7 @@ impl CountedInt {
             return Ok(());
         }
         Err(match phase {
-            BitCheck::BeforeCreation => PredicateError::ReservationLimit,
+            BitCheck::BeforeCreation => PredicateError::AccuracyUnproven,
             BitCheck::Created => PredicateError::CalcoloNonConcluso("dominio aritmetico"),
         })
     }
@@ -430,6 +427,13 @@ impl Q {
         };
         let mut b = d.copy()?;
         while b.value.sign() != Sign::NoSign {
+            if a.lease
+                .budget()
+                .deadline
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                return Err(PredicateError::DeadlineExceeded);
+            }
             let r = a.rem(&b)?;
             a = b;
             b = r;

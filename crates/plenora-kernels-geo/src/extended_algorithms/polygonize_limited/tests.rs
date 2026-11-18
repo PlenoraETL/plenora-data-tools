@@ -1,4 +1,4 @@
-//! C1: formule analitiche e snapshot del tag v6.0.0.
+//! C1: facce cartesiane e anelli concentrici con attese analitiche.
 use super::*;
 use geo::{Area, MultiLineString};
 
@@ -62,21 +62,6 @@ fn polygon_keys(polygons: &[Polygon<f64>]) -> Vec<Vec<Vec<(u64, u64)>>> {
     keys.sort();
     keys
 }
-fn baseline(g: &Geometry<f64>, result: &[Polygon<f64>]) {
-    use crate::rust_backend::polygonize::{baseline_600, PolygonizeLimits, PolygonizeOptions};
-    // Fonte: snapshot v6.0.0, blob 768a11b454fc839fd964aa313aaba5729976ff09.
-    let old = baseline_600::polygonize_linework_rust(
-        g,
-        PolygonizeOptions {
-            node_input: true,
-            require_complete: false,
-            limits: PolygonizeLimits::unlimited(),
-            precision: 0.01,
-        },
-    )
-    .expect("baseline 6.0.0");
-    assert_eq!(polygon_keys(result), polygon_keys(&old.polygons));
-}
 
 #[test]
 fn rectangular_grids_have_exact_faces() {
@@ -104,7 +89,18 @@ fn rectangular_grids_have_exact_faces() {
         assert!(result
             .iter()
             .all(|p| p.unsigned_area() == 6. && p.interiors().is_empty()));
-        baseline(&g, &result);
+        let expected: Vec<_> = (0..n - 1)
+            .flat_map(|y| {
+                (0..m - 1).map(move |x| {
+                    let (x, y) = (3. * f64::from(x), 2. * f64::from(y));
+                    Polygon::new(
+                        line(&[(x, y), (x + 3., y), (x + 3., y + 2.), (x, y + 2.), (x, y)]),
+                        vec![],
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(polygon_keys(&result), polygon_keys(&expected));
     }
 }
 #[test]
@@ -116,7 +112,12 @@ fn nested_rings_holes_overlaps_and_dangles() {
     // Fonte: quadrati concentrici: 100-36, 36-4, 4; due buchi.
     assert_eq!(areas, [4., 32., 64.]);
     assert_eq!(result.iter().map(|p| p.interiors().len()).sum::<usize>(), 2);
-    baseline(&g, &result);
+    let expected = [
+        Polygon::new(square(0., 10.), vec![square(2., 8.)]),
+        Polygon::new(square(2., 8.), vec![square(4., 6.)]),
+        Polygon::new(square(4., 6.), vec![]),
+    ];
+    assert_eq!(polygon_keys(&result), polygon_keys(&expected));
     let g = input(vec![
         square(0., 4.),
         line(&[(1., 0.), (3., 0.)]),
@@ -129,7 +130,10 @@ fn nested_rings_holes_overlaps_and_dangles() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].unsigned_area(), 16.);
     assert!(result[0].interiors().is_empty());
-    baseline(&g, &result);
+    assert_eq!(
+        polygon_keys(&result),
+        polygon_keys(&[Polygon::new(square(0., 4.), vec![])])
+    );
     let g = input(vec![
         square(0., 10.),
         square(2., 8.),
@@ -138,7 +142,13 @@ fn nested_rings_holes_overlaps_and_dangles() {
     // Fonte: un ponte tra anelli non separa la corona: aree 64 e 36.
     let result = run(&g);
     assert_eq!(result.len(), 2);
-    baseline(&g, &result);
+    assert_eq!(
+        polygon_keys(&result),
+        polygon_keys(&[
+            Polygon::new(square(0., 10.), vec![square(2., 8.)]),
+            Polygon::new(square(2., 8.), vec![])
+        ])
+    );
 }
 #[test]
 fn large_sparse_input_succeeds_without_pairs() {
@@ -219,11 +229,11 @@ fn exact_limits_and_interruptions() {
         ..RelateLimits::default()
     };
     let flag = std::sync::atomic::AtomicBool::new(true);
-    // Fonte: Work::step, cancellazione prima di deadline, anche su vuoto.
+    // Fonte: Work::step, deadline prima della cancellazione, anche su vuoto.
     let empty = input(vec![]);
     assert!(matches!(
         polygonize_with_limits(&empty, expired, Some(&flag)),
-        Err(PredicateError::Cancelled)
+        Err(PredicateError::DeadlineExceeded)
     ));
     assert!(matches!(
         polygonize_with_limits(&empty, expired, None),
@@ -316,4 +326,17 @@ fn gop015a_nondyadic_faces_and_discarded_dangles() {
         line(&[(x, -1.), (x + 1., 9.)]),
     ]);
     assert!(run(&g).is_empty());
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn excluded_point_is_typed_unsupported() {
+    assert!(matches!(
+        polygonize_with_limits(
+            &Geometry::Point(geo::Point::new(0., 0.)),
+            RelateLimits::default(),
+            None
+        ),
+        Err(PredicateError::UnsupportedGeometry)
+    ));
 }

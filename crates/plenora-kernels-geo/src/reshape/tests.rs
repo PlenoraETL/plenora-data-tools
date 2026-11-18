@@ -130,23 +130,14 @@ fn bent_crossings_and_closed_reshaper() {
         run(&target, &shape).unwrap(),
         LineString::from(vec![(0., -1.), (2., 0.), (4., 2.), (6., 0.), (8., -1.)])
     );
-    // Fonte C1: GOP-019, reshaper singolo semplice chiuso; intervallo interno
-    // all'ordine memorizzato, non scelta di regione poligonale.
-    assert_eq!(
+    // GOP-016 e GOP-019: le due vie del ciclo non hanno una scelta univoca.
+    assert!(matches!(
         run(
             &line(&[(0., 0.), (10., 0.)]),
             &line(&[(2., -2.), (2., 2.), (8., 2.), (8., -2.), (2., -2.)])
-        )
-        .unwrap(),
-        LineString::from(vec![
-            (0., 0.),
-            (2., 0.),
-            (2., 2.),
-            (8., 2.),
-            (8., 0.),
-            (10., 0.)
-        ])
-    );
+        ),
+        Err(ReshapeError::Unsupported)
+    ));
 }
 
 #[test]
@@ -190,7 +181,7 @@ fn reconstructed_self_contact_is_rejected() {
         run(&target, &shape),
         Err(ReshapeError::Unsupported)
     ));
-    let mut work = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let mut work = Work::new(RelateLimits::default(), None);
     let mut points = CountedVec::new();
     for (x, y) in [
         (0., 0.),
@@ -219,7 +210,7 @@ fn exact_nodes_and_rounding_topology() {
     let result = run(&target, &line(&[(0., -1.), (1., 2.), (8., 2.), (8., -2.)])).unwrap();
     // Fonte C1: GOP-019: -1+3x=0; GOP-015A nearest-even(1/3).
     assert_eq!(result.0[1].x.to_bits(), 0x3fd5_5555_5555_5555);
-    let work = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let work = Work::new(RelateLimits::default(), None);
     let exact = work
         .integer(1)
         .unwrap()
@@ -274,7 +265,7 @@ fn exact_nodes_and_rounding_topology() {
 fn exact_resource_thresholds() {
     let target = line(&[(0.0, 0.0), (10.0, 0.0)]);
     let guide = line(&[(2.0, -1.0), (2.0, 2.0), (8.0, 2.0), (8.0, -1.0)]);
-    let mut measured = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let mut measured = Work::new(RelateLimits::default(), None);
     execute(&target, &guide, &mut measured).unwrap();
     for delta in [-1_i64, 0, 1] {
         for axis in 0..4 {
@@ -420,7 +411,7 @@ fn exact_domain_boundary_and_zero_budgets() {
 fn observed_domain_failure_keeps_precedence() {
     let target = line(&[(0., 0.), (10., 0.)]);
     let shape = line(&[(1., -1.), (2., 0.), (4., 0.), (5., 1.)]);
-    let mut measured = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let mut measured = Work::new(RelateLimits::default(), None);
     // Fonte C1: GOP-019, overlap sempre unsupported senza limiti raggiunti.
     assert!(matches!(
         execute(&target, &shape, &mut measured),

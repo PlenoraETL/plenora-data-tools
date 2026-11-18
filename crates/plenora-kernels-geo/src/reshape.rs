@@ -66,11 +66,7 @@ pub fn reshape_with_limits(
     limits: RelateLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<LineString<f64>, ReshapeError> {
-    execute(
-        target,
-        reshaper,
-        &mut Work::with_deadline_precedence(limits, cancelled),
-    )
+    execute(target, reshaper, &mut Work::new(limits, cancelled))
 }
 
 struct PathSite {
@@ -251,7 +247,7 @@ fn execute(
 ) -> Result<LineString<f64>, ReshapeError> {
     work.step()?;
     let target_points = read_path(target, false, work)?;
-    let reshaper_points = read_path(reshaper, true, work)?;
+    let reshaper_points = read_path(reshaper, false, work)?;
     let hits = crossings(&target_points, &reshaper_points, work)?;
     let start = &hits[0];
     let end = &hits[1];

@@ -16,11 +16,9 @@ fn run(a: &Geometry<f64>, b: &Geometry<f64>, op: GeneralBooleanOp) -> Geometry<f
     boolean_with_limits(a, b, op, None, GeneralBooleanLimits::default(), None).unwrap()
 }
 fn equivalent(a: &Geometry<f64>, b: &Geometry<f64>) {
-    let cells = relate_matrix(a, b).unwrap().cells();
-    // O1 SFA 6.1.15: entrambi gli insiemi differenza sono vuoti.
-    for i in [2, 5, 6, 7] {
-        assert_eq!(cells[i], b'F');
-    }
+    use geo::Relate;
+    // O1 SFA 6.1.15: oracle geo, distinto dall'arrangement razionale in prova.
+    assert!(a.relate(b).matches("**F**FFF*").unwrap());
 }
 
 /// GOP-014/015, O1: tutte le nove coppie ordinate, con P contenuto in L in S.
@@ -253,7 +251,7 @@ fn measured_limits_and_interruptions() {
         rect(1., 0., 3., 2.),
     ];
     let limits = GeneralBooleanLimits::default();
-    let mut measure = Work::with_deadline_precedence(limits.work, None);
+    let mut measure = Work::new(limits.work, None);
     polygon_boolean::execute_many(
         &inputs,
         &[],
@@ -312,7 +310,7 @@ fn measured_limits_and_interruptions() {
     ] {
         for deadline in [false, true] {
             let flag = AtomicBool::new(false);
-            let mut work = Work::with_deadline_precedence(limits.work, Some(&flag));
+            let mut work = Work::new(limits.work, Some(&flag));
             work.interrupt_at = Some((at, deadline));
             let result = polygon_boolean::execute_many(
                 &inputs,
@@ -371,4 +369,24 @@ fn many_overlapping_rectangles_combinatorial_grid() {
             assert_eq!(cells[5], b'F');
         }
     }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn rounded_isolated_point_cannot_enter_surface() {
+    use wkt::TryFromWkt;
+    // Fraction: 7*x+3*y-21 e' positivo al nodo esatto e negativo al pubblicato.
+    let a = Geometry::try_from_wkt_str("GEOMETRYCOLLECTION(POLYGON((0 0,3 0,0 7,0 0)),LINESTRING(1.3238327648331625 3.9110568820559544,1.3948234964231734 3.7454118416792626))").unwrap();
+    let b = Geometry::try_from_wkt_str("GEOMETRYCOLLECTION(POLYGON((0 0,3 0,0 7,0 0)),LINESTRING(1.4336456836623859 3.6548267381210997,1.0829846946613322 4.473035712456892))").unwrap();
+    assert!(matches!(
+        boolean_with_limits(
+            &a,
+            &b,
+            GeneralBooleanOp::Intersection,
+            None,
+            GeneralBooleanLimits::default(),
+            None
+        ),
+        Err(GeneralBooleanError::InvalidRoundedTopology)
+    ));
 }

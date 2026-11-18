@@ -422,6 +422,32 @@ pub(crate) fn ordinate(value: &Q, work: &mut Work<'_>) -> Result<f64, LineBoolea
         }
     }
     if low > f64::MAX.to_bits() {
+        let maximum = P::of_in(
+            Coord {
+                x: f64::MAX,
+                y: 0.0,
+            },
+            work,
+        )?
+        .x;
+        let previous = P::of_in(
+            Coord {
+                x: f64::MAX.next_down(),
+                y: 0.0,
+            },
+            work,
+        )?
+        .x;
+        let half_ulp = maximum.try_sub(&previous)?.try_div(&work.integer(2)?)?;
+        let threshold = maximum.try_add(&half_ulp)?;
+        let magnitude = if negative {
+            work.integer(0)?.try_sub(value)?
+        } else {
+            value.try_clone()?
+        };
+        if magnitude.try_cmp(&threshold)?.is_lt() {
+            return Ok(if negative { -f64::MAX } else { f64::MAX });
+        }
         return Err(LineBooleanError::CoordinateOutOfRange);
     }
     let signed = |bits| {
@@ -654,6 +680,7 @@ pub(crate) struct PublishedEdge<'a> {
     // Lato immutato cui il segmento pubblicato deve restare aderente.
     pub(crate) support: Option<&'a Edge>,
     pub(crate) surface: bool,
+    pub(crate) component: bool,
 }
 impl<'a> PublishedEdge<'a> {
     /// Corrispondenza ordinata fra nodi esatti e noding dell'output binary64.
@@ -676,6 +703,7 @@ impl<'a> PublishedEdge<'a> {
             coords: [Coord { x: 0.0, y: 0.0 }; 2],
             noded: true,
             surface: false,
+            component: true,
             support: None,
         })
     }
@@ -690,6 +718,7 @@ impl<'a> PublishedEdge<'a> {
             exact: [&edge.a, &edge.b],
             support: None,
             surface: false,
+            component: true,
             noded: false,
             coords,
             rounded: Edge {
@@ -708,6 +737,7 @@ impl<'a> PublishedEdge<'a> {
             exact: [p, p],
             support: None,
             surface: false,
+            component: true,
             noded: false,
             coords: [coord, coord],
             rounded: Edge {
@@ -960,6 +990,19 @@ pub(crate) fn verify_publication(
         let components = surface_polygons(polygons, work)?;
         verify_surface_edges(&components, edges, work)?;
         verify_rings(&components, work)?;
+        let mut surface = super::Shape::default();
+        surface.geometry(polygons, work)?;
+        surface.build_indices(work)?;
+        for edge in edges.iter().filter(|edge| !edge.surface && edge.component) {
+            work.nodes(1)?;
+            let middle = P {
+                x: edge.rounded.a.x.try_midpoint(&edge.rounded.b.x)?,
+                y: edge.rounded.a.y.try_midpoint(&edge.rounded.b.y)?,
+            };
+            if surface.position(&middle, work)? != 2 {
+                return Err(LineBooleanError::InvalidRoundedTopology);
+            }
+        }
         let empty = Geometry::MultiPoint(MultiPoint::new(Vec::new()));
         match super::relate(polygons, &empty, work) {
             Err(PredicateError::InvalidGeometry { .. }) => {
@@ -982,42 +1025,12 @@ pub(crate) fn verify_publication(
     Ok(())
 }
 
-// Il percorso puo' contenere incroci: conserva i segni delle quattro
-// orientazioni e, nei casi collineari, l'ordine degli estremi. Non richiede
-// che un incrocio gia' presente diventi un vertice della polilinea.
+// Il percorso conserva identita' e ordine delle incidenze lungo ogni lato.
+// La collinearita' di lati disgiunti non e' una proprieta' promessa.
 fn verify_path_pairs(
     edges: &[PublishedEdge<'_>],
     work: &mut Work<'_>,
 ) -> Result<(), LineBooleanError> {
-    for (i, a) in edges.iter().enumerate() {
-        for b in &edges[i + 1..] {
-            work.pair()?;
-            let exact = [a.exact[0], a.exact[1], b.exact[0], b.exact[1]];
-            let rounded = [&a.rounded.a, &a.rounded.b, &b.rounded.a, &b.rounded.b];
-            for [p, q, r] in [[0, 1, 2], [0, 1, 3], [2, 3, 0], [2, 3, 1]] {
-                work.step()?;
-                let before = exact[q]
-                    .try_sub(exact[p])?
-                    .try_cross(&exact[r].try_sub(exact[p])?)?
-                    .sign();
-                let after = rounded[q]
-                    .try_sub(rounded[p])?
-                    .try_cross(&rounded[r].try_sub(rounded[p])?)?
-                    .sign();
-                if before != after {
-                    return Err(LineBooleanError::InvalidRoundedTopology);
-                }
-                if before.is_eq() {
-                    for [u, v] in [[p, r], [q, r]] {
-                        work.step()?;
-                        if point_cmp(exact[u], exact[v])? != point_cmp(rounded[u], rounded[v])? {
-                            return Err(LineBooleanError::InvalidRoundedTopology);
-                        }
-                    }
-                }
-            }
-        }
-    }
     let mut exact_edges = CountedVec::new();
     let mut rounded_refs = CountedVec::new();
     for edge in edges {
@@ -1037,26 +1050,21 @@ fn verify_path_pairs(
     }
     let exact_nodes = crate::noding::node(&exact_refs, work)?;
     let rounded_nodes = crate::noding::node(&rounded_refs, work)?;
-    let mut sites = CountedVec::new();
+    let mut certificates = CountedVec::new();
     for (before, after) in exact_nodes.iter().zip(&rounded_nodes) {
         work.step()?;
         if before.len() != after.len() {
             return Err(LineBooleanError::InvalidRoundedTopology);
         }
-        for (before, after) in before.iter().zip(after.iter()) {
-            work.push(&mut sites, (before, after))?;
+        for (before, after) in before.windows(2).zip(after.windows(2)) {
+            let certificate =
+                PublishedEdge::noded([&before[0], &before[1]], [&after[0], &after[1]], work)?;
+            work.push(&mut certificates, certificate)?;
         }
     }
-    // La corrispondenza ordinata deve conservare anche concorrenze e identita'
-    // fra lati diversi: sole orientazioni pairwise non rilevano un triplo nodo.
-    for (i, (before, after)) in sites.iter().enumerate() {
-        for (other_before, other_after) in &sites[i + 1..] {
-            work.pair()?;
-            if (before == other_before) != (after == other_after) {
-                return Err(LineBooleanError::InvalidRoundedTopology);
-            }
-        }
-    }
+    let empty = Geometry::GeometryCollection(GeometryCollection::empty());
+    let originals = Originals::new(&empty, &empty, work)?;
+    verify_publication(&certificates, &originals, false, None, work)?;
     work.step()?;
     Ok(())
 }

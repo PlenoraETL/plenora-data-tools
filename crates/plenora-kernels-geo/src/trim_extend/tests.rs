@@ -185,7 +185,6 @@ fn invalid_guide_and_reconstruction() {
     let target = line(&[(0.0, 1.0), (1.0, 2.0)]);
     for guide in [
         line(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]),
-        line(&[(0.0, 0.0), (0.0, 0.0)]),
         line(&[(0.0, 0.0), (2.0, 0.0), (1.0, 0.0)]),
     ] {
         // Fonte C1: GOP-018, guida singola retta diretta non degenere.
@@ -235,7 +234,7 @@ fn nearest_even_and_rounded_collapse() {
     // Fonte C1: GOP-018 soluzione 1-3x=0; GOP-015A 1/3 nearest-even
     // e' 0x3fd5555555555555, errore esatto 1/(3*2^54)<2^-55.
     assert_eq!(result.0[0].x.to_bits(), 0x3fd5_5555_5555_5555);
-    let mut work = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let mut work = Work::new(RelateLimits::default(), None);
     let third = work
         .integer(1)
         .unwrap()
@@ -335,7 +334,7 @@ fn positive_distance_threshold() {
 fn exact_resource_thresholds() {
     let target = line(&[(0.0, 0.0), (2.0, 0.0)]);
     let guide = line(&[(1.0, -1.0), (1.0, 1.0)]);
-    let mut measured = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let mut measured = Work::new(RelateLimits::default(), None);
     execute(&target, &guide, TrimExtendOptions::default(), &mut measured).unwrap();
     for delta in [-1_i64, 0, 1] {
         for axis in 0..4 {
@@ -450,7 +449,7 @@ fn cancellation_deadline_entry_and_during_work() {
 #[test]
 #[deny(clippy::disallowed_methods)]
 fn reused_signs_do_not_charge_candidates_and_overflow_is_typed() {
-    let mut work = Work::with_deadline_precedence(RelateLimits::default(), None);
+    let mut work = Work::new(RelateLimits::default(), None);
     let points = [
         P::of_in(Coord { x: 0.0, y: 0.0 }, &work).unwrap(),
         P::of_in(Coord { x: 2.0, y: 0.0 }, &work).unwrap(),
@@ -496,5 +495,20 @@ fn reused_signs_do_not_charge_candidates_and_overflow_is_typed() {
             None
         ),
         Err(TrimExtendError::Predicate(PredicateError::WorkLimit))
+    ));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn degenerate_guide_is_invalid_geometry() {
+    assert!(matches!(
+        trim_extend_with_limits(
+            &line(&[(0., -1.), (0., 1.)]),
+            &line(&[(0., 0.), (0., 0.)]),
+            TrimExtendOptions::default(),
+            RelateLimits::default(),
+            None
+        ),
+        Err(TrimExtendError::InvalidGeometry)
     ));
 }

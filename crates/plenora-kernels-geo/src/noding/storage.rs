@@ -7,6 +7,7 @@ use std::rc::Rc;
 #[derive(Debug)]
 pub(super) struct Budget {
     limit: u64,
+    pub(super) deadline: Option<std::time::Instant>,
     live: Cell<u64>,
     peak: Cell<u64>,
     attempted_peak: Cell<u64>,
@@ -16,6 +17,7 @@ impl Budget {
     pub(super) const fn new(limit: u64) -> Self {
         Self {
             limit,
+            deadline: None,
             live: Cell::new(0),
             peak: Cell::new(0),
             attempted_peak: Cell::new(0),

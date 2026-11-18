@@ -106,12 +106,7 @@ pub fn trim_extend_with_limits(
     limits: RelateLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<LineString<f64>, TrimExtendError> {
-    execute(
-        target,
-        guide,
-        options,
-        &mut Work::with_deadline_precedence(limits, cancelled),
-    )
+    execute(target, guide, options, &mut Work::new(limits, cancelled))
 }
 
 fn read(input: &Geometry<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>, TrimExtendError> {
@@ -277,6 +272,11 @@ fn execute(
 ) -> Result<LineString<f64>, TrimExtendError> {
     work.step()?;
     let points = read(target, work)?;
+    if let Geometry::LineString(line) = guide {
+        if line.0.windows(2).all(|pair| pair[0] == pair[1]) {
+            return Err(TrimExtendError::InvalidGeometry);
+        }
+    }
     let guide_points = read(guide, work)?;
     let origin = &guide_points[0];
     let direction = guide_points[1].try_sub(origin)?;

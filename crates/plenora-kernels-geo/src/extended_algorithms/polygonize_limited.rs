@@ -22,7 +22,7 @@ use geo::{Geometry, LineString, Polygon};
 /// Usa coppie effettive, incidenze di nodi, passi e memoria contabile di
 /// [`RelateLimits`], inclusi grafo, facce e output. Valgono le limitazioni
 /// contabili di quel tipo (non e' una certificazione dell'heap fisico).
-/// Cancellazione cooperativa con precedenza sulla deadline.
+/// Deadline scaduta con precedenza sulla cancellazione.
 /// XY planari nelle unita' del CRS: topologia razionale esatta, pubblicazione
 /// GOP-015A al binary64 piu' vicino, meta' al pari, <= mezza ulp per ordinata.
 /// Vertici originali invariati; per siti con zeri di segno diverso prevale
@@ -64,11 +64,7 @@ fn collect(
                     work.push(&mut pending, g)?;
                 }
             }
-            _ => {
-                return Err(PredicateError::CalcoloNonConcluso(
-                    "tipo di linework non supportato",
-                ))
-            }
+            _ => return Err(PredicateError::UnsupportedGeometry),
         }
     }
     Ok(edges)

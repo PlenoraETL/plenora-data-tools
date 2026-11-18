@@ -516,3 +516,69 @@ fn exact_mitre_limit_and_clockwise_arc() {
         assert!(a.y * b.y <= 0.0);
     }
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn disjoint_collinearity_fraction_oracle() {
+    // Oracolo Fraction (stair.py): parallele razionali alla scala assiale.
+    let input = line(&[(0., 0.), (1., 0.), (1., 1.), (2., 1.), (2., 2.), (3., 2.)]);
+    let expected = LineString::from(vec![
+        (0., -0.3),
+        (1., -0.3),
+        (1.3, 0.),
+        (1.3, 0.7),
+        (2., 0.7),
+        (2.3, 1.),
+        (2.3, 1.7),
+        (3., 1.7),
+    ]);
+    assert_eq!(run(&input, 0.3, OffsetJoin::Bevelled).line, expected);
+    let irrational = line(&[(0., 0.), (1., 2.), (3., 1.), (4., 3.), (2., 4.), (3., 6.)]);
+    let result = run(&irrational, 0.1, OffsetJoin::Bevelled);
+    assert!(geo::Validation::is_valid(&result.line));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn finite_overflow_rounding_and_unused_tolerance() {
+    let y = -2_f64.powi(969);
+    for join in [OffsetJoin::Bevelled, OffsetJoin::Mitered { limit: 2.0 }] {
+        let result = offset_with_limits(
+            &line(&[(0., y), (1., y)]),
+            OffsetOptions {
+                distance: f64::MAX,
+                join,
+                arc_tolerance: f64::NAN,
+            },
+            RelateLimits::default(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            result.line,
+            LineString::from(vec![(0., -f64::MAX), (1., -f64::MAX)])
+        );
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn rational_disjoint_edges_fraction_oracle() {
+    let input = line(&[(0., 0.), (3., 4.), (7., 1.), (10., 5.), (6., 8.), (9., 12.)]);
+    // Oracolo Fraction (collinear.py): normali di lati lunghi 5, d=1.
+    let expected = LineString::from(vec![
+        (0.8, -0.6),
+        (3.2, 2.6),
+        (6.4, 0.2),
+        (7.8, 0.4),
+        (10.8, 4.4),
+        (10.6, 5.8),
+        (7.4, 8.2),
+        (9.8, 11.4),
+    ]);
+    assert_eq!(run(&input, 1., OffsetJoin::Bevelled).line, expected);
+    assert_eq!(
+        run(&line(&[(0., 0.), (1., 0.)]), 0., OffsetJoin::Rounded).line,
+        LineString::from(vec![(0., 0.), (1., 0.)])
+    );
+}

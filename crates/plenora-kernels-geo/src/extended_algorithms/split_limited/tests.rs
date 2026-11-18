@@ -182,10 +182,10 @@ fn exact_thresholds_and_interruptions() {
         deadline: Some(std::time::Instant::now()),
         ..RelateLimits::default()
     };
-    // Fonte: Work::step, flag prima della deadline, entrambi errori distinti.
+    // Fonte: Work::step, deadline prima del flag, entrambi errori distinti.
     assert!(matches!(
         split_line_with_limits(&source, &cutter, expired, Some(&flag)),
-        Err(PredicateError::Cancelled)
+        Err(PredicateError::DeadlineExceeded)
     ));
     assert!(matches!(
         split_line_with_limits(&source, &cutter, expired, None),
@@ -349,4 +349,15 @@ fn splitter_vertex_preserves_signed_zero() {
         (c.x.to_bits(), c.y.to_bits()),
         ((-0.0_f64).to_bits(), (-0.0_f64).to_bits())
     );
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn excluded_line_cutter_is_typed_unsupported() {
+    let source = LineString::from(vec![(0., 0.), (1., 1.)]);
+    let cutter = Geometry::Line(geo::Line::new((0., 1.), (1., 0.)));
+    assert!(matches!(
+        split_line_with_limits(&source, &cutter, RelateLimits::default(), None),
+        Err(PredicateError::UnsupportedGeometry)
+    ));
 }

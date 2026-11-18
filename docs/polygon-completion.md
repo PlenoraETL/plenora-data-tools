@@ -23,9 +23,9 @@ I buchi preesistenti non adiacenti e le facce di sole linee sono esclusi.
 I residui aperti non producono facce. Nessuna faccia significa lista vuota.
 
 Intersezioni puntuali fra poligoni sono ammesse. Interni sovrapposti,
-compresi poligoni duplicati, danno `OverlappingInteriors`. Lati coincidenti,
-anche duplicati nuovi o confini condivisi fra poligoni, danno
-`AmbiguousProvenance`. Linework non semplice o tipo escluso danno
+compresi poligoni duplicati, danno `OverlappingInteriors`. Confini condivisi
+fra poligoni esistenti sono ammessi; la coincidenza nuovo/esistente da'
+`AmbiguousProvenance`. Linework non semplice, inclusi duplicati nuovi, o tipo escluso danno
 `UnsupportedLinework`. Geometria invalida/non finita conserva il
 `PredicateError` di validazione. Nessun errore contiene dati degli operandi.
 
@@ -73,9 +73,8 @@ Le copie strutturali e aritmetiche restano contate secondo `RelateLimits`.
 
 ## Cancellazione e qualifica
 
-`Work::with_deadline_precedence` applica GOP-028: a uno stesso checkpoint,
-deadline scaduta precede cancellazione. Le API precedenti mantengono la
-propria precedenza. Checkpoint all'ingresso, nei cicli e prima del ritorno.
+`Work::new` applica GOP-028: a uno stesso checkpoint,
+deadline scaduta precede cancellazione in tutte le API del noder comune. Checkpoint all'ingresso, nei cicli e prima del ritorno.
 Non viene introdotta una seconda deadline nel payload di un runtime.
 
 La prova pubblica interrompe lavoro gia' iniziato con flag e deadline;

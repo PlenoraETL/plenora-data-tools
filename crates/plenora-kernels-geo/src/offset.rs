@@ -221,8 +221,6 @@ fn execute(
 ) -> Result<OffsetResult, OffsetError> {
     work.step()?;
     if !options.distance.is_finite()
-        || !options.arc_tolerance.is_finite()
-        || options.arc_tolerance <= 0.0
         || matches!(options.join, OffsetJoin::Mitered { limit } if !limit.is_finite() || limit < 1.0)
     {
         return Err(OffsetError::InvalidConfiguration);
@@ -451,6 +449,9 @@ fn construct(
             append(&mut output, end, work)?;
             start = center.add(&b.shift)?;
             if matches!(options.join, OffsetJoin::Rounded) {
+                if !options.arc_tolerance.is_finite() || options.arc_tolerance <= 0.0 {
+                    return Err(OffsetError::InvalidConfiguration);
+                }
                 let first = output.len() - 1;
                 arc(&mut output, &points[i], a, b, options, work)?;
                 work.push(
@@ -487,8 +488,9 @@ fn construct(
     )
 }
 
-// Tutti i segni delle orientazioni devono essere certi sull'intero intervallo,
-// non soltanto sui suoi punti medi. Estremi condivisi sono identici per indice.
+// Gli inviluppi separati certificano l'assenza di incidenza senza orientazioni.
+// Negli altri casi si certificano i segni necessari sull'intero intervallo.
+#[allow(clippy::too_many_lines)]
 fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(), OffsetError> {
     let mut parameters = CountedVec::new();
     for _ in points.windows(2) {
@@ -500,7 +502,23 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
     for i in 0..points.len() - 1 {
         for j in i + 1..points.len() - 1 {
             work.pair()?;
-            let mut signs = [std::cmp::Ordering::Equal; 4];
+            let mut separated = false;
+            for axis in [true, false] {
+                let coord = |k: usize| if axis { &points[k].x } else { &points[k].y };
+                for (a, b) in [(i, j), (j, i)] {
+                    if coord(a).high.try_cmp(&coord(b).low)?.is_lt()
+                        && coord(a).high.try_cmp(&coord(b + 1).low)?.is_lt()
+                        && coord(a + 1).high.try_cmp(&coord(b).low)?.is_lt()
+                        && coord(a + 1).high.try_cmp(&coord(b + 1).low)?.is_lt()
+                    {
+                        separated = true;
+                    }
+                }
+            }
+            if separated {
+                continue;
+            }
+            let mut signs = [Some(std::cmp::Ordering::Equal); 4];
             for (position, [a, b, c]) in [
                 [i, i + 1, j],
                 [i, i + 1, j + 1],
@@ -511,22 +529,34 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
             .enumerate()
             {
                 work.step()?;
-                if a == c || b == c {
-                    continue;
+                if a != c && b != c {
+                    signs[position] = match points[b]
+                        .sub(&points[a])?
+                        .cross(&points[c].sub(&points[a])?)?
+                        .sign()
+                    {
+                        Ok(sign) => Some(sign),
+                        Err(OffsetError::AccuracyUnproven) => None,
+                        Err(error) => return Err(error),
+                    };
                 }
-                let sign = points[b]
-                    .sub(&points[a])?
-                    .cross(&points[c].sub(&points[a])?)?
-                    .sign()?;
-                signs[position] = sign;
-                if sign.is_eq() {
-                    for axis in [true, false] {
-                        let coord = |p: &EnclosedPoint| if axis { p.x.copy() } else { p.y.copy() };
-                        coord(&points[c])?.sub(&coord(&points[a])?)?.sign()?;
-                        coord(&points[c])?.sub(&coord(&points[b])?)?.sign()?;
+                if position % 2 == 1 {
+                    if let (Some(a), Some(b)) = (signs[position - 1], signs[position]) {
+                        if a == b && !a.is_eq() {
+                            separated = true;
+                            break;
+                        }
                     }
                 }
             }
+            if separated {
+                continue;
+            }
+            let [Some(first_start), Some(first_end), Some(second_start), Some(second_end)] = signs
+            else {
+                return Err(OffsetError::AccuracyUnproven);
+            };
+            let signs = [first_start, first_end, second_start, second_end];
             if j == i + 1 {
                 continue;
             }
@@ -597,6 +627,9 @@ fn certify_arcs(
     options: OffsetOptions,
     work: &mut Work<'_>,
 ) -> Result<(), OffsetError> {
+    if arcs.is_empty() {
+        return Ok(());
+    }
     let radius =
         rational(options.distance.abs(), work)?.try_add(&rational(options.arc_tolerance, work)?)?;
     let square = Enclosure::exact(radius.try_mul(&radius)?)?;

@@ -286,10 +286,12 @@ fn exact_thresholds_cancellation_and_deadline() {
         deadline: Some(Instant::now()),
         ..RelateLimits::default()
     };
-    // Fonte: politica locale RelateLimits e 1c-a, cancellazione prima della deadline.
+    // Fonte: politica locale RelateLimits e 1c-a, deadline prima della cancellazione.
     assert!(matches!(
         union_with_limits(&a, &b, None, limits, Some(&cancelled)),
-        Err(LineBooleanError::Predicate(PredicateError::Cancelled))
+        Err(LineBooleanError::Predicate(
+            PredicateError::DeadlineExceeded
+        ))
     ));
     assert!(matches!(
         union_with_limits(&a, &b, None, limits, None),
@@ -791,4 +793,75 @@ fn noded_certificates_cannot_bypass_surface_or_path_verification() {
             Err(LineBooleanError::InvalidRoundedTopology)
         ));
     }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn directed_cycle_cannot_reverse_at_rounded_node() {
+    let mut work = Work::new(RelateLimits::default(), None);
+    let empty = Geometry::GeometryCollection(GeometryCollection::empty());
+    let originals = Originals::new(&empty, &empty, &mut work).unwrap();
+    let origin = P::of_in(
+        (1.323_832_764_833_162_5, 3.911_056_882_055_954_4).into(),
+        &work,
+    )
+    .unwrap();
+    let end = P::of_in(
+        (1.394_823_496_423_173_4, 3.745_411_841_679_262_6).into(),
+        &work,
+    )
+    .unwrap();
+    let other = P::of_in(
+        (1.433_645_683_662_385_9, 3.654_826_738_121_099_7).into(),
+        &work,
+    )
+    .unwrap();
+    let last = P::of_in(
+        (1.082_984_694_661_332_2, 4.473_035_712_456_892).into(),
+        &work,
+    )
+    .unwrap();
+    let direction = end.try_sub(&origin).unwrap();
+    let crossing = last.try_sub(&other).unwrap();
+    let parameter = other
+        .try_sub(&origin)
+        .unwrap()
+        .try_cross(&crossing)
+        .unwrap()
+        .try_div(&direction.try_cross(&crossing).unwrap())
+        .unwrap();
+    let node = P {
+        x: origin
+            .x
+            .try_add(&direction.x.try_mul(&parameter).unwrap())
+            .unwrap(),
+        y: origin
+            .y
+            .try_add(&direction.y.try_mul(&parameter).unwrap())
+            .unwrap(),
+    };
+    let vertices = [
+        P::of_in((0., 7.).into(), &work).unwrap(),
+        P::of_in((3., 0.).into(), &work).unwrap(),
+        node,
+    ];
+    let edges: Vec<_> = (0..3)
+        .map(|i| Edge {
+            a: vertices[i].try_clone().unwrap(),
+            b: vertices[(i + 1) % 3].try_clone().unwrap(),
+        })
+        .collect();
+    let mut certificates = Vec::new();
+    for edge in &edges {
+        let coords = [
+            coordinate(&edge.a, &mut work).unwrap(),
+            coordinate(&edge.b, &mut work).unwrap(),
+        ];
+        certificates.push(PublishedEdge::new(edge, coords, &mut work).unwrap());
+    }
+    // Fraction: il determinante esatto e quello pubblicato hanno segni opposti.
+    assert!(matches!(
+        verify_publication(&certificates, &originals, true, None, &mut work),
+        Err(LineBooleanError::InvalidRoundedTopology)
+    ));
 }

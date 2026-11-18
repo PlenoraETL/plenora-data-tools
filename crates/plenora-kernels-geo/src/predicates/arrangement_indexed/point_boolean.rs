@@ -52,7 +52,7 @@ const fn dimension(g: &Geometry<f64>) -> Result<u8, PointBooleanError> {
 ///
 /// Il risultato omogeneo e' sempre un contenitore multi. L'unione mista
 /// contiene `MultiPoint` e poi il multi superiore, senza componenti vuote.
-/// I siti sono unici e ordinati lessicograficamente XY, con zero positivo.
+/// I siti sono unici e ordinati lessicograficamente XY, con il segno degli zeri del primo vertice in ingresso.
 /// Le coordinate della componente superiore conservano l'ordine d'ingresso.
 /// Il vuoto generale e' `GeometryCollection` vuota; con filtro esplicito e'
 /// il multi vuoto della dimensione richiesta. Il filtro conserva componenti,
@@ -60,7 +60,7 @@ const fn dimension(g: &Geometry<f64>) -> Result<u8, PointBooleanError> {
 /// Linea/poligono meno punti conserva la componente superiore per chiusura
 /// dei residui (GOP-015). Sono supportati anche gli operandi vuoti tipizzati.
 /// Tutte le prenotazioni d'uscita sono contate fino al ritorno; nessun prefisso
-/// viene restituito dopo un errore. Cancellazione precede deadline.
+/// viene restituito dopo un errore. Deadline scaduta precede cancellazione.
 ///
 /// # Errors
 /// Tipi non supportati, filtro invalido, geometrie invalide/non finite,
@@ -178,12 +178,20 @@ fn execute(
         },
         work,
     )?;
+    let originals = super::line_boolean::Originals::new(left, right, work)?;
     let mut points = CountedVec::new();
     for id in ids {
         work.step()?;
         if points.last() != Some(&selected[id]) {
             work.nodes(1)?;
-            work.push(&mut points, selected[id])?;
+            let exact = point(selected[id].0, work)?;
+            let coordinate = originals
+                .coordinate(&exact, work)
+                .map_err(|error| match error {
+                    super::line_boolean::LineBooleanError::Predicate(error) => error,
+                    _ => PredicateError::CalcoloNonConcluso("provenienza puntuale"),
+                })?;
+            work.push(&mut points, Point(coordinate))?;
         }
     }
     let higher = ld.max(rd);

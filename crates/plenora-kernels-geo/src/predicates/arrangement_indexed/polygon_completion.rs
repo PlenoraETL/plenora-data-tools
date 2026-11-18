@@ -80,11 +80,7 @@ pub fn polygon_completion_with_limits(
     limits: RelateLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<Polygon<f64>>, PolygonCompletionError> {
-    execute(
-        polygons,
-        linework,
-        &mut Work::with_deadline_precedence(limits, cancelled),
-    )
+    execute(polygons, linework, &mut Work::new(limits, cancelled))
 }
 
 fn validate_polygons(
@@ -148,14 +144,18 @@ fn validate_lines(
     super::validate_structure(linework, "completion linework", work)?;
     let mut shape = Shape::default();
     let mut owners = CountedVec::new();
+    let mut lengths = CountedVec::new();
     for (part, line) in parts.iter().enumerate() {
-        for (segment, pair) in line.0.windows(2).enumerate() {
+        let mut segment = 0_usize;
+        for pair in line.0.windows(2) {
             work.step()?;
             if pair[0] == pair[1] {
-                return Err(PolygonCompletionError::UnsupportedLinework);
+                continue;
             }
             work.push(&mut owners, (part, segment))?;
+            segment += 1;
         }
+        work.push(&mut lengths, segment)?;
         shape.line(line, work)?;
     }
     let mut refs = CountedVec::new();
@@ -163,10 +163,9 @@ fn validate_lines(
         work.push(&mut refs, edge)?;
     }
     let mut unsupported = false;
-    let mut ambiguous = false;
     crate::noding::visit(&refs, work, |i, j, hits, _| {
         if hits[1].is_some() {
-            ambiguous = true;
+            unsupported = true;
         }
         if let Some(hit) = &hits[0] {
             let (pi, si) = owners[i];
@@ -175,11 +174,11 @@ fn validate_lines(
                 && (si.abs_diff(sj) == 1
                     || (parts[pi].0.first() == parts[pi].0.last()
                         && si.min(sj) == 0
-                        && si.max(sj) + 2 == parts[pi].0.len()));
+                        && si.max(sj) + 1 == lengths[pi]));
             let terminal = |part: usize, segment: usize, edge: &Edge| {
                 parts[part].0.first() != parts[part].0.last()
                     && ((segment == 0 && hit == &edge.a)
-                        || (segment + 2 == parts[part].0.len() && hit == &edge.b))
+                        || (segment + 1 == lengths[part] && hit == &edge.b))
             };
             if !(adjacent || pi != pj && terminal(pi, si, refs[i]) && terminal(pj, sj, refs[j])) {
                 unsupported = true;
@@ -187,9 +186,6 @@ fn validate_lines(
         }
         Ok(())
     })?;
-    if ambiguous {
-        return Err(PolygonCompletionError::AmbiguousProvenance);
-    }
     if unsupported {
         return Err(PolygonCompletionError::UnsupportedLinework);
     }
@@ -250,7 +246,9 @@ fn select(
 ) -> Result<CountedVec<OutputFace>, PolygonCompletionError> {
     for atom in &graph.atoms {
         work.step()?;
-        if atom.sources.len() != 1 {
+        if atom.sources.iter().any(|&id| roles_by_source[id].is_none())
+            && atom.sources.iter().any(|&id| roles_by_source[id].is_some())
+        {
             return Err(PolygonCompletionError::AmbiguousProvenance);
         }
     }
@@ -544,6 +542,7 @@ fn execute(
         let mut published = PublishedEdge::new(edge, coords, work)?;
         published.support = support.map(|id| sources[id]);
         published.surface = id < surface_count;
+        published.component = id < surface_count;
         work.push(&mut certificate, published)?;
     }
     canonicalize(&mut graph, &mut faces, &coords, work)?;
