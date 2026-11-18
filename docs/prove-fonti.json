@@ -1455,17 +1455,23 @@
       "nested_rings_holes_overlaps_and_dangles",
       "large_sparse_input_succeeds_without_pairs",
       "exact_limits_and_interruptions",
-      "invalid_and_unrepresentable_nodes_are_explicit",
-      "rounded_triangle_cannot_silently_become_collinear"
+      "invalid_coordinates_are_explicit",
+      "rounded_triangle_cannot_silently_become_collinear",
+      "gop015a_face_nodes_ties_and_subnormals",
+      "gop015a_nondyadic_faces_and_discarded_dangles"
     ],
     "crates/plenora-kernels-geo/src/extended_algorithms/split_limited/tests.rs": [
       "transverse_rational_endpoints_and_600",
       "vertices_overlap_reverse_and_points_match_600",
       "comb_and_large_sparse",
       "exact_thresholds_and_interruptions",
-      "explicit_invalid_and_precision_errors",
+      "explicit_invalid_coordinates",
       "repeated_vertices_do_not_create_degenerate_pieces",
-      "polygon_boundary_and_invalid_polygon"
+      "polygon_boundary_and_invalid_polygon",
+      "gop015a_nondyadic_nodes_have_half_ulp_certificate",
+      "gop015a_ties_subnormals_and_collapse",
+      "source_crossings_overlaps_and_original_bits_are_preserved",
+      "splitter_vertex_preserves_signed_zero"
     ],
     "crates/plenora-kernels-geo/src/extensions.rs": [
       "from_wkt_column_parses_preserves_nulls_and_decodes_back",
@@ -1708,7 +1714,9 @@
       "input_bits_and_rounding_collapse",
       "publication_rejects_manually_altered_graphs",
       "rounded_new_contact_and_unpublished_boundary_nodes",
-      "published_order_matches_generic_sort_and_signed_zero_mutation_fails"
+      "published_order_matches_generic_sort_and_signed_zero_mutation_fails",
+      "noded_publication_rejects_split_sites_and_mixed_certificates",
+      "editing_provenance_counts_empty_parts_and_nested_collections"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean/tests.rs": [
       "c1_sets_boundaries_holes_and_closure",

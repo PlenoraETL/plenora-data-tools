@@ -220,6 +220,8 @@ impl ErroreKernel for PredicateError {
             | Self::DeadlineExceeded => Classe::Limite,
             Self::Cancelled => Classe::Annullata,
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
+            // GOP-015A: l'arrotondamento al binary64 cambierebbe la topologia promessa.
+            Self::InvalidRoundedTopology => Classe::Precisione,
             Self::NonFiniteCoordinate { .. } | Self::InvalidGeometry { .. } => Classe::Piano,
         }
     }
