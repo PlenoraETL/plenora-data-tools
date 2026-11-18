@@ -371,3 +371,49 @@ sorgente vengono confezionati e verificati da `scripts/licenze_artefatto.py`;
 `python scripts/avvisi_crate.py` controlla offline i quattro grafi release.
 
 Geometrie multiple: [primaria, selettori ed esempi eseguiti](docs/geometrie-multiple.md).
+
+## CI locale derivata dai workflow
+
+Il piano esecutivo si legge con `python scripts/ci_locale.py --piano`;
+`python scripts/ci_locale.py --esegui --profilo pr` esegue i passi riproducibili
+sull'host e scrive `target/ci-locale/<corsa>/ricevuta.json`, script e log.
+Prima installare `python -m pip install -r requirements-ci-locale.txt` in un
+ambiente Python della versione dichiarata in `.python-version`.
+I self-test entrano nella discovery di `python scripts/esegui_guardie.py`.
+
+Il runner deriva job, matrici, needs, condizioni, variabili, shell, directory,
+servizi e comandi dai workflow, senza una seconda lista di gate. Tutti i job
+restano nel JSON, compresi quelli fuori profilo. I filtri di evento sono
+conservati: senza evento remoto PR rappresenta il sovrainsieme delle PR.
+`--piano --profilo qualifica` distingue i workflow senza trigger PR;
+`--piano --profilo release` distingue i workflow di rilascio. Qualifica e release
+sono soltanto consultabili: l'esecuzione locale supportata e' PR e non pubblica.
+La suite lunga resta quella dichiarata nel workflow, con il suo ambiente.
+
+La mappa dichiarativa `ACTION_MAP` verifica checkout e setup Python/Rust gia'
+installati, senza installare toolchain. Cache, upload e download di artefatti
+Actions sono rappresentati ma non riprodotti. Le action ignote, i job di altra
+piattaforma, i servizi/container non riprodotti, le dipendenze `needs` e le
+espressioni non supportate producono **NON ESEGUITO**, con motivo.
+Le composite locali e i workflow riusabili locali sono espansi nel piano.
+`--job` seleziona un ID o una chiave; gli altri job restano NON ESEGUITO.
+`--timeout` limita ogni processo; `--servizi-live` permette i comandi live ma
+non crea i servizi dichiarati. `--offline` rifiuta i passi che richiedono rete.
+
+I checkout aggiuntivi usano repository/ref/path del workflow, inclusi i pin
+contratti e gli output runtime. Per una sorgente locale impostare
+`CI_LOCALE_SORGENTE_PLENORA_CONTRACTS` (in generale il nome del repository
+maiuscolo con trattini sostituiti da underscore); altrimenti la modalita'
+online usa HTTPS. Il runner clona in una destinazione distinta, verifica lo
+SHA risolto e quello ottenuto, rifiuta destinazioni modificate o estranee e
+non resetta il worktree corrente. Il piano non prepara checkout ne' usa rete.
+
+La ricevuta schema 2 conserva SHA iniziale/finale, stato dirty, hash delle
+sorgenti, profilo, ambiente, servizi, toolchain richiesta, comando completo,
+exit code, durata e log per passo. Un PASS richiede un processo terminato con
+zero; un log che dichiara prove saltate resta NON ESEGUITO. Nessuna assenza
+rende verde la corsa: exit code 1 se ci sono FAIL, 2 se incompleta, 0 soltanto
+se tutti i job sono PASS. Anche cache e artefatti non riprodotti impediscono
+lo zero aggregato. Gli override registrati sono `CARGO_BUILD_JOBS=4` e
+`CARGO_INCREMENTAL=0`, oltre alle impostazioni di rete/pip. Le ricevute locali
+non sostituiscono la CI Linux e Windows richiesta prima del merge.
