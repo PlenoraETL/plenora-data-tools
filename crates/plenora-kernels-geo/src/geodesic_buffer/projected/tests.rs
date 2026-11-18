@@ -1,7 +1,7 @@
 use super::*;
 use crate::polygon_boolean::PolygonBooleanError;
 use crate::predicates::PredicateError;
-use geo::{CoordsIter, MultiLineString};
+use geo::{CoordsIter, MapCoords, MultiLineString};
 use plenora_core::crs::resolve_crs;
 
 #[deny(clippy::disallowed_methods)]
@@ -58,6 +58,7 @@ fn boundary_witness(point: Coord, geometry: &Geometry, ellipsoid: &EllissoideGeo
         _ => panic!("superficie richiesta"),
     };
     let mut best = f64::INFINITY;
+    let mut witness = point;
     for polygon in polygons {
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
             for pair in ring.0.windows(2) {
@@ -72,16 +73,23 @@ fn boundary_witness(point: Coord, geometry: &Geometry, ellipsoid: &EllissoideGeo
                 let lat = dy.mul_add(fraction, a.y);
                 let delta_lon = lon - point.x;
                 let delta_lat = lat - point.y;
-                // Il filtro scarta solo testimoni lontani; ogni accettazione
-                // richiede comunque una distanza Karney dal lato pubblicato.
-                if delta_lon.mul_add(delta_lon, delta_lat * delta_lat) < 1e-8 {
-                    let distance: f64 = ellipsoid.geodetica().inverse(point.y, point.x, lat, lon);
-                    best = best.min(distance);
+                // Qualunque punto del lato e' un testimone valido: la scelta
+                // in coordinate non presume che sia il minimo geodetico.
+                let squared = delta_lon.mul_add(delta_lon, delta_lat * delta_lat);
+                if squared < best {
+                    best = squared;
+                    witness = Coord { x: lon, y: lat };
                 }
             }
         }
     }
-    best
+    if best.is_finite() {
+        ellipsoid
+            .geodetica()
+            .inverse(point.y, point.x, witness.y, witness.x)
+    } else {
+        best
+    }
 }
 
 #[deny(clippy::disallowed_methods)]
@@ -90,12 +98,13 @@ fn dense_exact_boundary(
     latitude: f64,
     radius: f64,
     ellipsoid: &EllissoideGeodetico,
-) {
+) -> f64 {
     // C1: campo di Fermi e calotte terminali, docs/buffer-punto.md; Karney G1.
     // 2052 campioni del confine esatto confrontati con testimoni dell'output.
     let geodesic = ellipsoid.geodetica();
     let (length, azimuth, end_azimuth, _): (f64, f64, f64, f64) =
         geodesic.inverse(latitude, 9.0, latitude, 9.00001);
+    let mut measured = 0.0_f64;
     for i in 0..=512 {
         let fraction = f64::from(i) / 512.0;
         for (longitude, start) in [(9.0, azimuth + 90.0), (9.00001, end_azimuth - 90.0)] {
@@ -105,21 +114,20 @@ fn dense_exact_boundary(
                 180.0_f64.mul_add(fraction, start),
                 radius,
             );
-            assert!(
-                boundary_witness(Coord { x, y }, &surface.geometry, ellipsoid)
-                    <= surface.certificate.absolute_m
-            );
+            let error = boundary_witness(Coord { x, y }, &surface.geometry, ellipsoid);
+            measured = measured.max(error);
+            assert!(error <= surface.certificate.absolute_m);
         }
         let (lat, lon, tangent): (f64, f64, f64) =
             geodesic.direct(latitude, 9.0, azimuth, length * fraction);
         for side in [-90.0, 90.0] {
             let (y, x): (f64, f64) = geodesic.direct(lat, lon, tangent + side, radius);
-            assert!(
-                boundary_witness(Coord { x, y }, &surface.geometry, ellipsoid)
-                    <= surface.certificate.absolute_m
-            );
+            let error = boundary_witness(Coord { x, y }, &surface.geometry, ellipsoid);
+            measured = measured.max(error);
+            assert!(error <= surface.certificate.absolute_m);
         }
     }
+    measured
 }
 
 #[test]
@@ -173,16 +181,23 @@ fn equatorial_width_and_dense_boundary() {
 #[deny(clippy::disallowed_methods)]
 fn metric_matrix_and_typed_accuracy_rejections() {
     // C1: Karney G1, minimo della distanza lungo la geodetica sorgente.
-    // Le soglie grandi e 70 gradi sono fuori dal certificato TM di questa API.
+    // Tolleranze esplicite per il bound quadratico; 70 gradi fuori dominio TM.
     let crs = resolve_crs("EPSG:4326", "crs").unwrap();
     let ellipsoid = EllissoideGeodetico::da_crs(&crs).unwrap();
     for latitude in [0.0, 45.0, 70.0] {
         for radius in [100.0, 1000.0, 10000.0, 60000.0] {
+            let tolerance = if radius < 10000.0 {
+                0.01
+            } else if radius == 10000.0 {
+                10.0
+            } else {
+                2000.0
+            };
             let result = geodesic_line_buffer_with_limits(
                 &[segment(latitude)],
                 &crs,
                 &[radius],
-                0.01,
+                tolerance,
                 false,
                 limits(),
                 None,
@@ -192,13 +207,9 @@ fn metric_matrix_and_typed_accuracy_rejections() {
                     result,
                     Err(UnionBufferError::Disk(BufferFailure::UnsupportedSurface))
                 ));
-            } else if radius >= 10000.0 {
-                assert!(matches!(
-                    result,
-                    Err(UnionBufferError::Disk(BufferFailure::AccuracyUnproven))
-                ));
             } else {
                 let surface = result.unwrap().surfaces.remove(0);
+                let mut measured = 0.0_f64;
                 for point in surface.geometry.coords_iter() {
                     let distance = distance_to_segment(
                         point,
@@ -212,11 +223,15 @@ fn metric_matrix_and_typed_accuracy_rejections() {
                         },
                         &ellipsoid,
                     );
-                    assert!((distance - radius).abs() <= surface.certificate.absolute_m);
+                    let error = (distance - radius).abs();
+                    measured = measured.max(error);
+                    assert!(error <= surface.certificate.absolute_m);
                 }
-                assert!(surface.certificate.absolute_m <= 0.01);
+                assert!(surface.certificate.absolute_m <= tolerance);
                 assert!(surface.certificate.relative >= surface.certificate.absolute_m / radius);
-                dense_exact_boundary(&surface, latitude, radius, &ellipsoid);
+                measured =
+                    measured.max(dense_exact_boundary(&surface, latitude, radius, &ellipsoid));
+                eprintln!("matrix lat={latitude} radius={radius} measured={measured:e} certified={:e} measured/r={:e} certified/r={:e}", surface.certificate.absolute_m, measured / radius, surface.certificate.relative);
             }
         }
     }
@@ -367,8 +382,8 @@ fn local_scale_central_identity_and_domain_edges() {
     assert!(maximum - minimum < 1e-14);
     let a = ellipsoid.parametri().semi_major_axis_metre;
     for (x, y) in [
-        (a * 0.01, 0.0),
-        (-a * 0.01, 0.0),
+        (a * 0.03, 0.0),
+        (-a * 0.03, 0.0),
         (0.0, a * 0.9),
         (0.0, -a * 0.9),
     ] {
@@ -382,6 +397,19 @@ fn local_scale_central_identity_and_domain_edges() {
         certificate.certify(x, y, 9.0, latitude).unwrap();
         let distance: f64 = ellipsoid.geodetica().inverse(0.0, 9.0, latitude, 9.0);
         assert!((y.abs() - distance).abs() < 1e-6);
+        for offset in [-0.029, -0.02, 0.0, 0.02, 0.029] {
+            let x = a * offset;
+            let (low, high) = certificate
+                .local_metric_bounds((x - 1.0, y - 1.0), (x + 1.0, y + 1.0))
+                .unwrap();
+            let (lon, lat) = projection.inverse(x, y).unwrap();
+            certificate.certify(x, y, lon, lat).unwrap();
+            for (dx, dy) in [(1.0, 0.0), (0.0, 1.0)] {
+                let (end_lon, end_lat) = projection.inverse(x + dx, y + dy).unwrap();
+                let distance: f64 = ellipsoid.geodetica().inverse(lat, lon, end_lat, end_lon);
+                assert!(distance + 1e-6 >= low && distance - 1e-6 <= high);
+            }
+        }
     }
 }
 
@@ -408,5 +436,335 @@ fn equatorial_input_sampling_against_analytic_positions() {
             * local.ellipsoid.parametri().semi_major_axis_metre;
         assert!(error < 1e-6);
         assert_eq!(geographic.y, 0.0);
+    }
+}
+
+#[deny(clippy::disallowed_methods)]
+fn square_with_hole(latitude: f64) -> Polygon {
+    let ring = |width: f64| {
+        LineString::from(vec![
+            (9.0 - width, latitude - width),
+            (9.0 + width, latitude - width),
+            (9.0 + width, latitude + width),
+            (9.0 - width, latitude + width),
+            (9.0 - width, latitude - width),
+        ])
+    };
+    Polygon::new(ring(0.00001), vec![ring(0.000_003)])
+}
+
+#[deny(clippy::disallowed_methods)]
+fn distance_to_boundary(point: Coord, polygon: &Polygon, ellipsoid: &EllissoideGeodetico) -> f64 {
+    std::iter::once(polygon.exterior())
+        .chain(polygon.interiors())
+        .flat_map(|ring| ring.0.windows(2))
+        .map(|pair| distance_to_segment(point, pair[0], pair[1], ellipsoid))
+        .fold(f64::INFINITY, f64::min)
+}
+
+#[deny(clippy::disallowed_methods)]
+fn dense_surface_boundary(
+    surface: &ProjectedBufferSurface<'_>,
+    source: &Polygon,
+    radius: f64,
+    ellipsoid: &EllissoideGeodetico,
+) -> f64 {
+    use geo::Contains;
+    // C1: GOP-008, confine del vicinato metrico: campi di Fermi e cerchi
+    // ai vertici (Karney G1). Si tengono i campioni esposti all'unione.
+    let mut measured = 0.0_f64;
+    let mut accepted = 0;
+    let mut check = |point: Coord| {
+        if !source.contains(&geo::Point(point))
+            && (distance_to_boundary(point, source, ellipsoid) - radius).abs() < 1e-6
+        {
+            let error = boundary_witness(point, &surface.geometry, ellipsoid);
+            assert!(error <= surface.certificate.absolute_m);
+            measured = measured.max(error);
+            accepted += 1;
+        }
+    };
+    for ring in std::iter::once(source.exterior()).chain(source.interiors()) {
+        for pair in ring.0.windows(2) {
+            let a = pair[0];
+            let b = pair[1];
+            let (length, azimuth, _, _): (f64, f64, f64, f64) =
+                ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);
+            for i in 0..=128 {
+                let fraction = f64::from(i) / 128.0;
+                let (lat, lon, tangent): (f64, f64, f64) =
+                    ellipsoid
+                        .geodetica()
+                        .direct(a.y, a.x, azimuth, length * fraction);
+                for normal in [-90.0, 90.0] {
+                    let (y, x): (f64, f64) =
+                        ellipsoid
+                            .geodetica()
+                            .direct(lat, lon, tangent + normal, radius);
+                    check(Coord { x, y });
+                }
+                let (y, x): (f64, f64) =
+                    ellipsoid
+                        .geodetica()
+                        .direct(a.y, a.x, 360.0 * fraction, radius);
+                check(Coord { x, y });
+            }
+        }
+    }
+    assert!(accepted >= 500);
+    measured
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn surface_hole_zero_multipart_and_certified_collapse() {
+    // C1: GOP-008, operando a zero, dilatazione di guscio e buchi, vuoto tipizzato.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let ellipsoid = EllissoideGeodetico::da_crs(&crs).unwrap();
+    let polygon = square_with_hole(0.0);
+    let input = Geometry::Polygon(polygon.clone());
+    let multi = Geometry::MultiPolygon(MultiPolygon(vec![polygon.clone()]));
+    let result = geodesic_line_buffer_with_limits(
+        &[input.clone(), multi.clone()],
+        &crs,
+        &[0.0, -100.0],
+        0.1,
+        false,
+        limits(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.surfaces[0].geometry, input);
+    assert_eq!(result.surfaces[1].geometry, multi);
+    for surface in &result.surfaces[..2] {
+        assert!(surface.preserves_geodesic_operand);
+        assert_eq!(surface.certificate.absolute_m, 0.0);
+    }
+    for surface in &result.surfaces[2..] {
+        assert_eq!(surface.geometry, Geometry::Polygon(Polygon::empty()));
+        assert_eq!(surface.certificate.absolute_m, 0.0);
+    }
+    assert!(matches!(
+        geodesic_line_buffer_with_limits(
+            std::slice::from_ref(&input),
+            &crs,
+            &[-0.1],
+            0.1,
+            false,
+            limits(),
+            None
+        ),
+        Err(UnionBufferError::Disk(BufferFailure::AccuracyUnproven))
+    ));
+    let buffered =
+        geodesic_line_buffer_with_limits(&[input, multi], &crs, &[0.1], 0.1, true, limits(), None)
+            .unwrap();
+    let surface = &buffered.surfaces[0];
+    assert!(!surface.preserves_geodesic_operand);
+    let output = match &surface.geometry {
+        Geometry::Polygon(polygon) => std::slice::from_ref(polygon),
+        Geometry::MultiPolygon(polygons) => &polygons.0,
+        _ => panic!("superficie richiesta"),
+    };
+    assert_eq!(output.len(), 1);
+    assert_eq!(output[0].interiors().len(), 1);
+    for point in surface.geometry.coords_iter() {
+        assert!(
+            (distance_to_boundary(point, &polygon, &ellipsoid) - 0.1).abs()
+                <= surface.certificate.absolute_m
+        );
+    }
+    dense_surface_boundary(surface, &polygon, 0.1, &ellipsoid);
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn surface_metric_matrix() {
+    // C1: GOP-006/008, Karney G1; certificato contro vertici e confine esatto denso.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let ellipsoid = EllissoideGeodetico::da_crs(&crs).unwrap();
+    for latitude in [0.0, 45.0, 70.0] {
+        for (radius, tolerance) in [
+            (100.0, 0.1),
+            (1000.0, 1.0),
+            (10000.0, 10.0),
+            (60000.0, 2000.0),
+        ] {
+            let polygon = square_with_hole(latitude);
+            let result = geodesic_line_buffer_with_limits(
+                &[Geometry::Polygon(polygon.clone())],
+                &crs,
+                &[radius],
+                tolerance,
+                false,
+                limits(),
+                None,
+            );
+            if latitude == 70.0 {
+                assert!(matches!(
+                    result,
+                    Err(UnionBufferError::Disk(BufferFailure::UnsupportedSurface))
+                ));
+                continue;
+            }
+            let surface = result.unwrap().surfaces.remove(0);
+            let mut measured = 0.0_f64;
+            for point in surface.geometry.coords_iter() {
+                let error = (distance_to_boundary(point, &polygon, &ellipsoid) - radius).abs();
+                assert!(error <= surface.certificate.absolute_m);
+                measured = measured.max(error);
+            }
+            measured = measured.max(dense_surface_boundary(
+                &surface, &polygon, radius, &ellipsoid,
+            ));
+            eprintln!("surface lat={latitude} radius={radius} measured={measured:e} certified={:e} measured/r={:e} certified/r={:e}", surface.certificate.absolute_m, measured / radius, surface.certificate.relative);
+        }
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn surface_work_interruptions_and_explicit_limits() {
+    // C1: GOP-027/028, un unico contatore anche in validazione, copia e collasso.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let inputs = [Geometry::Polygon(square_with_hole(0.0))];
+    let baseline =
+        geodesic_line_buffer_with_limits(&inputs, &crs, &[0.0, -100.0], 0.1, false, limits(), None)
+            .unwrap();
+    let mut exact = limits();
+    exact.overlay.work.max_steps = baseline.work;
+    geodesic_line_buffer_with_limits(&inputs, &crs, &[0.0, -100.0], 0.1, false, exact, None)
+        .unwrap();
+    exact.overlay.work.max_steps -= 1;
+    assert!(matches!(
+        geodesic_line_buffer_with_limits(&inputs, &crs, &[0.0, -100.0], 0.1, false, exact, None),
+        Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+            PredicateError::WorkLimit
+        )))
+    ));
+    for at in [0, 30, baseline.work / 2, baseline.work - 2] {
+        for deadline in [false, true] {
+            let flag = AtomicBool::new(false);
+            let mut work = Work::new(limits().overlay.work, Some(&flag)).with_deadline_precedence();
+            work.interrupt_at = Some((at, deadline));
+            let result = execute(
+                &inputs,
+                &crs,
+                &[0.0, -100.0],
+                0.1,
+                false,
+                limits(),
+                &mut work,
+            );
+            if deadline {
+                assert!(matches!(
+                    result,
+                    Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+                        PredicateError::DeadlineExceeded
+                    )))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+                        PredicateError::Cancelled
+                    )))
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn surface_zero_union_and_domain_limits() {
+    // C1: GOP-008, identita', unione disgiunta, vuoti e rifiuti del dominio.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let inputs = [Geometry::Polygon(square_with_hole(0.0))];
+    let identical = geodesic_line_buffer_with_limits(
+        &[inputs[0].clone(), inputs[0].clone()],
+        &crs,
+        &[0.0],
+        0.1,
+        true,
+        limits(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(identical.surfaces[0].geometry, inputs[0]);
+    let second = square_with_hole(0.0).map_coords(|point| Coord {
+        x: point.x + 0.001,
+        y: point.y,
+    });
+    let disjoint = geodesic_line_buffer_with_limits(
+        &[inputs[0].clone(), Geometry::Polygon(second)],
+        &crs,
+        &[0.0],
+        0.1,
+        true,
+        limits(),
+        None,
+    )
+    .unwrap();
+    let Geometry::MultiPolygon(parts) = &disjoint.surfaces[0].geometry else {
+        panic!("multipoligono richiesto")
+    };
+    assert_eq!(parts.0.len(), 2);
+    assert!(matches!(
+        geodesic_line_buffer_with_limits(
+            &[segment(0.0)],
+            &crs,
+            &[-1.0],
+            0.1,
+            false,
+            limits(),
+            None
+        ),
+        Err(UnionBufferError::Disk(BufferFailure::InvalidRadius))
+    ));
+    assert!(matches!(
+        geodesic_line_buffer_with_limits(&inputs, &crs, &[10000.0], 0.01, false, limits(), None),
+        Err(UnionBufferError::Disk(BufferFailure::AccuracyUnproven))
+    ));
+    let empty = Geometry::MultiPolygon(MultiPolygon(Vec::new()));
+    let result = geodesic_line_buffer_with_limits(
+        &[empty],
+        &crs,
+        &[0.0, -1.0, 1.0],
+        0.1,
+        false,
+        limits(),
+        None,
+    )
+    .unwrap();
+    for surface in result.surfaces {
+        assert_eq!(surface.geometry, Geometry::Polygon(Polygon::empty()));
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn surface_rejects_orphan_and_empty_holes() {
+    // C1: GOP-002/005, un buco non puo' sostituire il guscio vuoto.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let ring = square_with_hole(0.0).exterior().clone();
+    for polygon in [
+        Polygon::new(LineString::new(Vec::new()), vec![ring.clone()]),
+        Polygon::new(ring, vec![LineString::new(Vec::new())]),
+    ] {
+        for radius in [0.0, 1.0, -100.0] {
+            assert!(matches!(
+                geodesic_line_buffer_with_limits(
+                    &[Geometry::Polygon(polygon.clone())],
+                    &crs,
+                    &[radius],
+                    0.1,
+                    false,
+                    limits(),
+                    None
+                ),
+                Err(UnionBufferError::Disk(BufferFailure::InvalidGeometry))
+            ));
+        }
     }
 }

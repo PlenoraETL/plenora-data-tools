@@ -236,7 +236,7 @@ impl TransverseCertificate {
         let first = self.target(lower.0, lower.1)?;
         let last = self.target(upper.0, upper.1)?;
         let horizontal = first.imag.max_abs().max(last.imag.max_abs());
-        if first.real.max_abs().max(last.real.max_abs()) >= 0.9 || horizontal >= 0.01 {
+        if first.real.max_abs().max(last.real.max_abs()) >= 0.9 || horizontal >= 0.03 {
             return Err(ShapeMeasureError::AccuracyUnproven);
         }
         let deviation = ((64.0 * horizontal).next_up() * horizontal).next_up();
