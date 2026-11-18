@@ -115,6 +115,14 @@ pub fn trim_extend_with_limits(
 }
 
 fn read(input: &Geometry<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>, TrimExtendError> {
+    read_path(input, false, work)
+}
+
+pub(crate) fn read_path(
+    input: &Geometry<f64>,
+    allow_closed: bool,
+    work: &mut Work<'_>,
+) -> Result<CountedVec<P>, TrimExtendError> {
     let Geometry::LineString(line) = input else {
         return Err(TrimExtendError::Unsupported);
     };
@@ -129,11 +137,14 @@ fn read(input: &Geometry<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>, Tri
         }
         work.push(&mut points, P::of_in(*coord, work)?)?;
     }
-    simple(&points, work)?;
+    simple_path(&points, allow_closed, work)?;
     Ok(points)
 }
 
-fn edges(points: &[P], work: &mut Work<'_>) -> Result<CountedVec<Edge>, TrimExtendError> {
+pub(crate) fn edges(
+    points: &[P],
+    work: &mut Work<'_>,
+) -> Result<CountedVec<Edge>, TrimExtendError> {
     let mut result = CountedVec::new();
     for pair in points.windows(2) {
         work.nodes(2)?;
@@ -151,9 +162,18 @@ fn edges(points: &[P], work: &mut Work<'_>) -> Result<CountedVec<Edge>, TrimExte
     Ok(result)
 }
 
-fn simple(points: &[P], work: &mut Work<'_>) -> Result<(), TrimExtendError> {
+pub(crate) fn simple(points: &[P], work: &mut Work<'_>) -> Result<(), TrimExtendError> {
+    simple_path(points, false, work)
+}
+
+fn simple_path(
+    points: &[P],
+    allow_closed: bool,
+    work: &mut Work<'_>,
+) -> Result<(), TrimExtendError> {
     work.step()?;
-    if points.len() < 2 || points.first() == points.last() {
+    let closed = points.first() == points.last();
+    if points.len() < 2 || (closed && !allow_closed) {
         return Err(TrimExtendError::Unsupported);
     }
     let edges = edges(points, work)?;
@@ -162,15 +182,17 @@ fn simple(points: &[P], work: &mut Work<'_>) -> Result<(), TrimExtendError> {
         work.push(&mut refs, edge)?;
     }
     let mut invalid = false;
-    crate::noding::visit(&refs, work, |i, j, hits, _| {
-        if hits[1].is_some() || (hits[0].is_some() && i.abs_diff(j) != 1) {
+    let scan = crate::noding::visit(&refs, work, |i, j, hits, _| {
+        let adjacent = i.abs_diff(j) == 1 || (closed && i.abs_diff(j) == edges.len() - 1);
+        if hits[1].is_some() || (hits[0].is_some() && !adjacent) {
             invalid = true;
         }
         Ok(())
-    })?;
+    });
     if invalid {
         return Err(TrimExtendError::Unsupported);
     }
+    scan?;
     Ok(())
 }
 
@@ -237,7 +259,7 @@ fn cuts(points: &[P], sides: &[Q], work: &mut Work<'_>) -> Result<Option<Cut>, T
     Ok(cut)
 }
 
-fn append(
+pub(crate) fn append(
     output: &mut CountedVec<P>,
     point: &P,
     work: &mut Work<'_>,
@@ -350,7 +372,16 @@ fn publish(
     work: &mut Work<'_>,
 ) -> Result<LineString<f64>, TrimExtendError> {
     let empty = Geometry::LineString(LineString(Vec::new()));
-    let originals = Originals::new(target, &empty, work)?;
+    publish_paths(points, target, &empty, work)
+}
+
+pub(crate) fn publish_paths(
+    points: &[P],
+    target: &Geometry<f64>,
+    reshaper: &Geometry<f64>,
+    work: &mut Work<'_>,
+) -> Result<LineString<f64>, TrimExtendError> {
+    let originals = Originals::new(target, reshaper, work)?;
     let mut coords = CountedVec::new();
     for point in points {
         work.nodes(1)?;

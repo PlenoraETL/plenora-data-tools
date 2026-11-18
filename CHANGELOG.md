@@ -14,6 +14,9 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API Rust `reshape::reshape_with_limits` per GOP-019 planare XY: due
+  incroci trasversali interni, sostituzione orientata esatta, pubblicazione
+  GOP-015A condivisa e limiti cumulativi. Dettagli in `docs/reshape.md`.
 - API Rust `trim_extend::trim_extend_with_limits` per editing planare GOP-018:
   taglio sinistro con guida infinita, raggi terminali selezionabili e modi
   add/move. Costruzioni razionali, pubblicazione e verifica GOP-015A condivise;

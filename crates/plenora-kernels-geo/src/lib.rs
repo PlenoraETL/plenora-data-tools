@@ -46,6 +46,7 @@ pub mod offset;
 pub mod operations;
 pub mod predicates;
 pub use predicates::arrangement_indexed::{line_boolean, point_boolean};
+pub mod reshape;
 pub mod riproiezione;
 pub mod rust_backend;
 pub mod spatial_join;

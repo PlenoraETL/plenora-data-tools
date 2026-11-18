@@ -8339,6 +8339,18 @@
       "classification": "non riceve dati esterni",
       "reason": "Costruzione geometrica o aritmetica interna su valori Rust, senza buffer o celle Arrow.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/reshape.rs::from": {
+      "signature": "fn from(error: TrimExtendError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Costruzione geometrica esatta su valori Rust XY, senza buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/reshape.rs::reshape_with_limits": {
+      "signature": "pub fn reshape_with_limits( target: &Geometry<f64>, reshaper: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<LineString<f64>, ReshapeError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Costruzione geometrica esatta su valori Rust XY, senza buffer o celle Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {

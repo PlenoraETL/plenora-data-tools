@@ -665,7 +665,7 @@ pub(crate) fn verify_publication(
         return Ok(());
     }
     let mut invalid = false;
-    crate::noding::visit(&refs, work, |i, j, hits, work| {
+    let scan = crate::noding::visit(&refs, work, |i, j, hits, work| {
         let (a, b) = (&edges[i], &edges[j]);
         for hit in hits.into_iter().flatten() {
             work.step()?;
@@ -694,13 +694,13 @@ pub(crate) fn verify_publication(
             }
         }
         Ok(())
-    })?;
-    work.step()?;
+    });
     if invalid {
-        Err(LineBooleanError::InvalidRoundedTopology)
-    } else {
-        Ok(())
+        return Err(LineBooleanError::InvalidRoundedTopology);
     }
+    scan?;
+    work.step()?;
+    Ok(())
 }
 
 // Il percorso puo' contenere incroci: conserva i segni delle quattro
