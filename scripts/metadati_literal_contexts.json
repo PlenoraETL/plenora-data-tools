@@ -2387,5 +2387,13 @@
     "[[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
     "[[\"token\",\"input\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
     "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_surface/fixtures.rs": [
+    "[[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"match\"],[\"token\",\"value\"],[\"token\",\"[\"],[\"string\",\"kind\"],[\"token\",\"]\"],[\"token\",\".\"],[\"token\",\"as_str\"],[\"token\",\"(\"],[\"token\",\")\"]]",
+    "[[\"token\",\".\"],[\"token\",\"into\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"line\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"parts\"],[\"token\",\"[\"],[\"token\",\"0\"]]",
+    "[[\"token\",\".\"],[\"token\",\"into\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"multi_polygon\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"MultiPolygon\"],[\"token\",\":\"],[\"token\",\":\"]]",
+    "[[\"token\",\".\"],[\"token\",\"into\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"polygon\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"Polygon\"],[\"token\",\":\"],[\"token\",\":\"]]",
+    "[[\"token\",\".\"],[\"token\",\"unwrap\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\"{\"],[\"string\",\"point\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"Point\"],[\"token\",\"(\"],[\"token\",\"parts\"]]",
+    "[[\"token\",\"LineString\"],[\"token\",\">\"],[\"token\",\"=\"],[\"token\",\"value\"],[\"token\",\"[\"],[\"string\",\"parts\"],[\"token\",\"]\"],[\"token\",\".\"],[\"token\",\"as_array\"],[\"token\",\"(\"],[\"token\",\")\"]]"
   ]
 }

@@ -1543,7 +1543,10 @@
       "exact_seam_identity_and_numeric_length_threshold"
     ],
     "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs": [
-      "exact_live_memory_and_cumulative_validation_work"
+      "exact_live_memory_and_cumulative_validation_work",
+      "independent_surface_fixtures_after_densify",
+      "small_holes_and_components_near_boundary",
+      "repeated_vertices_and_ill_conditioned_long_edge"
     ],
     "crates/plenora-kernels-geo/src/geodesic_distance/tests.rs": [
       "internal_equator_and_meridian_minima",
@@ -1565,6 +1568,9 @@
       "surface_tree_prunes_large_ring",
       "conjugate_path_guard_preserves_point_distance",
       "direct_failure_is_accuracy_and_tiny_area_is_explicit"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_surface.rs": [
+      "ring_classification_has_one_implementation"
     ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
