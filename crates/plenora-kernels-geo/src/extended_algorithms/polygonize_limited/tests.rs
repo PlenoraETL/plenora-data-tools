@@ -1,0 +1,270 @@
+//! C1: formule analitiche e snapshot del tag v6.0.0.
+use super::*;
+use geo::{Area, MultiLineString};
+
+fn line(points: &[(f64, f64)]) -> LineString<f64> {
+    LineString::from(points.to_vec())
+}
+fn square(lo: f64, hi: f64) -> LineString<f64> {
+    line(&[(lo, lo), (hi, lo), (hi, hi), (lo, hi), (lo, lo)])
+}
+fn input(lines: Vec<LineString<f64>>) -> Geometry<f64> {
+    Geometry::MultiLineString(MultiLineString(lines))
+}
+fn run(g: &Geometry<f64>) -> Vec<Polygon<f64>> {
+    polygonize_with_limits(g, RelateLimits::default(), None).expect("C1")
+}
+
+fn ring_key(line: &LineString<f64>) -> Vec<(u64, u64)> {
+    let mut coords = line.0[..line.0.len() - 1].to_vec();
+    // Normalizzazione geometrica: un vertice collineare non cambia il poligono.
+    loop {
+        let redundant = (0..coords.len()).find(|&i| {
+            let a = coords[(i + coords.len() - 1) % coords.len()];
+            let b = coords[i];
+            let c = coords[(i + 1) % coords.len()];
+            (b.x - a.x) * (c.y - b.y) == (b.y - a.y) * (c.x - b.x)
+        });
+        if let Some(i) = redundant {
+            coords.remove(i);
+        } else {
+            break;
+        }
+    }
+    let keys: Vec<_> = coords
+        .iter()
+        .map(|p| (p.x.to_bits(), p.y.to_bits()))
+        .collect();
+    (0..keys.len())
+        .flat_map(|start| {
+            let forward: Vec<_> = (0..keys.len())
+                .map(|i| keys[(start + i) % keys.len()])
+                .collect();
+            let backward: Vec<_> = (0..keys.len())
+                .map(|i| keys[(start + keys.len() - i) % keys.len()])
+                .collect();
+            [forward, backward]
+        })
+        .min()
+        .expect("anello")
+}
+fn polygon_keys(polygons: &[Polygon<f64>]) -> Vec<Vec<Vec<(u64, u64)>>> {
+    let mut keys: Vec<_> = polygons
+        .iter()
+        .map(|p| {
+            let mut holes: Vec<_> = p.interiors().iter().map(ring_key).collect();
+            holes.sort();
+            let mut rings = vec![ring_key(p.exterior())];
+            rings.extend(holes);
+            rings
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+fn baseline(g: &Geometry<f64>, result: &[Polygon<f64>]) {
+    use crate::rust_backend::polygonize::{baseline_600, PolygonizeLimits, PolygonizeOptions};
+    // Fonte: snapshot v6.0.0, blob 768a11b454fc839fd964aa313aaba5729976ff09.
+    let old = baseline_600::polygonize_linework_rust(
+        g,
+        PolygonizeOptions {
+            node_input: true,
+            require_complete: false,
+            limits: PolygonizeLimits::unlimited(),
+            precision: 0.01,
+        },
+    )
+    .expect("baseline 6.0.0");
+    assert_eq!(polygon_keys(result), polygon_keys(&old.polygons));
+}
+
+#[test]
+fn rectangular_grids_have_exact_faces() {
+    for (n, m) in [(2, 2), (3, 5), (5, 4)] {
+        let mut lines = Vec::new();
+        for y in 0..n {
+            lines.push(line(&[
+                (0., 2. * f64::from(y)),
+                (3. * f64::from(m - 1), 2. * f64::from(y)),
+            ]));
+        }
+        for x in 0..m {
+            lines.push(line(&[
+                (3. * f64::from(x), 0.),
+                (3. * f64::from(x), 2. * f64::from(n - 1)),
+            ]));
+        }
+        let g = input(lines);
+        let result = run(&g);
+        // Fonte: partizione cartesiana, (n-1)(m-1) rettangoli 3x2.
+        assert_eq!(
+            result.len(),
+            usize::try_from((n - 1) * (m - 1)).expect("conteggio")
+        );
+        assert!(result
+            .iter()
+            .all(|p| p.unsigned_area() == 6. && p.interiors().is_empty()));
+        baseline(&g, &result);
+    }
+}
+#[test]
+fn nested_rings_holes_overlaps_and_dangles() {
+    let g = input(vec![square(0., 10.), square(2., 8.), square(4., 6.)]);
+    let result = run(&g);
+    let mut areas: Vec<_> = result.iter().map(Area::unsigned_area).collect();
+    areas.sort_by(f64::total_cmp);
+    // Fonte: quadrati concentrici: 100-36, 36-4, 4; due buchi.
+    assert_eq!(areas, [4., 32., 64.]);
+    assert_eq!(result.iter().map(|p| p.interiors().len()).sum::<usize>(), 2);
+    baseline(&g, &result);
+    let g = input(vec![
+        square(0., 4.),
+        line(&[(1., 0.), (3., 0.)]),
+        line(&[(2., 0.), (2., 2.)]),
+        line(&[(4., 4.), (6., 6.)]),
+    ]);
+    let result = run(&g);
+    // Fonte: unione dei lati coincidenti, due alberi attaccati non separano
+    // il piano (Eulero); resta il quadrato di area 16, senza buchi.
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].unsigned_area(), 16.);
+    assert!(result[0].interiors().is_empty());
+    baseline(&g, &result);
+    let g = input(vec![
+        square(0., 10.),
+        square(2., 8.),
+        line(&[(0., 0.), (2., 2.)]),
+    ]);
+    // Fonte: un ponte tra anelli non separa la corona: aree 64 e 36.
+    let result = run(&g);
+    assert_eq!(result.len(), 2);
+    baseline(&g, &result);
+}
+#[test]
+fn large_sparse_input_succeeds_without_pairs() {
+    let g = input(
+        (0..4096)
+            .map(|i| {
+                let x = 3. * f64::from(i);
+                line(&[(x, 0.), (x + 1., 1.)])
+            })
+            .collect(),
+    );
+    // Fonte: 4096 segmenti con inviluppi X disgiunti, zero coppie e cicli.
+    assert!(polygonize_with_limits(
+        &g,
+        RelateLimits {
+            max_segment_pairs: 0,
+            ..RelateLimits::default()
+        },
+        None
+    )
+    .expect("sparso")
+    .is_empty());
+}
+#[test]
+fn exact_limits_and_interruptions() {
+    let g = input(vec![square(0., 2.)]);
+    let mut work = Work::new(RelateLimits::default(), None);
+    let expected = polygonize(&g, &mut work).expect("misura");
+    // Fonte: 8 estremi + 8 copie noder + 8 incidenze; verifica f64:
+    // 4 vertici + 8 incidenze. Quattro coppie per ciascuno dei due sweep.
+    assert_eq!((work.pairs, work.nodes), (8, 36));
+    // Fonte contabile: checkpoint e picco ricevute del percorso completo.
+    let exact = RelateLimits {
+        max_segment_pairs: work.pairs,
+        max_nodes: work.nodes,
+        max_steps: work.steps,
+        max_reserved_bytes: work.peak_bytes(),
+        deadline: None,
+    };
+    assert_eq!(
+        polygonize_with_limits(&g, exact, None).expect("soglia"),
+        expected
+    );
+    for limits in [
+        RelateLimits {
+            max_segment_pairs: exact.max_segment_pairs - 1,
+            ..exact
+        },
+        RelateLimits {
+            max_nodes: exact.max_nodes - 1,
+            ..exact
+        },
+        RelateLimits {
+            max_steps: exact.max_steps - 1,
+            ..exact
+        },
+    ] {
+        // Fonte: contratto inclusivo RelateLimits, consumo meno una unita'.
+        assert!(matches!(
+            polygonize_with_limits(&g, limits, None),
+            Err(PredicateError::WorkLimit)
+        ));
+    }
+    assert!(matches!(
+        polygonize_with_limits(
+            &g,
+            RelateLimits {
+                max_reserved_bytes: exact.max_reserved_bytes - 1,
+                ..exact
+            },
+            None
+        ),
+        Err(PredicateError::ReservationLimit)
+    ));
+    let expired = RelateLimits {
+        deadline: Some(std::time::Instant::now()),
+        ..RelateLimits::default()
+    };
+    let flag = std::sync::atomic::AtomicBool::new(true);
+    // Fonte: Work::step, cancellazione prima di deadline, anche su vuoto.
+    let empty = input(vec![]);
+    assert!(matches!(
+        polygonize_with_limits(&empty, expired, Some(&flag)),
+        Err(PredicateError::Cancelled)
+    ));
+    assert!(matches!(
+        polygonize_with_limits(&empty, expired, None),
+        Err(PredicateError::DeadlineExceeded)
+    ));
+}
+#[test]
+fn invalid_and_unrepresentable_nodes_are_explicit() {
+    // Fonte: contratto finitezza dell'ingresso.
+    assert!(matches!(
+        polygonize_with_limits(
+            &input(vec![line(&[(0., 0.), (f64::NAN, 1.)])]),
+            RelateLimits::default(),
+            None
+        ),
+        Err(PredicateError::NonFiniteCoordinate { .. })
+    ));
+    // Fonte: 2^50 + 1/10, ulp=1/4: errore minimo 10 cm > 1 cm.
+    let x = 2_f64.powi(50);
+    let g = input(vec![
+        line(&[(x, 0.), (x + 1., 0.)]),
+        line(&[(x, -1.), (x + 1., 9.)]),
+    ]);
+    assert!(matches!(
+        polygonize_with_limits(&g, RelateLimits::default(), None),
+        Err(PredicateError::CalcoloNonConcluso(_))
+    ));
+}
+
+#[test]
+fn rounded_triangle_cannot_silently_become_collinear() {
+    // Fonte: equazioni y=x-X e y=1-(1.999/2)*(x-X+1).
+    // Apice x=X+circa 0.00025006, ULP(X)=0.0078125: arrotonda X.
+    // Tre vertici distinti diventano collineari, entro 1 cm ma non validi.
+    let x = 2_f64.powi(45);
+    let g = input(vec![
+        line(&[(x, -2.), (x, 2.)]),
+        line(&[(x - 1., -1.), (x + 1., 1.)]),
+        line(&[(x - 1., 1.), (x + 1., -0.999)]),
+    ]);
+    assert!(matches!(
+        polygonize_with_limits(&g, RelateLimits::default(), None),
+        Err(PredicateError::CalcoloNonConcluso(_))
+    ));
+}
