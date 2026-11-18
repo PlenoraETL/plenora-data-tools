@@ -8009,6 +8009,12 @@
       "classification": "non riceve dati esterni",
       "reason": "Copia letterale delle API predicati pubblicate nella 6.0.0, usata come riferimento: nessun dato Arrow ricevuto.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_densify.rs::geodesic_densify_with_limits": {
+      "signature": "pub fn geodesic_densify_with_limits( parts: &[LineString<f64>], crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geodetica su parti lineari Rust e CRS risolto; nessun dato Arrow ricevuto.",
+      "arrow_arguments": []
     }
   },
   "python": {
