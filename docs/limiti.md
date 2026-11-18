@@ -356,6 +356,17 @@ prodotto. Per l'assenza del controllo a posteriori, vedi l'hazard
 
 ## Misure geodetiche: l'ellissoide del datum
 
+Le API Rust additive di [misura a forma conservata](misure-forma-conservata.md)
+seguono la retta nello SR originale. Certificano CRS geografici integrati ed
+EPSG:3857, Mercator A (EPSG:3395), TM EPSG 9807, LCC EPSG 9802, LAEA EPSG 9820, Oblique Stereographic EPSG 9809 e il caso svizzero Hotine B
+EPSG 9815 (angoli 90 gradi, EPSG:2056) nel
+[dominio qualificato](maggioranti-forma.md). Fuori dai profili qualificati
+o se il residuo non prova la precisione, queste inverse restituiscono
+`AccuracyUnproven`; il dominio CRS ordinario resta applicabile.
+La guida dichiara separatamente bound di lunghezza e area, dominio delle
+superfici, antimeridiano, budget e interruzione. Le misure geodetiche qui
+descritte mantengono la loro semantica.
+
 **Regola.** `geo.geodesic_distance`, `geo.geodesic_line_length`,
 `geo.geodesic_area` e `geo.bearing` risolvono il problema geodetico
 (Karney 2013, `geographiclib-rs`) sull'**ellissoide del datum del CRS

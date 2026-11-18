@@ -45,6 +45,7 @@ pub mod margine;
 pub mod memory_estimate;
 pub mod operations;
 pub mod predicates;
+pub mod preserve_shape_measure;
 pub mod riproiezione;
 pub mod rust_backend;
 pub mod spatial_join;

@@ -88,6 +88,55 @@ pub(in crate::crs) fn riduci_gradi(lon: f64) -> f64 {
 }
 
 impl Proiezione {
+    /// Tabella esaustiva delle inverse: nessun ramo implicito per nuovi metodi.
+    pub(super) fn shape_certificate(&self) -> super::InverseShapeCertificate {
+        use super::forma::{InverseShapeCertificate, SeparableShapeBounds};
+        match self {
+            Self::Geografico => InverseShapeCertificate::Separable(SeparableShapeBounds {
+                method: 0,
+                angular_scale: std::f64::consts::PI / 180.0,
+                longitude_offset: 0.0,
+                projected_divisor: 1.0,
+                false_northing: 0.0,
+                latitude_first: 1.0,
+                latitude_second: 0.0,
+            }),
+            Self::PseudoMercatore(p) => InverseShapeCertificate::Separable(SeparableShapeBounds {
+                method: 1024,
+                angular_scale: 1.0 / p.a,
+                longitude_offset: p.lon0 - p.falsa_est / p.a,
+                projected_divisor: p.a,
+                false_northing: p.falsa_nord,
+                latitude_first: 1.0,
+                latitude_second: 1.0,
+            }),
+            Self::Mercatore(p) => {
+                let e2 = p.e * p.e;
+                let denominator = 1.0 - e2;
+                // Snyder 1987, eq. 7-7: F=cos(phi)(1-e2 sin(phi)^2)/(1-e2).
+                // |F|<=1/(1-e2), |F'F|<=(1+2e2)/(1-e2)^2.
+                InverseShapeCertificate::Separable(SeparableShapeBounds {
+                    method: 9804,
+                    angular_scale: 1.0 / (p.a * p.k0),
+                    longitude_offset: p.lon0 - p.falsa_est / (p.a * p.k0),
+                    projected_divisor: p.a * p.k0,
+                    false_northing: p.falsa_nord,
+                    latitude_first: ((1.0 + 16.0 * f64::EPSILON) / denominator).next_up(),
+                    latitude_second: ((1.0 + 16.0 * f64::EPSILON) * (1.0 + 2.0 * e2)
+                        / denominator.powi(2))
+                    .next_up(),
+                })
+            }
+            Self::Tm(p) => InverseShapeCertificate::TransverseMercator(p.shape_parameters),
+            Self::Lcc(p) => InverseShapeCertificate::LambertConicConformal(p.shape_parameters),
+            Self::Laea(p) => InverseShapeCertificate::LambertAzimuthalEqualArea(p.shape_parameters),
+            Self::Stereo(p) => InverseShapeCertificate::ObliqueStereographic(p.shape_parameters),
+            Self::Svizzera(p) => {
+                InverseShapeCertificate::HotineObliqueMercatorB(p.shape_parameters)
+            }
+        }
+    }
+
     pub(in crate::crs) fn nuova(
         metodo: &MetodoProiezione,
         ellissoide: Ellipsoid,
@@ -232,6 +281,7 @@ impl Proiezione {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Tm {
+    shape_parameters: super::TransverseShapeBounds,
     e: f64,
     lon0: f64,
     /// `k0 * A`, il raggio rettificante scalato.
@@ -288,6 +338,14 @@ impl Tm {
             20_648_693.0 * n6 / 638_668_800.0,
         ];
         let mut tm = Self {
+            shape_parameters: super::TransverseShapeBounds {
+                semi_major_axis: a,
+                central_scale: k0,
+                latitude_origin: lat0,
+                longitude_origin: lon0,
+                false_easting: falsa_est,
+                false_northing: falsa_nord,
+            },
             e,
             lon0: lon0.to_radians(),
             k0a: k0 * raggio,
@@ -426,6 +484,7 @@ impl PseudoMercatore {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Lcc {
+    shape_parameters: super::LambertShapeBounds,
     e: f64,
     lon_origine: f64,
     n: f64,
@@ -463,6 +522,14 @@ impl Lcc {
         let rf = af * (-n * isometrica(lat_origine.to_radians(), e)).exp();
         Ok(Self {
             e,
+            shape_parameters: super::LambertShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat_origine,
+                longitude_origin: lon_origine,
+                standard_parallels: [lat1, lat2],
+                false_easting: est_origine,
+                false_northing: nord_origine,
+            },
             lon_origine: lon_origine.to_radians(),
             n,
             af,
@@ -510,6 +577,7 @@ impl Lcc {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Laea {
+    shape_parameters: super::AzimuthalShapeBounds,
     e: f64,
     lon0: f64,
     qp: f64,
@@ -543,6 +611,13 @@ impl Laea {
             qp,
             rq,
             d,
+            shape_parameters: super::AzimuthalShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat0,
+                longitude_origin: lon0,
+                false_easting: falsa_est,
+                false_northing: falsa_nord,
+            },
             seno_beta0: beta0.sin(),
             coseno_beta0: beta0.cos(),
             falsa_est,
@@ -603,6 +678,7 @@ impl Laea {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Stereo {
+    shape_parameters: super::StereographicShapeBounds,
     e: f64,
     lon0: f64,
     n: f64,
@@ -644,6 +720,14 @@ impl Stereo {
             lon0: lon0.to_radians(),
             n,
             mezzo_ln_c,
+            shape_parameters: super::StereographicShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat0,
+                longitude_origin: lon0,
+                central_scale: k0,
+                false_easting: falsa_est,
+                false_northing: falsa_nord,
+            },
             seno_chi0: chi0.sin(),
             coseno_chi0: chi0.cos(),
             due_rk: 2.0 * raggio * k0,
@@ -709,6 +793,7 @@ impl Stereo {
 /// Hotine B si rifiuta (nessuna nella tabella).
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Svizzera {
+    shape_parameters: super::HotineShapeBounds,
     e: f64,
     lon0: f64,
     /// `alpha` della sfera di Gauss (`c` in PROJ).
@@ -747,6 +832,14 @@ impl Svizzera {
         let esp = e * phi0.sin();
         let kr = a * k_centro * (1.0 - e2).sqrt() / (1.0 - esp * esp);
         Ok(Self {
+            shape_parameters: super::HotineShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat_centro,
+                longitude_origin: lon_centro,
+                central_scale: k_centro,
+                false_easting: est_centro,
+                false_northing: nord_centro,
+            },
             e,
             lon0: lon_centro.to_radians(),
             c,
