@@ -8015,6 +8015,24 @@
       "classification": "non riceve dati esterni",
       "reason": "Primitiva geodetica su parti lineari Rust e CRS risolto; nessun dato Arrow ricevuto.",
       "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione.rs::inverse_shape_certificate": {
+      "signature": "pub fn inverse_shape_certificate(&self) -> InverseShapeCertificate",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/preserve_shape_measure.rs::preserve_shape_area_with_limits": {
+      "signature": "pub fn preserve_shape_area_with_limits( polygons: &[Polygon<f64>], crs: &ResolvedCrs, tolerance: ShapeTolerance, limits: ShapeMeasureLimits, cancelled: Option<&AtomicBool>, ) -> Result<ShapeMeasure, ShapeMeasureError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/preserve_shape_measure.rs::preserve_shape_length_with_limits": {
+      "signature": "pub fn preserve_shape_length_with_limits( parts: &[LineString<f64>], crs: &ResolvedCrs, tolerance: ShapeTolerance, limits: ShapeMeasureLimits, cancelled: Option<&AtomicBool>, ) -> Result<ShapeMeasure, ShapeMeasureError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
     }
   },
   "python": {
