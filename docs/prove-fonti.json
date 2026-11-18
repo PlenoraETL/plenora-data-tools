@@ -1613,6 +1613,19 @@
       "requested_capacity_matches_the_pinned_vector_backend",
       "growth_overlap_is_reserved_before_allocation"
     ],
+    "crates/plenora-kernels-geo/src/offset/tests.rs": [
+      "directed_butt_zero_and_collinear",
+      "analytical_mitre_bevel_inner_and_limit",
+      "circular_arc_has_analytic_sagitta_certificate",
+      "oblique_irrational_and_non_dyadic_publication",
+      "rejected_domains_and_parameters",
+      "exact_work_thresholds_and_interruptions",
+      "non_simple_output_and_correlated_radicals",
+      "triple_node_created_by_rounding_is_rejected",
+      "cancellation_and_deadline_during_work",
+      "arc_lens_and_rounded_collapse_are_not_silent",
+      "exact_mitre_limit_and_clockwise_arc"
+    ],
     "crates/plenora-kernels-geo/src/operations.rs": [
       "l_area_si_scala_con_il_quadrato",
       "un_area_che_si_annulla_nella_scala_si_rifiuta",
@@ -1705,6 +1718,17 @@
       "sparse_queries_have_analytic_work",
       "grid_queries_have_analytic_work",
       "interval_candidates_match_exhaustive_including_reversed_bounds"
+    ],
+    "crates/plenora-kernels-geo/src/reshape/tests.rs": [
+      "directed_replacement_and_vertices",
+      "excluded_intersections_and_inputs",
+      "bent_crossings_and_closed_reshaper",
+      "reconstructed_self_contact_is_rejected",
+      "exact_nodes_and_rounding_topology",
+      "exact_resource_thresholds",
+      "cancellation_deadline_entry_and_during_work",
+      "exact_domain_boundary_and_zero_budgets",
+      "observed_domain_failure_keeps_precedence"
     ],
     "crates/plenora-kernels-geo/src/riproiezione/tests.rs": [
       "tipi_e_struttura_si_conservano",
@@ -1867,6 +1891,18 @@
       "validated_variants_match_the_gated_path_on_valid_inputs",
       "validated_variants_document_the_caller_precondition",
       "boolean_area_identities_hold_for_generated_rectangles"
+    ],
+    "crates/plenora-kernels-geo/src/trim_extend/tests.rs": [
+      "left_half_plane_and_internal_vertex",
+      "terminal_rays_modes_and_selection",
+      "zero_hits_preserve_every_bit",
+      "two_hits_and_all_excluded_contacts",
+      "invalid_guide_and_reconstruction",
+      "nearest_even_and_rounded_collapse",
+      "positive_distance_threshold",
+      "exact_resource_thresholds",
+      "cancellation_deadline_entry_and_during_work",
+      "reused_signs_do_not_charge_candidates_and_overflow_is_typed"
     ],
     "crates/plenora-kernels-geo/src/validazione_ogc/tests.rs": [
       "quadrato_semplice_nessuna_autointersezione",
