@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 pub mod bounds;
 mod exact;
+pub mod faces;
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod oracle;
