@@ -39,14 +39,36 @@ filtri inclusivi X/Y. I limiti sui nodi precedono la costruzione, includono
 copie e incidenze duplicate prima di dedup. La deadline monotona viene
 controllata accanto alla cancellazione e prima di pubblicare la matrice.
 
-Le prenotazioni dei vettori seguono ora le capacita' vive, anche durante
-l'iterazione che consuma il contenitore. Restano esclusi i buffer BigInt:
-la prova algebrica per oggetto (6299 bit di numeratore e 5273 bit di
-denominatore per una coordinata d'intersezione ridotta) e il corpus estremo
-sono in `noding/bounds.rs`, ma non sono ancora ricevute di prenotazione
-per tutti gli intermedi aritmetici. Non e' dichiarata conformita' GOP-027.
-Anche la possibile sovraprenotazione interna dell'allocatore resta fuori
-dal bilancio; una capacita' Vec diversa dalla richiesta e' un errore esplicito.
+Le prenotazioni dei vettori seguono le capacita' vive, anche durante
+l'iterazione che consuma il contenitore. Il noder e la matrice usano
+`noding/exact.rs`: `Q` contiene due `CountedInt`, ciascuno con ricevuta sullo
+stesso bilancio vivo di `CountedVec`. Numeratori, denominatori, prodotti
+incrociati dei confronti, intermedi del gcd e cloni sono addebitati subito
+dopo ogni creazione e rilasciati dopo la distruzione del valore. Non ci
+sono operatori o cloni infallibili; ogni operazione propaga l'errore tipizzato.
+Valori appartenenti a bilanci diversi vengono rifiutati prima del calcolo.
+
+Il backend fissato `num-bigint =0.5.1` non espone la capacita' delle cifre:
+`IntDigits::capacity` e `BigDigits` sono privati al crate. Si applica il
+fallback autorizzato: bit significativi arrotondati ai limb nativi
+(`usize::BITS`), piu' `size_of::<BigInt>()`. Non e' una prenotazione di un
+maggiorante dell'operazione. Il massimo matematico del DAG dimostrato in
+`noding/bounds.rs` e' **145173 bit per intero**, prima del gcd: il massimo
+sforamento **contabile** prima di `ReservationLimit` e' quindi
+`ceil(145173 / usize::BITS) * size_of::<usize>() + size_of::<BigInt>()`.
+Su target a 64 bit la parte cifre vale 18152 byte; si aggiunge l'header.
+Le prove misurano anche il tentativo rifiutato, non soltanto i valori ammessi.
+
+**Limite ancora aperto:** questa contabilita' non certifica GOP-027 per
+l'heap fisico. Capacita' inutilizzata e scratch privati del backend non sono
+overhead dell'allocatore e non vengono presentati come tale. L'header di un
+intero residente in un `CountedVec` e' incluso anche nella capacita' del
+contenitore: il conteggio e' conservativo per quella parte, non una misura
+fisica senza duplicazioni. Restano inoltre l'allocazione `Rc<Budget>`, la
+diagnostica allocata e il picco interno della riallocazione dei vettori.
+Una capacita' Vec diversa dalla richiesta e' un errore esplicito. Manca
+la prova con allocatore contante richiesta per certificare la differenza
+fra heap reale e contato; i test di ricevute non la sostituiscono.
 
 Mancano ancora i nuovi ingressi controllati `split_line` e `polygonize`,
 e la loro qualifica C1. Per O-M4, `evaluate` ed `evaluate_validated`
@@ -96,10 +118,10 @@ sbagliate e controlla anche simboli invalidi dopo celle non corrispondenti.
 
 **Limiti:** default di 10 milioni di coppie effettivamente esaminate,
 100 milioni di passi di visita/classificazione/ordinamento, 10 milioni di
-nodi e 256 MiB di richieste di capacita' strutturale ancora vive. Il drop
-rilascia il budget; pop e dedup mantengono la capacita'. Le richieste non
-includono i buffer aritmetici interni di `BigInt` ne' l'overhead allocatore:
-non costituiscono un tetto all'heap totale. `RelateLimits::deadline` e'
+nodi e 256 MiB di capacita' strutturale e interi contabilizzati ancora vivi.
+Il drop rilascia il budget; pop e dedup mantengono la capacita'. Il fallback
+aritmetico e le esclusioni fisiche sono specificati sopra: questo conteggio
+non costituisce un tetto all'heap totale. `RelateLimits::deadline` e'
 opzionale (default `None`) e produce `PredicateError::DeadlineExceeded`;
 se anche il token e' alzato prevale `Cancelled`.
 Nessun maggiorante anticipato decide il rifiuto. Validazione e calcolo
