@@ -8159,6 +8159,18 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_text.rs::format_coordinate": {
+      "signature": "pub fn format_coordinate( degrees: f64, axis: GeographicAxis, notation: AngularNotation, decimals: u8, ) -> Result<String, CoordinateTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_text.rs::parse_coordinate": {
+      "signature": "pub fn parse_coordinate( text: &str, axis: GeographicAxis, notation: AngularNotation, ) -> Result<f64, CoordinateTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
     }
   },
   "python": {

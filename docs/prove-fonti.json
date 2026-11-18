@@ -1929,6 +1929,13 @@
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
     ],
+    "crates/plenora-kernels-geo/tests/coordinate_text.rs": [
+      "analytic_written_expectations",
+      "parsing_written_expectations",
+      "grammar_rejections",
+      "domain_and_precision_rejections",
+      "deterministic_round_trip_bound"
+    ],
     "crates/plenora-kernels-geo/tests/crs_integrati_analisi.rs": [
       "operazioni_con_requisito_proiettato_girano_con_epsg_32632",
       "le_binarie_richiedono_dichiarazioni_identiche_anche_per_alias_crs",
