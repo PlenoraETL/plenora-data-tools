@@ -19,7 +19,8 @@ cronologia delle modifiche si consulta in Git.
 | [`cli.md`](cli.md) | la CLI `plenora-data`: uscite, codici, comandi, capacità, deviazioni dai contratti |
 | [`crs.md`](crs.md) | CRS integrati, i loro limiti e come aggiungere un codice |
 | [`riproiezione.md`](riproiezione.md) | `geo.reproject`: catena, metodi, cambi di datum, griglie NTv2, oracolo |
-| [`misure-forma-conservata.md`](misure-forma-conservata.md) | API Rust di lunghezza e area sul percorso originale, certificati, budget e dominio geografico/Web Mercator |
+| [`maggioranti-forma.md`](maggioranti-forma.md) | tabella esaustiva dei metodi inversi, derivazione e limiti dei certificati |
+| [`misure-forma-conservata.md`](misure-forma-conservata.md) | API Rust di lunghezza e area sul percorso originale, certificati, budget e dominio geografico/Mercator |
 | [`../crates/plenora-data-py/README.md`](../crates/plenora-data-py/README.md) | l'SDK Python `plenora-data`: uso, errori, scadenza e annullamento, deviazioni, limiti, aggiornamento dei contratti |
 
 `scripts/genera_inventario.py` genera `inventario.md`;

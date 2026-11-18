@@ -12,6 +12,8 @@
     reason = "Maggioranti scritti nella forma delle dimostrazioni"
 )]
 
+mod certificate;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -19,7 +21,10 @@ use std::time::Instant;
 use geo::kernels::RobustKernel;
 use geo::{Coord, Intersects, Kernel, Line, LineString, Orientation, Polygon};
 use geographiclib_rs::{InverseGeodesic, PolygonArea, Winding};
-use plenora_core::crs::riproiezione::{OpzioniRiproiezione, PianoRiproiezione, Riproiettore};
+use plenora_core::crs::riproiezione::{
+    InverseShapeCertificate, OpzioniRiproiezione, PianoRiproiezione, Riproiettore,
+    SeparableShapeBounds,
+};
 use plenora_core::crs::{CrsKind, Ellipsoid, ResolvedCrs};
 use thiserror::Error;
 
@@ -158,6 +163,7 @@ struct ShapeContext {
     projection: Riproiettore,
     ellipsoid: EllissoideGeodetico,
     geographic: bool,
+    derivatives: SeparableShapeBounds,
 }
 
 impl ShapeContext {
@@ -183,13 +189,16 @@ impl ShapeContext {
             return Err(ShapeMeasureError::UnsupportedEllipsoid);
         }
         let geographic = crs.kind() == CrsKind::Geographic;
-        if !geographic && crs.authority_identifier() != Some(("EPSG", 3857)) {
+        let InverseShapeCertificate::Separable(derivatives) =
+            projection.inverse_shape_certificate()
+        else {
             return Err(ShapeMeasureError::AccuracyUnproven);
-        }
+        };
         Ok(Self {
             projection,
             ellipsoid,
             geographic,
+            derivatives,
         })
     }
 
@@ -203,6 +212,27 @@ impl ShapeContext {
             .projection
             .geografiche_sorgente(point.x, point.y)
             .map_err(|_| ShapeMeasureError::CrsDomain)?;
+        if !self.geographic {
+            let raw_longitude = self
+                .derivatives
+                .angular_scale
+                .mul_add(point.x, self.derivatives.longitude_offset);
+            // Il certificato usa un solo ramo continuo, mai la riduzione modulo 2pi.
+            if raw_longitude.abs() >= std::f64::consts::PI || y.abs() >= 85.06 {
+                return Err(ShapeMeasureError::CrsDomain);
+            }
+        }
+        if self.derivatives.method == 9804 {
+            let parameters = self.ellipsoid.parametri();
+            certificate::mercator_residual(
+                y,
+                point.y,
+                self.derivatives.projected_divisor,
+                self.derivatives.false_northing,
+                parameters.inverse_flattening,
+                self.derivatives.latitude_first,
+            )?;
+        }
         Ok(Coord { x, y })
     }
 
@@ -212,11 +242,7 @@ impl ShapeContext {
         end: Coord<f64>,
         divisions: u32,
     ) -> Result<(f64, f64), ShapeMeasureError> {
-        let scale = if self.geographic {
-            std::f64::consts::PI / 180.0
-        } else {
-            1.0 / self.ellipsoid.parametri().semi_major_axis_metre
-        };
+        let scale = self.derivatives.angular_scale;
         let dx = (end.x - start.x) * scale / f64::from(divisions);
         let dy = (end.y - start.y) * scale / f64::from(divisions);
         if (start.x != end.x && !dx.is_normal()) || (start.y != end.y && !dy.is_normal()) {
@@ -270,7 +296,7 @@ fn result(
 /// Parti vuote e coordinate ripetute contribuiscono zero. Il campionamento
 /// raddoppia adattivamente finche' il bound analitico soddisfa la tolleranza.
 /// Memoria ausiliaria costante, nessun vettore di punti campionati.
-/// Dominio certificato: CRS geografici integrati ed EPSG:3857.
+/// Dominio certificato: CRS geografici integrati, Pseudo Mercator e Mercator A.
 ///
 /// # Errors
 /// [`ShapeMeasureError`], nessun risultato parziale. Gli altri CRS
@@ -329,8 +355,10 @@ fn length_edge(
     }
     let a = context.ellipsoid.parametri().semi_major_axis_metre;
     let (dx, dy) = context.deltas(start, end, divisions)?;
-    let acceleration =
-        1.1 * a * ((dx.abs() + dy.abs()).powi(2) + if context.geographic { 0.0 } else { dy * dy });
+    let first = context.derivatives.latitude_first;
+    let second = context.derivatives.latitude_second;
+    let speed = dx.abs() + first * dy.abs();
+    let acceleration = 1.1 * a * (speed.powi(2) + second * dy * dy);
     let mut previous = context.convert(start, work)?;
     for i in 1..=divisions {
         let point = context.convert(
@@ -349,7 +377,7 @@ fn length_edge(
         let lower = distance - 1e-6;
         if lower <= 0.0 {
             // Il maggiorante della velocita' resta valido anche ai poli o ai coincidenti.
-            error.add(1.1 * a * (dx.abs() + dy.abs()) + 1e-6);
+            error.add(1.1 * a * speed + 1e-6);
         } else {
             // Varianza della velocita' ECEF: L-d <= A^2/(12d), senza test di convergenza.
             error.add(acceleration.powi(2) / (12.0 * lower) + 1e-6);
@@ -458,11 +486,13 @@ fn ring_area(
             work.charge()?;
             polygon.add_point(point.y, point.x);
             integral.add(-area_primitive(midpoint.y, parameters) * dx);
-            let derivative_bound = if context.geographic { 1.1 } else { 2.2 };
+            let derivative_bound = 1.1
+                * (context.derivatives.latitude_first.powi(2)
+                    + context.derivatives.latitude_second);
             error.add(
                 dx.abs()
                     * parameters.semi_major_axis_metre.powi(2)
-                    * (derivative_bound * dy * dy / 24.0 + 128.0 * f64::EPSILON),
+                    * (derivative_bound * dy * dy / 24.0 + 512.0 * f64::EPSILON),
             );
         }
     }

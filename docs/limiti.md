@@ -358,7 +358,7 @@ prodotto. Per l'assenza del controllo a posteriori, vedi l'hazard
 
 Le API Rust additive di [misura a forma conservata](misure-forma-conservata.md)
 seguono la retta nello SR originale. Certificano CRS geografici integrati ed
-EPSG:3857; gli altri CRS riproiettabili restituiscono `AccuracyUnproven`.
+EPSG:3857 e Mercator A (EPSG:3395); gli altri CRS riproiettabili restituiscono `AccuracyUnproven`.
 La guida dichiara separatamente bound di lunghezza e area, dominio delle
 superfici, antimeridiano, budget e interruzione. Le misure geodetiche qui
 descritte mantengono la loro semantica.

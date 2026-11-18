@@ -26,7 +26,7 @@ esattamente l'argomento della chiamata; il modello e' `preserve_shape`, le
 unita' sono fissate dalla funzione. Nessun cambio di datum: le conversioni
 riusano `Riproiettore::geografiche_sorgente` con piano identita'.
 
-Il dominio certificato comprende i CRS geografici integrati e EPSG:3857,
+Il dominio certificato comprende i CRS geografici integrati, EPSG:3857 e Mercator A (EPSG:3395),
 con ellissoide terrestre `6e6 <= a <= 7e6` metri e `250 <= 1/f <= 350`.
 **Il supporto a qualunque CRS riproiettabile non e' completo:** gli altri
 CRS integrati, inclusi gli UTM, restituiscono `AccuracyUnproven`. Le inverse
@@ -46,7 +46,7 @@ strettamente interni, senza contatti o incroci fra anelli. La validazione
 usa i predicati esatti del kernel geometrico, anche per i test di
 contenimento. Tutti gli anelli di un poligono devono stare in una striscia
 aperta di longitudine larga meno di 180 gradi, senza poli. Per geografico
-e Web Mercator la trasformazione e' iniettiva in questa striscia e conserva
+e per i due metodi Mercator la trasformazione e' iniettiva in questa striscia e conserva
 la topologia. La superficie e' strettamente minore di mezzo ellissoide;
 complementi, cappe polari e regioni piu' larghe sono `UnsupportedSurface`.
 Z, M e curve non appartengono a questa API XY.
@@ -75,6 +75,9 @@ globale finche' il bound soddisfa la tolleranza. I punti intermedi sono
 sempre interpolati sul lato originale, poi convertiti tramite il core CRS.
 Il massimo rappresentabile e' `2^31` divisioni per lato. Ogni tentativo
 scartato entra nel budget; nessuna dipendenza dall'ordine degli hash.
+
+La [tabella dei maggioranti](maggioranti-forma.md) censisce ogni metodo
+invertibile, i motivi dei rifiuti e la regola comune usata anche per Mercator A.
 
 ### Lunghezza
 
@@ -131,7 +134,7 @@ geografico: abs(delta_lambda) * 1.1a² * delta_phi² / 24
 Web Mercator: abs(delta_x/a) * 2.2a² * (delta_y/a)² / 24
 ```
 
-Si aggiunge `128 epsilon a² abs(delta_lambda)` per valutazione della serie,
+Si aggiunge `512 epsilon a² abs(delta_lambda)` per valutazione della serie,
 conversioni angolari, interpolazione e accumulazione compensata. Per anello:
 
 ```text

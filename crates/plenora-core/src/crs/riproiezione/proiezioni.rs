@@ -88,6 +88,68 @@ pub(in crate::crs) fn riduci_gradi(lon: f64) -> f64 {
 }
 
 impl Proiezione {
+    /// Tabella esaustiva delle inverse: nessun ramo implicito per nuovi metodi.
+    pub(super) fn shape_certificate(&self) -> super::InverseShapeCertificate {
+        use super::forma::{InverseShapeCertificate, SeparableShapeBounds};
+        match self {
+            Self::Geografico => InverseShapeCertificate::Separable(SeparableShapeBounds {
+                method: 0,
+                angular_scale: std::f64::consts::PI / 180.0,
+                longitude_offset: 0.0,
+                projected_divisor: 1.0,
+                false_northing: 0.0,
+                latitude_first: 1.0,
+                latitude_second: 0.0,
+            }),
+            Self::PseudoMercatore(p) => InverseShapeCertificate::Separable(SeparableShapeBounds {
+                method: 1024,
+                angular_scale: 1.0 / p.a,
+                longitude_offset: p.lon0 - p.falsa_est / p.a,
+                projected_divisor: p.a,
+                false_northing: p.falsa_nord,
+                latitude_first: 1.0,
+                latitude_second: 1.0,
+            }),
+            Self::Mercatore(p) => {
+                let e2 = p.e * p.e;
+                let denominator = 1.0 - e2;
+                // Snyder 1987, eq. 7-7: F=cos(phi)(1-e2 sin(phi)^2)/(1-e2).
+                // |F|<=1/(1-e2), |F'F|<=(1+2e2)/(1-e2)^2.
+                InverseShapeCertificate::Separable(SeparableShapeBounds {
+                    method: 9804,
+                    angular_scale: 1.0 / (p.a * p.k0),
+                    longitude_offset: p.lon0 - p.falsa_est / (p.a * p.k0),
+                    projected_divisor: p.a * p.k0,
+                    false_northing: p.falsa_nord,
+                    latitude_first: ((1.0 + 16.0 * f64::EPSILON) / denominator).next_up(),
+                    latitude_second: ((1.0 + 16.0 * f64::EPSILON) * (1.0 + 2.0 * e2)
+                        / denominator.powi(2))
+                    .next_up(),
+                })
+            }
+            Self::Tm(_) => InverseShapeCertificate::Unproven {
+                method: 9807,
+                reason: "resto della serie inversa e derivate sul dominio non maggiorati",
+            },
+            Self::Lcc(_) => InverseShapeCertificate::Unproven {
+                method: 9802,
+                reason: "distanza continua dall'apice e dal taglio angolare non certificata",
+            },
+            Self::Laea(_) => InverseShapeCertificate::Unproven {
+                method: 9820,
+                reason: "derivate presso il bordo del disco e inversa autalica non maggiorate",
+            },
+            Self::Stereo(_) => InverseShapeCertificate::Unproven {
+                method: 9809,
+                reason: "derivate della rotazione e inversa conforme non maggiorate",
+            },
+            Self::Svizzera(_) => InverseShapeCertificate::Unproven {
+                method: 9815,
+                reason: "derivate della rotazione obliqua e tagli angolari non maggiorati",
+            },
+        }
+    }
+
     pub(in crate::crs) fn nuova(
         metodo: &MetodoProiezione,
         ellissoide: Ellipsoid,

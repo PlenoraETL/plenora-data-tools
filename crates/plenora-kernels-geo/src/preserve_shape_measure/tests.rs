@@ -380,3 +380,77 @@ fn geographic_and_projected_area_against_analytic_surface_integral() {
     .unwrap();
     assert!((measured.value - expected).abs() <= measured.absolute_error_bound);
 }
+
+// C1: Snyder 1987 eq. 7-7/7-9, bisezione Python e GeographicLib 2.1;
+// fixture prodotta da tests/fixtures/preserve_shape/mercator.py, senza Rust.
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn mercator_a_line_and_polygon_against_independent_reference() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/preserve_shape/mercator.json"
+    ))
+    .unwrap();
+    let line = LineString::from(vec![(0.0, 4_000_000.0), (2_000_000.0, 6_000_000.0)]);
+    let measured = length(&[line], "EPSG:3395", 0.2);
+    let expected = fixture["32768"]["length_m"].as_f64().unwrap();
+    assert!((measured.value - expected).abs() <= measured.absolute_error_bound);
+    let polygon = Polygon::new(
+        LineString::from(vec![
+            (0.0, 4_000_000.0),
+            (2_000_000.0, 4_200_000.0),
+            (1_800_000.0, 6_000_000.0),
+            (-100_000.0, 5_700_000.0),
+            (0.0, 4_000_000.0),
+        ]),
+        vec![],
+    );
+    let crs = resolve_crs("EPSG:3395", "crs").unwrap();
+    let measured =
+        preserve_shape_area_with_limits(&[polygon], &crs, tolerance(100.0), limits(), None)
+            .unwrap();
+    let expected = fixture["32768"]["area_m2"].as_f64().unwrap();
+    assert!((measured.value - expected).abs() <= measured.absolute_error_bound);
+}
+
+// C1: Snyder 7-7, dominio aperto senza taglio; GOP-006 per metodi non provati.
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn projected_domain_edges_and_unproven_methods_are_rejected() {
+    for code in ["EPSG:3395", "EPSG:3857"] {
+        let crs = resolve_crs(code, "crs").unwrap();
+        for (x, y) in [
+            (std::f64::consts::PI * 6_378_137.0, 0.0),
+            (-std::f64::consts::PI * 6_378_137.0, 0.0),
+            (0.0, 21_000_000.0),
+            (0.0, -21_000_000.0),
+        ] {
+            let line = LineString::from(vec![(0.0, 0.0), (x, y)]);
+            assert_eq!(
+                preserve_shape_length_with_limits(&[line], &crs, tolerance(1.0), limits(), None),
+                Err(ShapeMeasureError::CrsDomain)
+            );
+            let polygon = Polygon::new(rectangle(0.0, 0.0, x, y), vec![]);
+            assert_eq!(
+                preserve_shape_area_with_limits(&[polygon], &crs, tolerance(1.0), limits(), None),
+                Err(ShapeMeasureError::CrsDomain)
+            );
+        }
+    }
+    for code in [
+        "EPSG:32632",
+        "EPSG:2154",
+        "EPSG:3035",
+        "EPSG:28992",
+        "EPSG:2056",
+    ] {
+        let crs = resolve_crs(code, "crs").unwrap();
+        assert_eq!(
+            preserve_shape_length_with_limits(&[], &crs, tolerance(1.0), limits(), None),
+            Err(ShapeMeasureError::AccuracyUnproven)
+        );
+        assert_eq!(
+            preserve_shape_area_with_limits(&[], &crs, tolerance(1.0), limits(), None),
+            Err(ShapeMeasureError::AccuracyUnproven)
+        );
+    }
+}
