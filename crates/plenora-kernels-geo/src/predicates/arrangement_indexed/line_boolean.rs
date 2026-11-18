@@ -538,7 +538,11 @@ impl Originals {
         ids.dedup_by(|a, b| Ok(values[*a].0 == values[*b].0), work)?;
         Ok(Self { values, ids })
     }
-    fn coordinate(&self, p: &P, work: &mut Work<'_>) -> Result<Coord<f64>, LineBooleanError> {
+    pub(crate) fn coordinate(
+        &self,
+        p: &P,
+        work: &mut Work<'_>,
+    ) -> Result<Coord<f64>, LineBooleanError> {
         let (mut low, mut high) = (0, self.ids.len());
         while low < high {
             work.step()?;

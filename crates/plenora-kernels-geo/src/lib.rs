@@ -54,6 +54,7 @@ pub mod spatial_join;
 mod test_support;
 pub mod topology;
 mod triangolazione;
+pub mod trim_extend;
 mod validazione_ogc;
 pub mod wkb_decoder;
 

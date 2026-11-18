@@ -19,6 +19,7 @@ pub use storage::CountedVec;
 
 pub struct Work<'a> {
     limits: RelateLimits,
+    deadline_first: bool,
     cancelled: Option<&'a std::sync::atomic::AtomicBool>,
     pub steps: u64,
     pub pairs: u64,
@@ -30,6 +31,7 @@ impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
         Self {
             limits,
+            deadline_first: false,
             cancelled,
             steps: 0,
             pairs: 0,
@@ -38,11 +40,27 @@ impl<'a> Work<'a> {
             exports: CountedVec::new(),
         }
     }
+    pub(crate) fn with_deadline_precedence(
+        limits: RelateLimits,
+        cancelled: Option<&'a std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        let mut work = Self::new(limits, cancelled);
+        work.deadline_first = true;
+        work
+    }
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
         Q::int_in(value, &self.budget)
     }
 
     pub fn step(&mut self) -> Result<(), PredicateError> {
+        if self.deadline_first
+            && self
+                .limits
+                .deadline
+                .is_some_and(|d| std::time::Instant::now() >= d)
+        {
+            return Err(PredicateError::DeadlineExceeded);
+        }
         if self
             .cancelled
             .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))

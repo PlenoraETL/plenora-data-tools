@@ -8327,6 +8327,18 @@
       "classification": "non riceve dati esterni",
       "reason": "Costruttore di opzioni geometriche Rust, senza buffer o celle Arrow.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/trim_extend.rs::from": {
+      "signature": "fn from(error: LineBooleanError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Costruzione geometrica o aritmetica interna su valori Rust, senza buffer o celle Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/trim_extend.rs::trim_extend_with_limits": {
+      "signature": "pub fn trim_extend_with_limits( target: &Geometry<f64>, guide: &Geometry<f64>, options: TrimExtendOptions, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<LineString<f64>, TrimExtendError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Costruzione geometrica o aritmetica interna su valori Rust, senza buffer o celle Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {

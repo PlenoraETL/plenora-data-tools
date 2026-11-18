@@ -14,6 +14,12 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API Rust `trim_extend::trim_extend_with_limits` per editing planare GOP-018:
+  taglio sinistro con guida infinita, raggi terminali selezionabili e modi
+  add/move. Costruzioni razionali, pubblicazione e verifica GOP-015A condivise;
+  limiti cumulativi, deadline prima della cancellazione secondo GOP-028.
+  Dominio, errori e garanzie in `docs/trim-extend.md`.
+
 - API Rust `offset::offset_with_limits` per offset planare orientato GOP-017:
   estremi butt, rounded/bevelled/mitered, limite mitre e tolleranza espliciti.
   Costruzioni razionali e radici certificate, pubblicazione GOP-015A condivisa,
