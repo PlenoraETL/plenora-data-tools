@@ -45,6 +45,61 @@ mod tests {
     use super::*;
     use crate::noding::oracle;
 
+    #[test]
+    fn streamed_sum_proves_rational_equalities_and_close_signs() {
+        let mut work = super::super::Work::new(crate::predicates::RelateLimits::default(), None);
+        let mut terms = super::super::CountedVec::new();
+        for (n, d, subtract) in [(1, 3, false), (2, 3, false), (1, 1, true)] {
+            let q = work
+                .integer(n)
+                .expect("numeratore")
+                .try_div(&work.integer(d).expect("denominatore"))
+                .expect("termine razionale");
+            work.push(&mut terms, (q, subtract))
+                .expect("termini contati");
+        }
+        assert_eq!(
+            sum_sign(&terms, &mut work).expect("uguaglianza razionale"),
+            Ordering::Equal
+        );
+        let tiny = Q::float_in(f64::from_bits(1), &work.budget).expect("minimo subnormale");
+        work.push(&mut terms, (tiny, true))
+            .expect("perturbazione negativa");
+        assert_eq!(
+            sum_sign(&terms, &mut work).expect("segno razionale"),
+            Ordering::Less
+        );
+        terms.last_mut().expect("perturbazione razionale").1 = false;
+        assert_eq!(
+            sum_sign(&terms, &mut work).expect("segno opposto"),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn bounded_sum_matches_rational_oracle() {
+        let work = super::super::Work::new(crate::predicates::RelateLimits::default(), None);
+        for count in 0..64 {
+            let mut sum = BoundedSum::new(128, &work).expect("sum");
+            let mut expected = oracle::Q::int(0);
+            for i in 0..count {
+                let term = work
+                    .integer(i - 20)
+                    .expect("n")
+                    .try_div(&work.integer(2 * i + 1).expect("d"))
+                    .expect("term");
+                let generic = oracle::Q::int(i - 20).div(&oracle::Q::int(2 * i + 1));
+                sum.add(&term, i % 3 == 0).expect("add");
+                expected = if i % 3 == 0 {
+                    expected.sub(&generic)
+                } else {
+                    expected.add(&generic)
+                };
+            }
+            assert_eq!(sum.sign(), Some(expected.sign()));
+        }
+    }
+
     /// GOP-027: clone e temporanei possiedono ricevute distinte; il
     /// risultato puo' sopravvivere al Work perche' possiede il bilancio.
     #[test]
@@ -526,5 +581,130 @@ impl Q {
         let left = self.n.mul(&b.d)?;
         let right = b.n.mul(&self.d)?;
         Ok(left.value.cmp(&right.value))
+    }
+}
+
+/// Somma a punto fisso con resto certificato: nessun denominatore cumulativo.
+/// Il numero di termini e' limitato da usize; 64 bit coprono il riporto.
+pub struct BoundedSum {
+    value: CountedInt,
+    error: CountedInt,
+    precision: u32,
+}
+impl BoundedSum {
+    pub fn new(precision: u32, work: &super::Work<'_>) -> Result<Self, PredicateError> {
+        Ok(Self {
+            value: CountedInt::int(0, &work.budget)?,
+            error: CountedInt::int(0, &work.budget)?,
+            precision,
+        })
+    }
+    pub fn add(&mut self, term: &Q, subtract: bool) -> Result<(), PredicateError> {
+        let scaled = term.n.shift(self.precision)?;
+        let quotient = scaled.div(&term.d)?;
+        self.value = if subtract {
+            self.value.sub(&quotient)?
+        } else {
+            self.value.add(&quotient)?
+        };
+        if scaled.rem(&term.d)?.value.sign() != Sign::NoSign {
+            self.error = self
+                .error
+                .add(&CountedInt::int(1, term.n.lease.budget())?)?;
+        }
+        // Somme di prodotti di coordinate finite: modulo < 2^2115,
+        // inclusi fino a 2^64 termini. La precisione e' fissata dal chiamante.
+        CountedInt::check_bits(
+            self.value.value.bits().max(self.error.value.bits()),
+            BitCheck::BeforeCreation,
+        )?;
+        Ok(())
+    }
+    pub fn sign(&self) -> Option<Ordering> {
+        if self.error.value.sign() == Sign::NoSign {
+            return Some(self.value.value.cmp(&BigInt::from(0)));
+        }
+        if self.value.value.magnitude() > self.error.value.magnitude() {
+            Some(if self.value.value.sign() == Sign::Minus {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Segno di una somma razionale senza costruire il denominatore comune.
+/// Il filtro veloce e' seguito da divisioni binarie con resti limitati.
+pub fn sum_sign(
+    terms: &[(Q, bool)],
+    work: &mut super::Work<'_>,
+) -> Result<Ordering, PredicateError> {
+    let mut filter = BoundedSum::new(128, work)?;
+    for (term, subtract) in terms {
+        work.step()?;
+        filter.add(term, *subtract)?;
+    }
+    if let Some(sign) = filter.sign() {
+        return Ok(sign);
+    }
+    let mut residuals = super::CountedVec::new();
+    let mut value = CountedInt::int(0, &work.budget)?;
+    let mut bound = u128::from(usize::BITS) + 2;
+    for (term, subtract) in terms {
+        work.step()?;
+        // Al massimo usize::MAX denominatori di MAX_BITS bit: su host
+        // fino a 64 bit il contatore di separazione richiede meno di 83 bit.
+        bound += u128::from(term.d.value.bits());
+        let scaled = term.n.shift(128)?;
+        let quotient = scaled.div(&term.d)?;
+        value = if *subtract {
+            value.sub(&quotient)?
+        } else {
+            value.add(&quotient)?
+        };
+        let remainder = scaled.rem(&term.d)?;
+        let remainder = if *subtract {
+            remainder.neg()?
+        } else {
+            remainder
+        };
+        work.push(&mut residuals, (remainder, &term.d))?;
+    }
+    let count = CountedInt::created(BigInt::from(terms.len()), &work.budget)?;
+    let mut precision = 128_u128;
+    loop {
+        work.step()?;
+        // L'errore troncato ha modulo strettamente minore del numero di
+        // termini. Dopo un passo indeciso l'accumulatore ha al massimo
+        // usize::BITS + 2 bit, non cresce col numero di cifre visitate.
+        if value.value.magnitude() >= count.value.magnitude() {
+            return Ok(if value.value.sign() == Sign::Minus {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            });
+        }
+        // Se S != 0, |S| >= 1/prodotto(d_i) > 2^-sum(bits(d_i)).
+        // Qui l'intervallo indeciso e' piu' stretto di questa separazione:
+        // l'unico valore razionale possibile e' zero.
+        if precision >= bound {
+            return Ok(Ordering::Equal);
+        }
+        value = value.shift(1)?;
+        let mut exact = true;
+        for (remainder, denominator) in residuals.iter_mut() {
+            work.step()?;
+            let doubled = remainder.shift(1)?;
+            value = value.add(&doubled.div(denominator)?)?;
+            *remainder = doubled.rem(denominator)?;
+            exact &= remainder.value.sign() == Sign::NoSign;
+        }
+        if exact {
+            return Ok(value.value.cmp(&BigInt::from(0)));
+        }
+        precision += 1;
     }
 }

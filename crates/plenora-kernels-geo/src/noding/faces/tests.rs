@@ -1,6 +1,7 @@
 //! GOP-020: grafo razionale, cicli esaustivi indipendenti e provenienza.
 use super::*;
 use crate::noding::oracle;
+use crate::noding::Q;
 use crate::predicates::RelateLimits;
 
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -184,7 +185,7 @@ fn compare_oracle(lines: &[[(f64, f64); 2]], sites: &[OracleSite], edges: &[(usi
             let atom = &actual.atoms[ring.atoms[i]];
             assert_eq!((atom.from, atom.to), (a.min(b), a.max(b)));
         }
-        if ring.area.sign().is_gt() {
+        if ring.orientation.is_gt() {
             let mut cycle = ring.vertices.to_vec();
             let minimum = cycle
                 .iter()
@@ -372,18 +373,22 @@ fn nested_components_keep_hole_provenance() {
         .rings
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.area.sign().is_gt())
+        .filter(|(_, r)| r.orientation.is_gt())
         .collect();
     // Fonte: quadrati annidati di aree 36 e 4; il ponte non divide la corona.
     assert_eq!(shells.len(), 2);
     assert_eq!(graph.holes.iter().map(|h| h.len()).sum::<usize>(), 1);
     let (outer, _) = shells
         .iter()
-        .find(|(_, r)| r.area == work.integer(72).expect("area doppia"))
+        .find(|(_, r)| {
+            r.vertices
+                .iter()
+                .any(|&v| graph.points[v].x == work.integer(0).expect("zero"))
+        })
         .expect("guscio esterno");
     assert_eq!(graph.holes[*outer].len(), 1);
     let hole = &graph.rings[graph.holes[*outer][0]];
-    assert_eq!(hole.area, work.integer(-8).expect("area doppia oraria"));
+    assert_eq!(hole.orientation, std::cmp::Ordering::Less);
     let mut sources: Vec<_> = hole
         .atoms
         .iter()
@@ -559,4 +564,69 @@ fn public_completion_oracle_nested_component_and_dangle() {
     )
     .expect("faccia con buco");
     assert_eq!(actual, vec![expected]);
+}
+
+/// Oracolo generico: shoelace e parita' su tutti i lati, inclusi i bordi.
+#[test]
+fn indexed_ring_locations_and_orientation_match_generic() {
+    let lines = [
+        [(0., 0.), (6., 0.)],
+        [(6., 0.), (6., 6.)],
+        [(6., 6.), (3., 2.)],
+        [(3., 2.), (0., 6.)],
+        [(0., 6.), (0., 0.)],
+        [(1., 1.), (2., 1.)],
+        [(2., 1.), (2., 2.)],
+        [(2., 2.), (1., 1.)],
+    ];
+    let mut work = Work::new(RelateLimits::default(), None);
+    let graph = run(&lines, &mut work).expect("grafo razionale");
+    for ring in &graph.rings {
+        let mut area = work.integer(0).expect("area iniziale");
+        for i in 0..ring.vertices.len() {
+            area = area
+                .try_add(
+                    &graph.points[ring.vertices[i]]
+                        .try_cross(&graph.points[ring.vertices[(i + 1) % ring.vertices.len()]])
+                        .expect("determinante"),
+                )
+                .expect("somma generica");
+        }
+        assert_eq!(ring.orientation, area.sign());
+        for x in -2..=14 {
+            for y in -2..=14 {
+                let p = P::of_in((f64::from(x) / 2., f64::from(y) / 2.).into(), &work)
+                    .expect("campione cartesiano");
+                let mut odd = false;
+                let mut boundary = false;
+                for i in 0..ring.vertices.len() {
+                    let a = &graph.points[ring.vertices[i]];
+                    let b = &graph.points[ring.vertices[(i + 1) % ring.vertices.len()]];
+                    let edge = Edge {
+                        a: a.try_clone().expect("copia razionale"),
+                        b: b.try_clone().expect("copia razionale"),
+                    };
+                    if edge.contains(&p).expect("incidenza esatta") {
+                        boundary = true;
+                        break;
+                    }
+                    if a.y.try_cmp(&p.y).expect("confronto esatto").is_gt()
+                        != b.y.try_cmp(&p.y).expect("confronto esatto").is_gt()
+                        && b.try_sub(a)
+                            .expect("direzione")
+                            .try_cross(&p.try_sub(a).expect("raggio"))
+                            .expect("segno")
+                            .sign()
+                            == b.y.try_cmp(&a.y).expect("confronto esatto")
+                    {
+                        odd = !odd;
+                    }
+                }
+                assert_eq!(
+                    inside(&p, ring, &graph.points, &mut work).expect("query indicizzata"),
+                    if boundary { None } else { Some(odd) }
+                );
+            }
+        }
+    }
 }

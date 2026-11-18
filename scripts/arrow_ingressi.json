@@ -4533,6 +4533,14 @@
       "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn sorted<T>( values: &mut [T], compare: impl Fn(&T, &T) -> Result<Ordering, PredicateError>, work: &mut Work<'_>, ) -> Result<(), PredicateError>"
     },
+    "crates/plenora-kernels-geo/src/noding.rs::sorted_with_work": {
+      "arrow_arguments": [
+        "Result"
+      ],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn sorted_with_work<T>( values: &mut [T], compare: impl Fn(&T, &T, &mut Work<'_>) -> Result<Ordering, PredicateError>, work: &mut Work<'_>, ) -> Result<(), PredicateError>"
+    },
     "crates/plenora-kernels-geo/src/noding.rs::step": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -4571,17 +4579,41 @@
       "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn visit( edges: &[&Edge], work: &mut Work<'_>, mut emit: impl FnMut(usize, usize, [Option<P>; 2], &mut Work<'_>) -> Result<(), PredicateError>, ) -> Result<(), PredicateError>"
     },
+    "crates/plenora-kernels-geo/src/noding/exact.rs::add": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn add(&mut self, term: &Q, subtract: bool) -> Result<(), PredicateError>"
+    },
     "crates/plenora-kernels-geo/src/noding/exact.rs::eq": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn eq(&self, other: &Self) -> bool"
     },
+    "crates/plenora-kernels-geo/src/noding/exact.rs::new": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn new(precision: u32, work: &super::Work<'_>) -> Result<Self, PredicateError>"
+    },
     "crates/plenora-kernels-geo/src/noding/exact.rs::sign": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn sign(&self) -> Ordering"
+    },
+    "crates/plenora-kernels-geo/src/noding/exact.rs::sign#2": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn sign(&self) -> Option<Ordering>"
+    },
+    "crates/plenora-kernels-geo/src/noding/exact.rs::sum_sign": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto interno di somme razionali contabilizzate; nessun ingresso Arrow.",
+      "signature": "pub fn sum_sign( terms: &[(Q, bool)], work: &mut super::Work<'_>, ) -> Result<Ordering, PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding/exact.rs::try_add": {
       "arrow_arguments": [],
@@ -5216,6 +5248,62 @@
       "classification": "non riceve dati esterni",
       "reason": "Copia letterale delle API predicati pubblicate nella 6.0.0, usata come riferimento: nessun dato Arrow ricevuto.",
       "signature": "pub fn evaluate_validated( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::at": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn at(&self, id: usize) -> &[Q; 4]"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::candidates": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn candidates( &self, value: &Q, work: &mut Work<'_>, ) -> Result<CountedVec<usize>, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::candidates#2": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn candidates( &self, bounds: &[Q; 4], work: &mut Work<'_>, ) -> Result<CountedVec<usize>, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::geometry_bounds": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn geometry_bounds( geometry: &geo::Geometry<f64>, work: &mut Work<'_>, ) -> Result<[Q; 4], PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::new": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn new<'a>( bounds: impl Iterator<Item = (&'a Q, &'a Q)>, work: &mut Work<'_>, ) -> Result<Self, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::new#2": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn new(bounds: CountedVec<[Q; 4]>, work: &mut Work<'_>) -> Result<Self, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::overlapping": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn overlapping( &self, low: &Q, high: &Q, work: &mut Work<'_>, ) -> Result<CountedVec<usize>, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::point_candidates": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn point_candidates( &self, p: &crate::noding::P, work: &mut Work<'_>, ) -> Result<CountedVec<usize>, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs::sort_ids": {
+      "arrow_arguments": [
+        "Result"
+      ],
+      "classification": "non riceve dati esterni",
+      "reason": "Aritmetica razionale, ordinamento e indici geometrici interni con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn sort_ids( ids: &mut [usize], cmp: impl Fn(usize, usize) -> Result<Ordering, PredicateError>, work: &mut Work<'_>, ) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/preserve_shape_measure.rs::preserve_shape_area_with_limits": {
       "signature": "pub fn preserve_shape_area_with_limits( polygons: &[Polygon<f64>], crs: &ResolvedCrs, tolerance: ShapeTolerance, limits: ShapeMeasureLimits, cancelled: Option<&AtomicBool>, ) -> Result<ShapeMeasure, ShapeMeasureError>",

@@ -75,8 +75,8 @@
 //! sub(C,C) e orientamenti cross(sub(C,C),sub(C,C)). Per assegnare i buchi,
 //! `ring_contains` riceve lati C, punto X e direzione nulla: sub(X,C) =
 //! (16848,15821), cross(sub(C,C),sub(X,C)) = (54789,52734).
-//! Il limite riguarda questi predicati locali; le somme d'area delle facce
-//! hanno denominatori dipendenti da n e non sono coperte da questa derivazione.
+//! Il verso delle facce usa un solo determinante al minimo lessicografico.
+//! I buchi usano contenimento esatto, senza accumulare aree razionali.
 //! Tutti questi intermedi restano sotto il massimo globale indipendente da n.
 //! Questa proprieta' e' indispensabile: rinodare segmenti con estremi
 //! razionali richiederebbe un'altra derivazione, non la stessa costante.
@@ -94,16 +94,20 @@
 //! di rappresentazione: memorizzare ogni estremo con tale larghezza sarebbe
 //! molto costoso. La prova dei valori non sostituisce quella delle allocazioni.
 
-// Accumulatori di area: la profondita' della somma non e' un DAG fisso.
-// CountedInt controlla prima di ogni creazione add/sub <= max(bits)+1,
-// mul <= bits(a)+bits(b), shift <= bits(a)+k. Divisione, resto, negazione
-// e copia non crescono; gcd usa resti decrescenti. Per induzione nessun
-// valore, compreso un temporaneo prima del rifiuto, supera INTERMEDIATE_BITS.
-// Il dominio e' fisso e indipendente dal numero di lati. Una somma che
-// richieda di superarlo fallisce con AccuracyUnproven, mai con approssimazione.
-// I controlli usano limiti superiori per singola primitiva: possono rifiutare
-// una cancellazione il cui risultato ridotto sarebbe piccolo. Non sono una
-// stima di ammissione dell'operazione o una prenotazione per vertice.
+// Il confronto d'area usa un filtro a 128 bit frazionari, poi divisioni
+// binarie progressive. Ogni termine cross(C,C) ha al massimo 23145 bit
+// al numeratore e 21092 al denominatore; lo shift iniziale usa 23273 bit.
+// Un prodotto di coordinate finite e' < 2^2048, la differenza < 2^2049;
+// fino a 2^64 termini accumulano meno di 2241 bit alla griglia iniziale.
+// Dopo ogni cifra indecisa il quoziente cumulativo ha modulo < n; il passo
+// successivo ha modulo < 3n e usa al massimo usize::BITS + 2 bit. I resti
+// rimangono minori dei rispettivi denominatori, senza denominatore comune.
+// Se S != 0, |S| >= 1/prodotto(d_i) > 2^-sum(bits(d_i)). Dopo
+// sum(bits(d_i)) + usize::BITS + 2 cifre, un intervallo ancora indeciso
+// certifica S=0. Cresce il lavoro, addebitato a Work, non la larghezza
+// degli interi. Nessun tetto di precisione dipendente dal numero di lati.
+// Il tetto interno resta distinto dai budget del chiamante; tutti gli
+// intermedi sono controllati prima di add/sub/mul/shift e contabilizzati.
 pub const INTERMEDIATE_BITS: u64 = 145_173;
 /// Massimo addebito post-creazione di un intero (non scratch del backend).
 pub const MAX_VALUE_BYTES: u64 = INTERMEDIATE_BITS.div_ceil(usize::BITS as u64)

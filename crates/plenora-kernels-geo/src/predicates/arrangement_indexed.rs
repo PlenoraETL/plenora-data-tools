@@ -8,7 +8,7 @@
 // coordinate esatta, non una misura approssimata.
 #![allow(clippy::many_single_char_names, clippy::float_cmp)]
 
-use super::interval_index::IntervalIndex;
+use super::interval_index::{BoxIndex, IntervalIndex};
 use super::{De9imMatrix, PredicateError};
 pub(super) use crate::noding::Work;
 use crate::noding::{between, sorted, CountedVec, Edge, P, Q};
@@ -24,6 +24,7 @@ fn invalid(side: &'static str) -> PredicateError {
 
 #[derive(Default)]
 struct Shape {
+    polygon_index: BoxIndex,
     line_index: IntervalIndex,
     end_index: IntervalIndex,
     point_index: IntervalIndex,
@@ -69,6 +70,33 @@ impl Shape {
         self.line_index = IntervalIndex::new(self.lines.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
         self.end_index = IntervalIndex::new(self.ends.iter().map(|p| (&p.x, &p.x)), work)?;
         self.point_index = IntervalIndex::new(self.points.iter().map(|p| (&p.x, &p.x)), work)?;
+        let mut bounds = CountedVec::new();
+        for rings in &self.polygons {
+            let mut bb = [
+                work.integer(0)?,
+                work.integer(0)?,
+                work.integer(0)?,
+                work.integer(0)?,
+            ];
+            for (i, p) in rings
+                .iter()
+                .flatten()
+                .flat_map(|e| [&e.a, &e.b])
+                .enumerate()
+            {
+                work.step()?;
+                for (j, q) in [&p.x, &p.x, &p.y, &p.y].into_iter().enumerate() {
+                    if i == 0
+                        || (j % 2 == 0 && q.try_cmp(&bb[j])?.is_lt())
+                        || (j % 2 == 1 && q.try_cmp(&bb[j])?.is_gt())
+                    {
+                        bb[j] = q.try_clone()?;
+                    }
+                }
+            }
+            work.push(&mut bounds, bb)?;
+        }
+        self.polygon_index = BoxIndex::new(bounds, work)?;
         for rings in &self.polygons {
             let mut indices = CountedVec::new();
             for ring in rings {
@@ -86,7 +114,8 @@ impl Shape {
         work: &mut Work<'_>,
     ) -> Result<CountedVec<&Edge>, PredicateError> {
         let mut edges = CountedVec::new();
-        for (rings, indices) in self.polygons.iter().zip(&self.ring_indices) {
+        for id in self.polygon_index.point_candidates(p, work)? {
+            let (rings, indices) = (&self.polygons[id], &self.ring_indices[id]);
             for (ring, index) in rings.iter().zip(indices) {
                 work.step()?;
                 for id in index.candidates(&p.y, work)? {
@@ -134,7 +163,8 @@ impl Shape {
         work: &mut Work<'_>,
     ) -> Result<(), PredicateError> {
         let mut polygon_positions = CountedVec::new();
-        for (polygon_index, rings) in self.polygons.iter().enumerate() {
+        for polygon_index in self.polygon_index.point_candidates(p, work)? {
+            let rings = &self.polygons[polygon_index];
             let mut statuses = CountedVec::new();
             for (ring, index) in rings.iter().zip(&self.ring_indices[polygon_index]) {
                 let mut boundary = false;
@@ -203,22 +233,17 @@ impl Shape {
             } else {
                 2
             };
-            work.push(&mut polygon_positions, position)?;
-        }
-        for (i, group) in self.groups.iter().enumerate() {
-            if group.is_none() {
-                continue;
-            }
-            for j in i + 1..self.groups.len() {
-                work.step()?;
-                if self.groups[j] == *group
-                    && ((polygon_positions[i] == 0 && polygon_positions[j] == 0)
-                        || (dimension > 0
-                            && polygon_positions[i] == 1
-                            && polygon_positions[j] == 1))
-                {
-                    return Err(invalid(side));
+            if let Some(group) = self.groups[polygon_index] {
+                if position == 0 || (dimension > 0 && position == 1) {
+                    work.push(&mut polygon_positions, (group, position))?;
                 }
+            }
+        }
+        sorted(&mut polygon_positions, |a, b| Ok(a.cmp(b)), work)?;
+        for pair in polygon_positions.windows(2) {
+            work.step()?;
+            if pair[0] == pair[1] {
+                return Err(invalid(side));
             }
         }
         Ok(())
@@ -365,7 +390,8 @@ impl Shape {
         direction: Option<&P>,
         work: &mut Work<'_>,
     ) -> Result<bool, PredicateError> {
-        for (rings, indices) in self.polygons.iter().zip(&self.ring_indices) {
+        for id in self.polygon_index.point_candidates(p, work)? {
+            let (rings, indices) = (&self.polygons[id], &self.ring_indices[id]);
             work.step()?;
             if let Some(exterior) = rings.first() {
                 if ring_contains(exterior, &indices[0], p, direction, work)? {

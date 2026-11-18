@@ -1459,6 +1459,13 @@
     "[[\"token\",\"if\"],[\"token\",\"testo\"],[\"token\",\".\"],[\"token\",\"contains\"],[\"token\",\"(\"],[\"string\",\"self-intersection\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"Self\"],[\"token\",\":\"],[\"token\",\":\"]]",
     "[[\"token\",\"let\"],[\"token\",\"hull\"],[\"token\",\"=\"],[\"token\",\"trasformazione_protetta\"],[\"token\",\"(\"],[\"string\",\"convex_hull\"],[\"token\",\",\"],[\"token\",\"|\"],[\"token\",\"|\"],[\"token\",\"normalized\"],[\"token\",\".\"]]"
   ],
+  "crates/plenora-kernels-geo/src/noding/faces/tests.rs": [
+    "[[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"segno\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"sign\"],[\"token\",\"(\"],[\"token\",\")\"]]",
+    "[[\"token\",\"0\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"zero\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\".\"]]",
+    "[[\"token\",\"]\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"determinante\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"]]",
+    "[[\"token\",\"a\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"direzione\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"try_cross\"],[\"token\",\"(\"],[\"token\",\"&\"]]",
+    "[[\"token\",\"a\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"raggio\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"]]"
+  ],
   "crates/plenora-kernels-geo/src/offset.rs": [
     "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]",
     "[[\"token\",\"0\"],[\"token\",\"|\"],[\"token\",\"|\"],[\"token\",\"matches\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Mitered\"],[\"token\",\"{\"],[\"token\",\"limit\"],[\"token\",\"}\"]]",
@@ -1466,6 +1473,9 @@
     "[[\"token\",\"bevel\"],[\"token\",\"=\"],[\"token\",\"if\"],[\"token\",\"outer\"],[\"token\",\"{\"],[\"token\",\"match\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\"{\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Mitered\"],[\"token\",\"{\"],[\"token\",\"limit\"],[\"token\",\"}\"]]",
     "[[\"token\",\")\"],[\"token\",\"|\"],[\"token\",\"|\"],[\"token\",\"matches\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Mitered\"],[\"token\",\"{\"],[\"token\",\"limit\"],[\"token\",\"}\"]]",
     "[[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"if\"],[\"token\",\"matches\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Rounded\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"if\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/offset/tests.rs": [
+    "[[\"token\",\",\"],[\"token\",\"0\"],[\"token\",\".\"],[\"token\",\"0\"],[\"token\",\"0\"],[\"token\",\"1\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Rounded\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"]]"
   ],
   "crates/plenora-kernels-geo/src/operations.rs": [
     "[[\"token\",\":\"],[\"token\",\"InvalidParameter\"],[\"token\",\"{\"],[\"token\",\"name\"],[\"token\",\":\"],[\"string\",\"distance\"],[\"token\",\",\"],[\"token\",\"reason\"],[\"token\",\":\"],[\"string\",\"deve essere finita\"],[\"token\",\",\"]]",
@@ -1523,6 +1533,17 @@
   "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs": [
     "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\"}\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean/tests.rs": [
+    "[[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"origin\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"ray\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"b\"],[\"token\",\":\"],[\"token\",\"edges\"]]",
+    "[[\"token\",\",\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"sort\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"for\"],[\"token\",\"i\"],[\"token\",\"in\"]]",
+    "[[\"token\",\"b\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"angle\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"is_lt\"],[\"token\",\"(\"],[\"token\",\")\"]]",
+    "[[\"token\",\"incoming\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"angle\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"is_lt\"],[\"token\",\"(\"],[\"token\",\")\"]]",
+    "[[\"token\",\"last\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"ray\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"edges\"],[\"token\",\".\"]]",
+    "[[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"origin\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"b\"],[\"token\",\":\"],[\"token\",\"P\"]]",
+    "[[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"ray\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"successor\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"before\"],[\"token\",\".\"],[\"token\",\"or\"]]"
   ],
   "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion/tests.rs": [
     "[[\"token\",\"{\"],[\"token\",\"for\"],[\"token\",\"lines\"],[\"token\",\"in\"],[\"token\",\"[\"],[\"string\",\"LINESTRING(0 0,2 0)\"],[\"token\",\",\"],[\"string\",\"MULTILINESTRING((2 0,4 0),(4 0,2 0))\"],[\"token\",\",\"],[\"token\",\"]\"],[\"token\",\"{\"]]",
@@ -2469,8 +2490,5 @@
     "[[\"token\",\"v\"],[\"token\",\"|\"],[\"token\",\"v\"],[\"token\",\"=\"],[\"token\",\"=\"],[\"string\",\"geoarrow.wkb\"],[\"token\",\")\"],[\"token\",\"&\"],[\"token\",\"&\"],[\"token\",\"(\"],[\"token\",\"proprieta\"]]",
     "[[\"token\",\"{\"],[\"token\",\"verifica_nome\"],[\"token\",\"(\"],[\"token\",\"nome\"],[\"token\",\",\"],[\"string\",\"input\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"limiti_piano\"],[\"token\",\")\"],[\"token\",\"?\"]]",
     "[[\"token\",\"}\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"oltre\"],[\"token\",\"(\"],[\"string\",\"max_inputs\"],[\"token\",\",\"],[\"token\",\"piano\"],[\"token\",\".\"],[\"token\",\"inputs\"],[\"token\",\".\"]]"
-  ],
-  "crates/plenora-kernels-geo/src/offset/tests.rs": [
-    "[[\"token\",\",\"],[\"token\",\"0\"],[\"token\",\".\"],[\"token\",\"0\"],[\"token\",\"0\"],[\"token\",\"1\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Rounded\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"]]"
   ]
 }

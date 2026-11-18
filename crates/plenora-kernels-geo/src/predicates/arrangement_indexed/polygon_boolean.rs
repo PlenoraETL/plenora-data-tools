@@ -270,6 +270,16 @@ pub(super) fn carried_edges(
     originals: &Originals,
     work: &mut Work<'_>,
 ) -> Result<CountedVec<Edge>, PredicateError> {
+    let mut endpoints = CountedVec::new();
+    for (id, edge) in edges.iter().chain(incident).enumerate() {
+        work.push(&mut endpoints, (&edge.a, id))?;
+        work.push(&mut endpoints, (&edge.b, id))?;
+    }
+    crate::noding::sorted(
+        &mut endpoints,
+        |a, b| Ok(point_cmp(a.0, b.0)?.then(a.1.cmp(&b.1))),
+        work,
+    )?;
     let mut used = CountedVec::new();
     for _ in edges {
         work.push(&mut used, false)?;
@@ -290,21 +300,26 @@ pub(super) fn carried_edges(
                 if originals.contains(at, work)? {
                     break;
                 }
-                let mut degree = 0;
-                let mut next = None;
-                for (other, candidate) in edges.iter().enumerate() {
+                let (mut low, mut high) = (0, endpoints.len());
+                while low < high {
                     work.step()?;
-                    if candidate.a == *at || candidate.b == *at {
-                        degree = (degree + 1).min(3);
-                        if !used[other] {
-                            next = Some(other);
-                        }
+                    let mid = low + (high - low) / 2;
+                    if point_cmp(endpoints[mid].0, at)?.is_lt() {
+                        low = mid + 1;
+                    } else {
+                        high = mid;
                     }
                 }
-                for candidate in incident {
+                let mut degree = 0;
+                let mut next = None;
+                for &(point, other) in &endpoints[low..] {
                     work.step()?;
-                    if candidate.a == *at || candidate.b == *at {
-                        degree = (degree + 1).min(3);
+                    if point != at || degree == 3 {
+                        break;
+                    }
+                    degree += 1;
+                    if other < edges.len() && !used[other] {
+                        next = Some(other);
                     }
                 }
                 if degree != 2 {
@@ -345,41 +360,36 @@ struct Cycle {
 
 // Il successore e' il primo raggio in senso orario dal raggio entrante
 // invertito. I lati hanno sempre l'area selezionata alla propria sinistra.
-fn successor(current: usize, edges: &[Edge], work: &mut Work<'_>) -> Result<usize, PredicateError> {
+fn successor(
+    current: usize,
+    edges: &[Edge],
+    outgoing: &[usize],
+    work: &mut Work<'_>,
+) -> Result<usize, PredicateError> {
+    if outgoing.is_empty() {
+        return Err(PredicateError::CalcoloNonConcluso(
+            "frontiera poligonale aperta",
+        ));
+    }
     let at = &edges[current].b;
     let incoming = edges[current].a.try_sub(at)?;
-    let mut before: Option<(usize, P)> = None;
-    let mut last: Option<(usize, P)> = None;
-    for (id, edge) in edges.iter().enumerate() {
+    let (mut low, mut high) = (0, outgoing.len());
+    while low < high {
         work.step()?;
-        if &edge.a != at {
-            continue;
-        }
-        let ray = edge.b.try_sub(at)?;
-        if angle_cmp(&ray, &incoming)?.is_lt() {
-            if let Some((_, previous)) = &before {
-                if angle_cmp(previous, &ray)?.is_lt() {
-                    before = Some((id, ray.try_clone()?));
-                }
-            } else {
-                before = Some((id, ray.try_clone()?));
-            }
-        }
-        if let Some((_, previous)) = &last {
-            if angle_cmp(previous, &ray)?.is_lt() {
-                last = Some((id, ray));
-            }
+        let mid = low + (high - low) / 2;
+        if angle_cmp(&edges[outgoing[mid]].b.try_sub(at)?, &incoming)?.is_lt() {
+            low = mid + 1;
         } else {
-            last = Some((id, ray));
+            high = mid;
         }
     }
-    before
-        .or(last)
-        .map(|v| v.0)
-        .ok_or(PredicateError::CalcoloNonConcluso(
-            "frontiera poligonale aperta",
-        ))
+    Ok(outgoing[if low == 0 {
+        outgoing.len() - 1
+    } else {
+        low - 1
+    }])
 }
+
 fn cycle(ids: &[usize], edges: &[Edge], work: &mut Work<'_>) -> Result<Cycle, PredicateError> {
     if ids.len() < 3 {
         return Err(PredicateError::CalcoloNonConcluso("anello degenere"));
@@ -437,12 +447,32 @@ fn cycles(
         }
         Err(PredicateError::CalcoloNonConcluso("vertice di frontiera"))
     };
+    let mut outgoing = CountedVec::new();
+    for _ in &ids {
+        work.push(&mut outgoing, CountedVec::new())?;
+    }
+    for (id, edge) in edges.iter().enumerate() {
+        let v = vertex(&edge.a, work)?;
+        work.push(&mut outgoing[v], id)?;
+    }
+    for list in outgoing.iter_mut() {
+        crate::noding::sorted(
+            list,
+            |a, b| {
+                angle_cmp(
+                    &edges[*a].b.try_sub(&edges[*a].a)?,
+                    &edges[*b].b.try_sub(&edges[*b].a)?,
+                )
+            },
+            work,
+        )?;
+    }
     let mut arcs = CountedVec::new();
     for (id, edge) in edges.iter().enumerate() {
         let arc = crate::noding::faces::ArcSide {
             from: vertex(&edge.a, work)?,
             to: vertex(&edge.b, work)?,
-            next: successor(id, edges, work)?,
+            next: successor(id, edges, &outgoing[vertex(&edge.b, work)?], work)?,
             seen: false,
             atom: id,
         };
@@ -496,13 +526,38 @@ fn assemble(
     originals: &Originals,
     work: &mut Work<'_>,
 ) -> Result<Geometry<f64>, PolygonBooleanError> {
+    let mut bounds = CountedVec::new();
+    for ring in rings {
+        let p = &ring.edges[0].a;
+        let mut bb = [
+            p.x.try_clone()?,
+            p.x.try_clone()?,
+            p.y.try_clone()?,
+            p.y.try_clone()?,
+        ];
+        for edge in &ring.edges {
+            for (i, q) in [&edge.a.x, &edge.a.x, &edge.a.y, &edge.a.y]
+                .into_iter()
+                .enumerate()
+            {
+                work.step()?;
+                let order = q.try_cmp(&bb[i])?;
+                if (i % 2 == 0 && order.is_lt()) || (i % 2 == 1 && order.is_gt()) {
+                    bb[i] = q.try_clone()?;
+                }
+            }
+        }
+        work.push(&mut bounds, bb)?;
+    }
+    let index = crate::predicates::interval_index::BoxIndex::new(bounds, work)?;
     let mut owners = CountedVec::new();
     for hole in rings {
         work.step()?;
         let mut owner: Option<usize> = None;
         if !hole.shell {
             let p = midpoint(&hole.edges[0])?;
-            for (id, shell) in rings.iter().enumerate() {
+            for id in index.point_candidates(&p, work)? {
+                let shell = &rings[id];
                 work.step()?;
                 if !shell.shell || !contains(shell, &p, work)? {
                     continue;
@@ -521,6 +576,15 @@ fn assemble(
         }
         work.push(&mut owners, owner)?;
     }
+    let mut assigned = CountedVec::new();
+    for _ in rings {
+        work.push(&mut assigned, CountedVec::new())?;
+    }
+    for (id, owner) in owners.iter().enumerate() {
+        if let Some(owner) = owner {
+            work.push(&mut assigned[*owner], id)?;
+        }
+    }
     let mut polygons = CountedVec::new();
     for (id, shell) in rings.iter().enumerate() {
         work.step()?;
@@ -529,12 +593,9 @@ fn assemble(
         }
         let exterior = publish_ring(shell, originals, work)?;
         let mut holes = CountedVec::new();
-        for (hole, owner) in rings.iter().zip(&owners) {
-            work.step()?;
-            if *owner == Some(id) {
-                let ring = publish_ring(hole, originals, work)?;
-                work.push(&mut holes, ring)?;
-            }
+        for &hole in &assigned[id] {
+            let ring = publish_ring(&rings[hole], originals, work)?;
+            work.push(&mut holes, ring)?;
         }
         sort_output(
             &mut holes,
@@ -650,6 +711,11 @@ fn assemble_result(
     }
     // Tutti i siti nodati sono candidati, compresi gli incroci fra linee.
     let ids = ordered_ids(&candidates, |a, b| point_cmp(a, b), work)?;
+    let mut coverage = CountedVec::new();
+    for edge in boundary.edges.iter().chain(&boundary.contacts) {
+        work.push(&mut coverage, edge)?;
+    }
+    let coverage_index = IntervalIndex::new(coverage.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
     let mut points = CountedVec::new();
     for id in ids {
         work.step()?;
@@ -658,9 +724,9 @@ fn assemble_result(
             continue;
         }
         let mut covered = false;
-        for edge in boundary.edges.iter().chain(&boundary.contacts) {
+        for id in coverage_index.candidates(&p.x, work)? {
             work.step()?;
-            if edge.contains(p)? {
+            if coverage[id].contains(p)? {
                 covered = true;
                 break;
             }

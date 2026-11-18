@@ -125,7 +125,7 @@ fn publish_faces(
     let mut selected = CountedVec::new();
     for (i, ring) in rings.iter().enumerate() {
         work.step()?;
-        if ring.area.sign().is_gt() {
+        if ring.orientation.is_gt() {
             work.push(&mut selected, i)?;
             for &h in &holes[i] {
                 work.push(&mut selected, h)?;
@@ -162,7 +162,7 @@ fn publish_faces(
     let mut output = CountedVec::new();
     for (i, ring) in rings.iter().enumerate() {
         work.step()?;
-        if !ring.area.sign().is_gt() {
+        if !ring.orientation.is_gt() {
             continue;
         }
         let exterior = output_ring(ring, &coords, work)?;

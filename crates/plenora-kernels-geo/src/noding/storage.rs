@@ -125,11 +125,17 @@ impl<T> CountedVec<T> {
         if self.values.len() == self.values.capacity() {
             let requested = self
                 .values
-                .len()
-                .checked_add(1)
+                .capacity()
+                .max(1)
+                .checked_mul(if self.values.capacity() == 0 { 1 } else { 2 })
                 .ok_or(PredicateError::ReservationLimit)?;
-            let bytes = u64::try_from(std::mem::size_of::<T>())
+            let width = u64::try_from(std::mem::size_of::<T>())
                 .map_err(|_| PredicateError::ReservationLimit)?;
+            let additional = requested - self.values.capacity();
+            let bytes = u64::try_from(additional)
+                .map_err(|_| PredicateError::ReservationLimit)?
+                .checked_mul(width)
+                .ok_or(PredicateError::ReservationLimit)?;
             budget.reserve(bytes)?;
             // Ricevuta creata PRIMA della crescita. Un errore del sistema
             // rilascia la prenotazione senza alterare la ricevuta esistente.
@@ -142,7 +148,7 @@ impl<T> CountedVec<T> {
             // durante la crescita: il rifiuto avviene PRIMA di allocare.
             let overlap_bytes = u64::try_from(self.values.capacity())
                 .map_err(|_| PredicateError::ReservationLimit)?
-                .checked_mul(bytes)
+                .checked_mul(width)
                 .ok_or(PredicateError::ReservationLimit)?;
             budget.reserve(overlap_bytes)?;
             let overlap = Lease {
@@ -150,7 +156,7 @@ impl<T> CountedVec<T> {
                 bytes: overlap_bytes,
             };
             self.values
-                .try_reserve_exact(1)
+                .try_reserve_exact(additional)
                 .map_err(|_| PredicateError::AllocationFailed)?;
             drop(overlap);
             // Il contratto portabile di Vec consente sovraprenotazioni.
@@ -306,12 +312,12 @@ mod tests {
     fn requested_capacity_matches_the_pinned_vector_backend() {
         let count = 1024_u64;
         let width = std::mem::size_of::<u64>() as u64;
-        let peak = (2 * count - 1) * width;
+        let peak = (count + count / 2) * width;
         let budget = Rc::new(Budget::new(peak));
         let mut values = CountedVec::new();
         for i in 0..count {
             values.push(i, &budget).expect("capacita' richiesta");
-            assert_eq!(budget.live.get(), (i + 1) * width);
+            assert_eq!(budget.live.get(), (i + 1).next_power_of_two() * width);
         }
         assert_eq!(values.values.capacity(), 1024);
         assert_eq!(budget.peak(), peak);

@@ -340,3 +340,36 @@ fn excluded_point_is_typed_unsupported() {
         Err(PredicateError::UnsupportedGeometry)
     ));
 }
+
+/// Girandola del lettore `p1_bits.py`: i prolungamenti lasciano una sola
+/// faccia centrale di k lati; gli estremi lontani sono dangles esclusi.
+#[test]
+#[allow(clippy::suboptimal_flops)] // Conserva i due arrotondamenti della fixture Python.
+fn pinwheel_large_denominators_do_not_accumulate_ring_area() {
+    let count = 68;
+    let vertices: Vec<_> = (0..count)
+        .map(|j| {
+            let angle = std::f64::consts::TAU * f64::from(j) / f64::from(count);
+            (10.0 * angle.cos(), 10.0 * angle.sin())
+        })
+        .collect();
+    let lines: Vec<_> = vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .map(|(a, b)| {
+            let direction = (b.0 - a.0, b.1 - a.1);
+            line(&[
+                (a.0 - 0.01 * direction.0, a.1 - 0.01 * direction.1),
+                (
+                    direction.0 * 2.0_f64.powi(1000),
+                    direction.1 * 2.0_f64.powi(1000),
+                ),
+            ])
+        })
+        .collect();
+    let polygons = polygonize_with_limits(&input(lines), RelateLimits::default(), None)
+        .expect("faccia della girandola");
+    assert_eq!(polygons.len(), 1);
+    assert_eq!(polygons[0].exterior().0.len(), 69);
+    assert!(polygons[0].interiors().is_empty());
+}

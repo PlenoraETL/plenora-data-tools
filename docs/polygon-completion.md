@@ -36,7 +36,8 @@ sito XY; il primo vertice originale conserva i propri bit.
 
 ## Precisione e verifica
 
-Noding, selezione e area usano razionali esatti. `Originals`, `ordinate` e
+Noding e selezione usano razionali esatti. Il verso viene dalla svolta al
+minimo lessicografico; i buchi vengono assegnati per annidamento esatto. `Originals`, `ordinate` e
 `verify_publication` sono quelli delle booleane lineari: un solo arrotondatore
 nearest-even e un solo verificatore. Errore <= mezza ulp per ordinata
 costruita, nelle unita' delle coordinate; nessuno snap metrico.
@@ -61,10 +62,15 @@ stimato delle dimensioni. Nessuna serializzazione in questa API.
 L'aritmetica usa interi di massimo 145173 bit. Prima di ogni somma/sottrazione
 si verifica `max(bits(a),bits(b))+1`, prima di un prodotto `bits(a)+bits(b)`,
 prima di uno shift `bits(a)+k`. Divisione, resto, segno e copia non crescono.
-L'invariante vale anche per gli accumulatori di area, indipendentemente dal
-numero di lati. Il superamento e' `ReservationLimit`; puo' essere rifiutata
-anche una cancellazione che avrebbe un risultato ridotto piccolo. Nessuna
-precisione viene ridotta. La derivazione e' in `noding/bounds.rs`.
+Il confronto d'area viene eseguito solo a parita' di minimo XY. Un filtro
+su una griglia binaria a 128 bit frazionari conta rigorosamente i resti.
+Se non decide, la divisione binaria prosegue mantenendo un resto limitato
+per ciascun termine; non costruisce mai il denominatore comune. La somma
+dei bit dei denominatori fornisce un limite di separazione che permette di
+certificare anche l'uguaglianza esatta. Cresce il lavoro, contato dal budget
+del chiamante, non la larghezza dei singoli interi. Il tetto interno degli
+interi produce `AccuracyUnproven`; `ReservationLimit` indica invece il
+budget di memoria esaurito. La derivazione e' in `noding/bounds.rs`.
 
 Il massimo sforamento contabile dopo la creazione di un singolo intero e'
 `RelateLimits::MAX_VALUE_BYTES`. Input preso in prestito, scratch privati

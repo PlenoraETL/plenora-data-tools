@@ -18,7 +18,7 @@ mod arrangement;
 #[deny(clippy::disallowed_methods)]
 mod arrangement_exhaustive;
 pub(crate) mod arrangement_indexed;
-mod interval_index;
+pub(crate) mod interval_index;
 
 /// Limiti della matrice sul noder comune (API 6.1.0 non rilasciata).
 /// Lavoro e nodi sono cumulativi; contenitori e aritmetica hanno ricevute vive.

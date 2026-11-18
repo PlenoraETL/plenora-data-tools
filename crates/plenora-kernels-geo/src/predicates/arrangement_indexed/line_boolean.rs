@@ -752,38 +752,36 @@ fn verify_surface_edges(
     edges: &[PublishedEdge<'_>],
     work: &mut Work<'_>,
 ) -> Result<(), LineBooleanError> {
-    let mut consumed = CountedVec::new();
+    let key = |coords: [Coord<f64>; 2]| {
+        [
+            coords[0].x.to_bits(),
+            coords[0].y.to_bits(),
+            coords[1].x.to_bits(),
+            coords[1].y.to_bits(),
+        ]
+    };
+    let mut expected = CountedVec::new();
+    let mut actual = CountedVec::new();
     for edge in edges {
-        work.push(&mut consumed, !edge.surface)?;
+        if edge.surface {
+            work.push(&mut expected, key(edge.coords))?;
+        }
     }
     for polygon in polygons {
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
-            work.step()?;
             for pair in ring.0.windows(2) {
-                work.step()?;
-                let mut found = false;
-                for (id, edge) in edges.iter().enumerate() {
-                    work.step()?;
-                    if consumed[id] {
-                        continue;
-                    }
-                    if pair.iter().zip(edge.coords).all(|(a, b)| {
-                        a.x.to_bits() == b.x.to_bits() && a.y.to_bits() == b.y.to_bits()
-                    }) {
-                        consumed[id] = true;
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    return Err(LineBooleanError::InvalidRoundedTopology);
-                }
+                work.push(&mut actual, key([pair[0], pair[1]]))?;
             }
         }
     }
-    for used in consumed {
+    crate::noding::sorted(&mut expected, |a, b| Ok(a.cmp(b)), work)?;
+    crate::noding::sorted(&mut actual, |a, b| Ok(a.cmp(b)), work)?;
+    if expected.len() != actual.len() {
+        return Err(LineBooleanError::InvalidRoundedTopology);
+    }
+    for (a, b) in expected.iter().zip(&actual) {
         work.step()?;
-        if !used {
+        if a != b {
             return Err(LineBooleanError::InvalidRoundedTopology);
         }
     }
@@ -983,9 +981,19 @@ pub(crate) fn verify_publication(
             }
         }
         if let Geometry::GeometryCollection(gs) = polygons {
+            use crate::predicates::interval_index::{geometry_bounds, BoxIndex};
+            let mut bounds = CountedVec::new();
+            for g in &gs.0 {
+                let b = geometry_bounds(g, work)?;
+                work.push(&mut bounds, b)?;
+            }
+            let index = BoxIndex::new(bounds, work)?;
             for (i, a) in gs.0.iter().enumerate() {
-                for b in &gs.0[..i] {
-                    if super::relate(a, b, work)?.cells()[0] == b'2' {
+                for j in index.candidates(index.at(i), work)? {
+                    if j >= i {
+                        continue;
+                    }
+                    if super::relate(a, &gs.0[j], work)?.cells()[0] == b'2' {
                         return Err(LineBooleanError::InvalidRoundedTopology);
                     }
                 }

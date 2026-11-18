@@ -4,7 +4,7 @@ use super::line_boolean::{
 };
 use super::{point_boolean::copy_line, Shape};
 use crate::noding::faces::{FaceGraph, FaceRing};
-use crate::noding::{CountedVec, Edge, Work, P, Q};
+use crate::noding::{CountedVec, Edge, Work, P};
 use crate::predicates::{PredicateError, RelateLimits};
 use geo::{Geometry, LineString, MultiPoint, Polygon};
 use std::cmp::Ordering;
@@ -62,7 +62,8 @@ impl From<LineBooleanError> for PolygonCompletionError {
 /// e verifiche: passi e byte limitano anche lati e facce prima della crescita.
 /// Ogni copia di coordinata consuma nodi. Input prestato, overhead allocatore
 /// e scratch privati `BigInt` sono esclusi come in `RelateLimits`. Le primitive
-/// intere rifiutano prima di superare 145173 bit, anche nelle somme di area;
+/// intere rifiutano prima di superare 145173 bit. I confronti d'area usano
+/// somme a punto fisso con resto certificato, senza denominatori cumulativi;
 /// il massimo sforamento contabile resta `RelateLimits::MAX_VALUE_BYTES`.
 /// Deadline precede cancellazione, senza modificare le altre API.
 /// Checkpoint nei cicli, nei confronti di ordinamento e alla pubblicazione.
@@ -81,6 +82,18 @@ pub fn polygon_completion_with_limits(
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<Polygon<f64>>, PolygonCompletionError> {
     execute(polygons, linework, &mut Work::new(limits, cancelled))
+}
+
+fn occupied_index(
+    copies: &[Geometry<f64>],
+    work: &mut Work<'_>,
+) -> Result<crate::predicates::interval_index::BoxIndex, PredicateError> {
+    let mut bounds = CountedVec::new();
+    for g in copies {
+        let b = crate::predicates::interval_index::geometry_bounds(g, work)?;
+        work.push(&mut bounds, b)?;
+    }
+    crate::predicates::interval_index::BoxIndex::new(bounds, work)
 }
 
 fn validate_polygons(
@@ -117,12 +130,15 @@ fn validate_polygons(
         }
         let geometry = Geometry::Polygon(Polygon::new(shell, holes.export(work)?));
         super::relate(&geometry, &empty, work)?;
-        for previous in &copies {
-            if super::relate(previous, &geometry, work)?.cells()[0] == b'2' {
+        work.push(&mut copies, geometry)?;
+    }
+    let index = occupied_index(&copies, work)?;
+    for (i, geometry) in copies.iter().enumerate() {
+        for j in index.candidates(index.at(i), work)? {
+            if j < i && super::relate(&copies[j], geometry, work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::OverlappingInteriors);
             }
         }
-        work.push(&mut copies, geometry)?;
     }
     Ok(copies)
 }
@@ -217,7 +233,6 @@ fn occupied(
 struct OutputFace {
     shell: usize,
     holes: CountedVec<usize>,
-    area: Q,
 }
 
 fn roles(
@@ -255,31 +270,43 @@ fn select(
     let mut result = CountedVec::new();
     for (id, ring) in graph.rings.iter().enumerate() {
         work.step()?;
-        if !ring.area.sign().is_gt() || occupied(ring, graph, shape, work)? {
+        if !ring.orientation.is_gt() || occupied(ring, graph, shape, work)? {
             continue;
         }
         let (mut new, mut old) = roles(ring, graph, roles_by_source, work)?;
         let mut holes = CountedVec::new();
-        let mut area = ring.area.try_clone()?;
         for &h in &graph.holes[id] {
             let (hn, ho) = roles(&graph.rings[h], graph, roles_by_source, work)?;
             new |= hn;
             old |= ho;
-            area = area.try_add(&graph.rings[h].area)?;
             work.push(&mut holes, h)?;
         }
         if new && old {
-            work.push(
-                &mut result,
-                OutputFace {
-                    shell: id,
-                    holes,
-                    area,
-                },
-            )?;
+            work.push(&mut result, OutputFace { shell: id, holes })?;
         }
     }
     Ok(result)
+}
+
+fn compare_areas(
+    a: &[usize],
+    b: &[usize],
+    graph: &FaceGraph,
+    work: &mut Work<'_>,
+) -> Result<Ordering, PredicateError> {
+    let mut terms = CountedVec::new();
+    for (rings, subtract) in [(a, false), (b, true)] {
+        for &id in rings {
+            let vertices = &graph.rings[id].vertices;
+            for i in 0..vertices.len() {
+                work.step()?;
+                let term = graph.points[vertices[i]]
+                    .try_cross(&graph.points[vertices[(i + 1) % vertices.len()]])?;
+                work.push(&mut terms, (term, subtract))?;
+            }
+        }
+    }
+    crate::noding::sum_sign(&terms, work)
 }
 
 fn ring_cmp(
@@ -287,7 +314,7 @@ fn ring_cmp(
     b: usize,
     graph: &FaceGraph,
     coords: &[geo::Coord<f64>],
-    areas: (&Q, &Q),
+    areas: (&[usize], &[usize]),
     work: &mut Work<'_>,
 ) -> Result<Ordering, PredicateError> {
     let (a, b) = (&graph.rings[a], &graph.rings[b]);
@@ -295,7 +322,7 @@ fn ring_cmp(
     if !order.is_eq() {
         return Ok(order);
     }
-    let order = areas.0.try_cmp(areas.1)?;
+    let order = compare_areas(areas.0, areas.1, graph, work)?;
     if !order.is_eq() {
         return Ok(order);
     }
@@ -337,41 +364,34 @@ fn canonicalize(
         }
     }
     for face in faces.iter_mut() {
-        for i in 1..face.holes.len() {
-            let mut j = i;
-            while j > 0 {
-                work.step()?;
-                let (a, b) = (face.holes[j - 1], face.holes[j]);
-                // I buchi hanno area negativa: invertire il confronto delle aree.
-                if !ring_cmp(
-                    a,
-                    b,
-                    graph,
-                    coords,
-                    (&graph.rings[b].area, &graph.rings[a].area),
-                    work,
-                )?
-                .is_gt()
-                {
-                    break;
-                }
-                face.holes.swap(j - 1, j);
-                j -= 1;
-            }
-        }
+        crate::noding::sorted_with_work(
+            &mut face.holes,
+            |a, b, work| ring_cmp(*a, *b, graph, coords, (&[*b], &[*a]), work),
+            work,
+        )?;
     }
-    for i in 1..faces.len() {
-        let mut j = i;
-        while j > 0 {
-            work.step()?;
-            let (a, b) = (&faces[j - 1], &faces[j]);
-            if !ring_cmp(a.shell, b.shell, graph, coords, (&a.area, &b.area), work)?.is_gt() {
-                break;
+    crate::noding::sorted_with_work(
+        faces,
+        |a, b, work| {
+            let order = coord_cmp(
+                coords[graph.rings[a.shell].vertices[0]],
+                coords[graph.rings[b.shell].vertices[0]],
+            );
+            if !order.is_eq() {
+                return Ok(order);
             }
-            faces.swap(j - 1, j);
-            j -= 1;
-        }
-    }
+            let mut aa = CountedVec::new();
+            let mut bb = CountedVec::new();
+            for &id in std::iter::once(&a.shell).chain(&a.holes) {
+                work.push(&mut aa, id)?;
+            }
+            for &id in std::iter::once(&b.shell).chain(&b.holes) {
+                work.push(&mut bb, id)?;
+            }
+            ring_cmp(a.shell, b.shell, graph, coords, (&aa, &bb), work)
+        },
+        work,
+    )?;
     Ok(())
 }
 
@@ -402,38 +422,36 @@ fn simplify_selected_rings(
             work.push(&mut selected, id)?;
         }
     }
+    let mut degree = CountedVec::new();
+    for _ in &graph.points {
+        work.push(&mut degree, 0_u8)?;
+    }
     for &id in &selected {
-        let mut edges = CountedVec::new();
-        let mut incident = CountedVec::new();
-        for &other in &selected {
-            let ring = &graph.rings[other];
-            for i in 0..ring.vertices.len() {
-                work.nodes(2)?;
-                let edge = Edge {
-                    a: graph.points[ring.vertices[i]].try_clone()?,
-                    b: graph.points[ring.vertices[(i + 1) % ring.vertices.len()]].try_clone()?,
-                };
-                work.push(
-                    if id == other {
-                        &mut edges
-                    } else {
-                        &mut incident
-                    },
-                    edge,
-                )?;
-            }
+        for &v in &graph.rings[id].vertices {
+            work.step()?;
+            degree[v] = (degree[v] + 2).min(3);
         }
-        let reduced = super::polygon_boolean::carried_edges(&edges, &incident, originals, work)?;
+    }
+    for &id in &selected {
+        let ring = &graph.rings[id];
         let mut vertices = CountedVec::new();
         let mut atoms = CountedVec::new();
-        for edge in reduced {
-            for (i, &vertex) in graph.rings[id].vertices.iter().enumerate() {
-                work.step()?;
-                if graph.points[vertex] == edge.a {
-                    work.push(&mut vertices, vertex)?;
-                    work.push(&mut atoms, graph.rings[id].atoms[i])?;
-                    break;
-                }
+        for (i, &v) in ring.vertices.iter().enumerate() {
+            work.step()?;
+            let p = &graph.points[v];
+            let prev =
+                &graph.points[ring.vertices[(i + ring.vertices.len() - 1) % ring.vertices.len()]];
+            let next = &graph.points[ring.vertices[(i + 1) % ring.vertices.len()]];
+            if degree[v] != 2
+                || originals.contains(p, work)?
+                || !p
+                    .try_sub(prev)?
+                    .try_cross(&next.try_sub(p)?)?
+                    .sign()
+                    .is_eq()
+            {
+                work.push(&mut vertices, v)?;
+                work.push(&mut atoms, ring.atoms[i])?;
             }
         }
         graph.rings[id].vertices = vertices;
@@ -561,11 +579,17 @@ fn execute(
             work.step()?;
             let mut selected = position + 1 == path.len();
             if !selected {
-                for (id, point) in graph.points.iter().enumerate() {
+                let (mut low, mut high) = (0, graph.points.len());
+                while low < high {
                     work.step()?;
-                    if selected_points[id] && point == p {
-                        selected = true;
-                        break;
+                    let mid = low + (high - low) / 2;
+                    match super::line_boolean::point_cmp(&graph.points[mid], p)? {
+                        Ordering::Less => low = mid + 1,
+                        Ordering::Greater => high = mid,
+                        Ordering::Equal => {
+                            selected = selected_points[mid];
+                            break;
+                        }
                     }
                 }
             }
@@ -618,11 +642,13 @@ fn execute(
         return Err(PolygonCompletionError::InvalidRoundedTopology);
     };
     let mut polygons = CountedVec::new();
+    let occupied_index = occupied_index(&copies, work)?;
     for geometry in output.0 {
         // L'area occupata non e' un output modificabile del completamento.
         // GOP-020 richiede disgiunzione anche dopo il rounding dei nodi nuovi.
-        for original in &copies {
-            if super::relate(&geometry, original, work)?.cells()[0] == b'2' {
+        let bounds = crate::predicates::interval_index::geometry_bounds(&geometry, work)?;
+        for id in occupied_index.candidates(&bounds, work)? {
+            if super::relate(&geometry, &copies[id], work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::InvalidRoundedTopology);
             }
         }

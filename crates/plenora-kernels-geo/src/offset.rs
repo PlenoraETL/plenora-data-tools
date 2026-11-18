@@ -489,6 +489,28 @@ fn construct(
     )
 }
 
+fn enclosed_bounds(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<[Q; 4], OffsetError> {
+    let mut bounds = [
+        points[0].x.low.try_clone()?,
+        points[0].x.high.try_clone()?,
+        points[0].y.low.try_clone()?,
+        points[0].y.high.try_clone()?,
+    ];
+    for p in &points[1..] {
+        for (i, q) in [&p.x.low, &p.x.high, &p.y.low, &p.y.high]
+            .into_iter()
+            .enumerate()
+        {
+            work.step()?;
+            let order = q.try_cmp(&bounds[i])?;
+            if (i % 2 == 0 && order.is_lt()) || (i % 2 == 1 && order.is_gt()) {
+                bounds[i] = q.try_clone()?;
+            }
+        }
+    }
+    Ok(bounds)
+}
+
 // Gli inviluppi separati certificano l'assenza di incidenza senza orientazioni.
 // Negli altri casi si certificano i segni necessari sull'intero intervallo.
 #[allow(clippy::too_many_lines)]
@@ -500,8 +522,17 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
         work.push(&mut row, Enclosure::exact(work.integer(1)?)?)?;
         work.push(&mut parameters, row)?;
     }
+    let mut bounds = CountedVec::new();
+    for pair in points.windows(2) {
+        let b = enclosed_bounds(pair, work)?;
+        work.push(&mut bounds, b)?;
+    }
+    let index = crate::predicates::interval_index::BoxIndex::new(bounds, work)?;
     for i in 0..points.len() - 1 {
-        for j in i + 1..points.len() - 1 {
+        for j in index.candidates(index.at(i), work)? {
+            if j <= i {
+                continue;
+            }
             work.pair()?;
             let mut separated = false;
             for axis in [true, false] {
@@ -601,12 +632,11 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
             }
         }
     }
-    for row in &parameters {
-        for (i, a) in row.iter().enumerate() {
-            for b in &row[i + 1..] {
-                work.step()?;
-                a.sub(b)?.sign()?;
-            }
+    for row in parameters.iter_mut() {
+        crate::noding::sorted(row, |a, b| a.low.try_cmp(&b.low), work)?;
+        for pair in row.windows(2) {
+            work.step()?;
+            pair[0].sub(&pair[1])?.sign()?;
         }
     }
     Ok(())
@@ -741,26 +771,38 @@ fn certify_arcs(
     let radius = rational(options.distance.abs(), work)?;
     let square = Enclosure::exact(radius.try_mul(&radius)?)?;
     let mut lenses = CountedVec::new();
-    for (i, pair) in points.windows(2).enumerate() {
-        let mut lens = None;
-        for arc in arcs {
-            work.step()?;
-            if i >= arc.first && i < arc.last {
-                lens = Some(lens_triangle(
-                    &pair[0], &pair[1], arc.center, &square, work,
-                )?);
-                break;
-            }
-        }
-        work.push(&mut lenses, lens)?;
+    for _ in points.windows(2) {
+        work.push(&mut lenses, None)?;
     }
+    for arc in arcs {
+        for i in arc.first..arc.last {
+            work.step()?;
+            lenses[i] = Some(lens_triangle(
+                &points[i],
+                &points[i + 1],
+                arc.center,
+                &square,
+                work,
+            )?);
+        }
+    }
+    let mut bounds = CountedVec::new();
+    for (i, pair) in points.windows(2).enumerate() {
+        let b = enclosed_bounds(
+            lenses[i].as_ref().map_or(pair, |triangle| &triangle[..]),
+            work,
+        )?;
+        work.push(&mut bounds, b)?;
+    }
+    let index = crate::predicates::interval_index::BoxIndex::new(bounds, work)?;
     for arc in arcs {
         for chord in arc.first..arc.last {
             let triangle = lenses[chord]
                 .as_ref()
                 .ok_or(OffsetError::AccuracyUnproven)?;
             let mut crossing = false;
-            for (i, pair) in points.windows(2).enumerate() {
+            for i in index.candidates(index.at(chord), work)? {
+                let pair = &points[i..i + 2];
                 work.step()?;
                 if i + 1 >= arc.first && i <= arc.last {
                     continue;

@@ -118,21 +118,48 @@ pub fn sorted<T>(
     compare: impl Fn(&T, &T) -> Result<Ordering, PredicateError>,
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
-    // Insertion sort: ogni confronto e' interrompibile, nessuna allocazione.
-    for i in 1..values.len() {
-        let mut j = i;
-        while j > 0 {
+    sorted_with_work(values, |a, b, _| compare(a, b), work)
+}
+pub fn sorted_with_work<T>(
+    values: &mut [T],
+    compare: impl Fn(&T, &T, &mut Work<'_>) -> Result<Ordering, PredicateError>,
+    work: &mut Work<'_>,
+) -> Result<(), PredicateError> {
+    fn sift<T>(
+        values: &mut [T],
+        mut root: usize,
+        compare: &impl Fn(&T, &T, &mut Work<'_>) -> Result<Ordering, PredicateError>,
+        work: &mut Work<'_>,
+    ) -> Result<(), PredicateError> {
+        while root < values.len() / 2 {
+            let mut child = root * 2 + 1;
+            if child + 1 < values.len() {
+                work.step()?;
+                if compare(&values[child], &values[child + 1], work)?.is_lt() {
+                    child += 1;
+                }
+            }
             work.step()?;
-            if compare(&values[j - 1], &values[j])? != Ordering::Greater {
+            if !compare(&values[root], &values[child], work)?.is_lt() {
                 break;
             }
-            values.swap(j - 1, j);
-            j -= 1;
+            values.swap(root, child);
+            root = child;
         }
+        Ok(())
+    }
+    for root in (0..values.len() / 2).rev() {
+        sift(values, root, &compare, work)?;
+    }
+    for end in (1..values.len()).rev() {
+        work.step()?;
+        values.swap(0, end);
+        sift(&mut values[..end], 0, &compare, work)?;
     }
     Ok(())
 }
-pub use exact::Q;
+
+pub use exact::{sum_sign, Q};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct P {
@@ -425,6 +452,18 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
     use std::vec::Vec;
+
+    #[test]
+    fn heapsort_matches_generic_with_duplicates() {
+        for count in [0, 1, 2, 16, 64, 511] {
+            let mut actual: Vec<_> = (0..count).map(|i| (i * 37 + 11) % 23).collect();
+            let mut expected = actual.clone();
+            expected.sort_unstable();
+            let mut work = Work::new(RelateLimits::default(), None);
+            sorted(&mut actual, |a, b| Ok(a.cmp(b)), &mut work).expect("ordinamento");
+            assert_eq!(actual, expected);
+        }
+    }
 
     fn q(n: i32) -> Q {
         Work::new(RelateLimits::default(), None)

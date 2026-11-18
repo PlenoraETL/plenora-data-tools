@@ -109,6 +109,7 @@
     "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/reference.py": [],
     "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/stereographic.py": [],
     "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/tm.py": [],
+    "crates/plenora-kernels-geo/tests/oracles/publication_fraction.py": [],
     "crates/plenora-pipeline/tests/comune/genera_config_md5.py": [],
     "crates/plenora-pipeline/tests/comune/genera_hash_attesi.py": [],
     "crates/plenora-pipeline/tests/comune_geo/genera_trasformazioni.py": [],
@@ -1678,6 +1679,7 @@
       "accumulator_tracks_the_running_estimate"
     ],
     "crates/plenora-kernels-geo/src/noding.rs": [
+      "heapsort_matches_generic_with_duplicates",
       "rational_crossing_and_collinear_endpoints",
       "grids_count_exact_pairs_and_segment_node_incidences",
       "combs_and_stripes_have_analytic_counts",
@@ -1695,6 +1697,8 @@
       "normalized_intersections_fit_the_per_object_bound"
     ],
     "crates/plenora-kernels-geo/src/noding/exact.rs": [
+      "streamed_sum_proves_rational_equalities_and_close_signs",
+      "bounded_sum_matches_rational_oracle",
       "clone_drop_and_arithmetic_share_the_live_budget",
       "exact_threshold_and_single_value_overshoot",
       "failed_clone_releases_partial_receipts_and_rejects_foreign_budgets",
@@ -1711,7 +1715,8 @@
       "nested_components_keep_hole_provenance",
       "interruption_between_noding_and_face_enumeration",
       "public_completion_against_independent_cycles_with_rational_noding",
-      "public_completion_oracle_nested_component_and_dangle"
+      "public_completion_oracle_nested_component_and_dangle",
+      "indexed_ring_locations_and_orientation_match_generic"
     ],
     "crates/plenora-kernels-geo/src/noding/storage.rs": [
       "capacity_lifetime_and_failed_growth",
@@ -1859,7 +1864,8 @@
       "mixed_dimensions_empty_and_filter_before_publication",
       "serialized_surface_is_bound_to_the_certificate",
       "polygon_combs_have_independent_combinatorial_counts",
-      "multipolygon_point_contact_is_supported"
+      "multipolygon_point_contact_is_supported",
+      "indexed_successor_matches_exhaustive_rays"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion/tests.rs": [
       "one_and_two_faces_canonical_and_valid",
@@ -1880,6 +1886,7 @@
       "adjacent_existing_polygons_and_null_line_edges"
     ],
     "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
+      "ranges_and_boxes_match_exhaustive_candidates",
       "sparse_queries_have_analytic_work",
       "grid_queries_have_analytic_work",
       "interval_candidates_match_exhaustive_including_reversed_bounds"
@@ -2321,6 +2328,12 @@
       "overlay_e_copertura_su_sovrapposizioni_si_fermano_al_margine",
       "buffer_a_zig_zag_si_ferma_al_margine",
       "i_risultati_hanno_capacita_esatta_e_il_conto_e_al_byte"
+    ],
+    "crates/plenora-kernels-geo/tests/publication_regressions.rs": [
+      "p3b_fraction_two_hundred_unions_and_eleven_completion_faces",
+      "carried_surfaces_and_lines_have_no_constructed_kinks",
+      "duplicate_sources_do_not_make_a_node_necessary",
+      "completion_dangling_crossing_does_not_bend_carried_boundary"
     ],
     "crates/plenora-kernels-geo/tests/qualifica_415.rs": [
       "adapter_diretto_rifiuta_geography_e_spherical_anche_senza_batch"
@@ -3487,6 +3500,11 @@
     "crates/plenora-kernels-geo/tests/fixtures/reperto_a.wkb",
     "crates/plenora-kernels-geo/tests/fixtures/reperto_b.wkb",
     "crates/plenora-kernels-geo/tests/fixtures/usng-oracle.csv",
+    "crates/plenora-kernels-geo/tests/oracles/crossing_fraction.txt",
+    "crates/plenora-kernels-geo/tests/oracles/dense_input.txt",
+    "crates/plenora-kernels-geo/tests/oracles/dense_offset.txt",
+    "crates/plenora-kernels-geo/tests/oracles/hairpin_fraction.txt",
+    "crates/plenora-kernels-geo/tests/oracles/publication_fraction.txt",
     "crates/plenora-kernels-table/tests/fixtures/join-one-surviving-primary-canonical.json",
     "crates/plenora-kernels-table/tests/riferimenti/primary-composition-provenienza.json",
     "crates/plenora-kernels-table/tests/riferimenti/primary-composition-v1/append-different-ids-same-output.json",

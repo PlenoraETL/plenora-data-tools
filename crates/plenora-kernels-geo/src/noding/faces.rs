@@ -1,5 +1,6 @@
 //! Facce razionali e provenienza dei lati del noder comune.
-use super::{sorted, CountedVec, Edge, Work, P, Q};
+use super::{sorted, CountedVec, Edge, Work, P};
+use crate::predicates::interval_index::{BoxIndex, IntervalIndex};
 use crate::predicates::PredicateError;
 use std::cmp::Ordering;
 
@@ -40,30 +41,59 @@ pub fn enumerate(
     for _ in &rings {
         work.push(&mut holes, CountedVec::new())?;
     }
+    let mut bounds = CountedVec::new();
+    let mut owners = CountedVec::new();
+    for _ in &atoms {
+        work.push(&mut owners, None)?;
+    }
+    for (id, ring) in rings.iter().enumerate() {
+        let p = &points[ring.vertices[0]];
+        let mut bb = [
+            p.x.try_clone()?,
+            p.x.try_clone()?,
+            p.y.try_clone()?,
+            p.y.try_clone()?,
+        ];
+        for &v in &ring.vertices {
+            for (i, q) in [&points[v].x, &points[v].x, &points[v].y, &points[v].y]
+                .into_iter()
+                .enumerate()
+            {
+                work.step()?;
+                let order = q.try_cmp(&bb[i])?;
+                if (i % 2 == 0 && order.is_lt()) || (i % 2 == 1 && order.is_gt()) {
+                    bb[i] = q.try_clone()?;
+                }
+            }
+        }
+        work.push(&mut bounds, bb)?;
+        if ring.orientation.is_gt() {
+            for &atom in &ring.atoms {
+                work.step()?;
+                owners[atom] = Some(id);
+            }
+        }
+    }
+    let index = BoxIndex::new(bounds, work)?;
     for (h, hole) in rings.iter().enumerate() {
         work.step()?;
-        if !hole.area.sign().is_lt() {
+        if !hole.orientation.is_lt() {
             continue;
         }
         let mut parent: Option<usize> = None;
-        for (i, shell) in rings.iter().enumerate() {
+        for i in index.point_candidates(&points[hole.vertices[0]], work)? {
+            let shell = &rings[i];
             work.step()?;
-            if !shell.area.sign().is_gt() {
+            if !shell.orientation.is_gt() || owners[hole.atoms[0]] == Some(i) {
                 continue;
             }
             // Un vertice strettamente interno basta: cicli del grafo gia' nodato
             // non possono attraversarsi. I contatti sul bordo vengono saltati.
-            let mut contained = false;
-            for &v in &hole.vertices {
-                if inside(&points[v], shell, &points, work)? {
-                    contained = true;
-                    break;
-                }
-            }
+            let contained = nested(hole, shell, &points, work)?;
             if contained
                 && match parent {
                     None => true,
-                    Some(j) => shell.area.try_cmp(&rings[j].area)?.is_lt(),
+                    Some(j) => nested(shell, &rings[j], &points, work)?,
                 }
             {
                 parent = Some(i);
@@ -98,8 +128,9 @@ pub struct ArcSide {
     pub atom: usize,
 }
 pub struct FaceRing {
+    index: IntervalIndex,
     pub vertices: CountedVec<usize>,
-    pub area: Q,
+    pub orientation: Ordering,
     pub atoms: CountedVec<usize>,
 }
 
@@ -203,6 +234,29 @@ fn graph(
     Ok((arcs, atoms))
 }
 
+/// Un ciclo semplice ha il verso della svolta al minimo lessicografico.
+fn orientation(
+    vertices: &[usize],
+    points: &[P],
+    work: &mut Work<'_>,
+) -> Result<Ordering, PredicateError> {
+    if vertices.len() < 3 {
+        return Ok(Ordering::Equal);
+    }
+    let mut minimum = 0;
+    for i in 1..vertices.len() {
+        work.step()?;
+        if vertices[i] < vertices[minimum] {
+            minimum = i;
+        }
+    }
+    let n = vertices.len();
+    let p = &points[vertices[minimum]];
+    let prev = &points[vertices[(minimum + n - 1) % n]];
+    let next = &points[vertices[(minimum + 1) % n]];
+    Ok(p.try_sub(prev)?.try_cross(&next.try_sub(p)?)?.sign())
+}
+
 fn rings(
     arcs: &mut [ArcSide],
     points: &[P],
@@ -217,20 +271,26 @@ fn rings(
         |path, arcs, work| {
             let mut vertices = CountedVec::new();
             let mut atoms = CountedVec::new();
-            let mut area = work.integer(0)?;
             for &id in path {
                 work.step()?;
                 let arc = &arcs[id];
-                area = area.try_add(&points[arc.from].try_cross(&points[arc.to])?)?;
                 work.push(&mut vertices, arc.from)?;
                 work.push(&mut atoms, arc.atom)?;
             }
-            if !area.sign().is_eq() {
+            let orientation = orientation(&vertices, points, work)?;
+            if !orientation.is_eq() {
+                let index = IntervalIndex::new(
+                    vertices.iter().enumerate().map(|(i, &v)| {
+                        (&points[v].y, &points[vertices[(i + 1) % vertices.len()]].y)
+                    }),
+                    work,
+                )?;
                 work.push(
                     &mut result,
                     FaceRing {
+                        index,
                         vertices,
-                        area,
+                        orientation,
                         atoms,
                     },
                 )?;
@@ -289,15 +349,30 @@ pub fn walk(
     Ok(())
 }
 
-// Parita' del raggio orizzontale; un punto sul bordo non e' interno.
+fn nested(
+    inner: &FaceRing,
+    outer: &FaceRing,
+    points: &[P],
+    work: &mut Work<'_>,
+) -> Result<bool, PredicateError> {
+    for &v in &inner.vertices {
+        work.step()?;
+        if let Some(inside) = inside(&points[v], outer, points, work)? {
+            return Ok(inside);
+        }
+    }
+    Ok(false)
+}
+
+// Parita' del raggio orizzontale; None distingue il bordo dall'esterno.
 fn inside(
     p: &P,
     ring: &FaceRing,
     points: &[P],
     work: &mut Work<'_>,
-) -> Result<bool, PredicateError> {
+) -> Result<Option<bool>, PredicateError> {
     let mut odd = false;
-    for i in 0..ring.vertices.len() {
+    for i in ring.index.candidates(&p.y, work)? {
         work.step()?;
         let a = &points[ring.vertices[i]];
         let b = &points[ring.vertices[(i + 1) % ring.vertices.len()]];
@@ -306,7 +381,7 @@ fn inside(
             b: b.try_clone()?,
         };
         if edge.contains(p)? {
-            return Ok(false);
+            return Ok(None);
         }
         if a.y.try_cmp(&p.y)?.is_gt() != b.y.try_cmp(&p.y)?.is_gt() {
             let cross = b.try_sub(a)?.try_cross(&p.try_sub(a)?)?.sign();
@@ -315,7 +390,7 @@ fn inside(
             }
         }
     }
-    Ok(odd)
+    Ok(Some(odd))
 }
 
 #[cfg(test)]

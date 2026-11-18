@@ -737,3 +737,61 @@ fn multipolygon_point_contact_is_supported() {
     assert_eq!(area(&result), 2.0);
     assert!(matches!(result, Geometry::MultiPolygon(ref ps) if ps.0.len() == 2));
 }
+
+#[test]
+fn indexed_successor_matches_exhaustive_rays() {
+    let mut work = Work::new(RelateLimits::default(), None);
+    let mut edges = Vec::new();
+    for (x, y) in [
+        (1., 0.),
+        (2., 1.),
+        (1., 2.),
+        (0., 1.),
+        (-1., 2.),
+        (-2., 1.),
+        (-1., 0.),
+        (-2., -1.),
+        (-1., -2.),
+        (0., -1.),
+        (1., -2.),
+        (2., -1.),
+    ] {
+        edges.push(Edge {
+            a: P::of_in((0., 0.).into(), &work).expect("origin"),
+            b: P::of_in((x, y).into(), &work).expect("ray"),
+        });
+    }
+    let mut outgoing: Vec<_> = (0..edges.len()).rev().collect();
+    crate::noding::sorted(
+        &mut outgoing,
+        |a, b| angle_cmp(&edges[*a].b, &edges[*b].b),
+        &mut work,
+    )
+    .expect("sort");
+    for i in 0..edges.len() {
+        let current = edges.len();
+        edges.push(Edge {
+            a: edges[i].b.try_clone().expect("ray"),
+            b: edges[i].a.try_clone().expect("origin"),
+        });
+        let incoming = &edges[current].a;
+        let mut before: Option<usize> = None;
+        let mut last: Option<usize> = None;
+        for &id in outgoing.iter().rev() {
+            if angle_cmp(&edges[id].b, incoming).expect("angle").is_lt()
+                && before
+                    .is_none_or(|p| angle_cmp(&edges[p].b, &edges[id].b).expect("angle").is_lt())
+            {
+                before = Some(id);
+            }
+            if last.is_none_or(|p| angle_cmp(&edges[p].b, &edges[id].b).expect("angle").is_lt()) {
+                last = Some(id);
+            }
+        }
+        assert_eq!(
+            successor(current, &edges, &outgoing, &mut work).expect("successor"),
+            before.or(last).expect("ray")
+        );
+        edges.pop();
+    }
+}
