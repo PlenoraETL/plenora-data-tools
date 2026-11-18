@@ -100,6 +100,7 @@
     ],
     "crates/plenora-data-py/typing/sdk_contract.py": [],
     "crates/plenora-io/tests/riferimenti/scrittori/genera.py": [],
+    "crates/plenora-kernels-geo/src/geodesic_distance/reference.py": [],
     "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.py": [],
     "crates/plenora-pipeline/tests/comune/genera_config_md5.py": [],
     "crates/plenora-pipeline/tests/comune/genera_hash_attesi.py": [],
@@ -1524,6 +1525,22 @@
       "shared_paths_rejects_non_polygonal_inputs_and_encodes_rows",
       "coppie_candidate_a_capacita_esatta"
     ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs": [
+      "zero_points_lines_poles_and_seam",
+      "empty_inputs_multiple_radii_and_union",
+      "rejects_non_degenerate_and_negative_point_line",
+      "invalid_geometry_and_ambiguous_path",
+      "exact_limits_and_zero_work",
+      "deadline_precedes_cancel_and_invalid_radii"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/tests.rs": [
+      "primitive_against_equator_and_published_vector",
+      "karney_vertices_dense_boundary_and_reverse_edges",
+      "refinement_duplicates_and_distance_major",
+      "rejects_surface_profile_and_precision_domains",
+      "exact_vertex_memory_work_thresholds_and_atomic_batch",
+      "cancellation_and_deadline_inside_generation"
+    ],
     "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
       "equator_analytic_and_exact_budget",
       "meridian_and_pole_from_metric_integral",
@@ -1532,6 +1549,22 @@
       "multipart_empty_closure_seam_and_duplicates",
       "rounding_cannot_choose_an_antipodal_branch_or_hide_a_short_edge",
       "exact_seam_identity_and_numeric_length_threshold"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_distance/tests.rs": [
+      "internal_equator_and_meridian_minima",
+      "crossing_lines_and_endpoint_minimum",
+      "dateline_and_symmetry",
+      "polygon_interior_hole_and_contained_polygon",
+      "polar_cap_and_antimeridian_surface",
+      "geographiclib_reference_and_antipodes",
+      "exact_work_memory_cancel_deadline_and_crs",
+      "multipart_and_invalid_surfaces",
+      "index_matches_generic_pairs",
+      "independent_geographiclib_global_brackets",
+      "taylor_matches_metric_oracle",
+      "interruption_during_indexing_and_no_product_admission",
+      "surface_orientation_and_complement",
+      "refinement_limits_and_interruptions"
     ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
@@ -1728,6 +1761,24 @@
       "polygon_union_filters_and_typed_errors",
       "point_sets_against_generic_matrix",
       "polygon_pair_budget_exact_threshold"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean/tests.rs": [
+      "rectangles_and_directional_difference",
+      "edge_and_point_contacts",
+      "holes_nesting_and_identity",
+      "stripes_combinatorial_components",
+      "non_dyadic_nodes_and_collapsed_ring_rejection",
+      "tangent_hole_and_disconnected_shells",
+      "exact_resource_thresholds",
+      "deadline_precedes_cancellation_and_invalid_inputs_are_typed",
+      "independent_rational_cell_oracle_area_and_de9im",
+      "independent_fraction_certificate_for_constructed_triangle",
+      "cancellation_and_deadline_during_work",
+      "canonical_shared_minimum_and_reversed_inputs",
+      "deterministic_interruptions_across_the_call",
+      "mixed_dimensions_empty_and_filter_before_publication",
+      "serialized_surface_is_bound_to_the_certificate",
+      "polygon_combs_have_independent_combinatorial_counts"
     ],
     "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
       "sparse_queries_have_analytic_work",
