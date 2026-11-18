@@ -1928,6 +1928,15 @@
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
     ],
+    "crates/plenora-kernels-geo/tests/coordinate_api.rs": [
+      "normative_vectors_both_directions",
+      "enumeration_and_every_inapplicable_option",
+      "datums_profiles_and_option_values_are_closed",
+      "atomic_limits_and_private_errors",
+      "cell_extents_representatives_and_nad27",
+      "angular_pair_grammar_and_rounding",
+      "geographic_cells_and_batch_order"
+    ],
     "crates/plenora-kernels-geo/tests/coordinate_mgrs.rs": [
       "independent_numeric_oracle",
       "source_worked_examples_and_representatives",
