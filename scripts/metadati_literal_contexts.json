@@ -2366,9 +2366,10 @@
     "[[\"token\",\"{\"],[\"token\",\"a\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\"{\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
   ],
-  "crates/plenora-kernels-geo/src/geodesic_densify/geometry_tests.rs": [
-    "[[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
-    "[[\"token\",\"input\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
+  "crates/plenora-kernels-geo/src/geodesic_distance/tests.rs": [
+    "[[\"token\",\"b\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:3857\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
+    "[[\"token\",\"b\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
+    "[[\"token\",\"crossed\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]",
     "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
   ]
 }

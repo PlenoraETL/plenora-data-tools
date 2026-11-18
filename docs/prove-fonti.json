@@ -100,6 +100,7 @@
     ],
     "crates/plenora-data-py/typing/sdk_contract.py": [],
     "crates/plenora-io/tests/riferimenti/scrittori/genera.py": [],
+    "crates/plenora-kernels-geo/src/geodesic_distance/reference.py": [],
     "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.py": [],
     "crates/plenora-pipeline/tests/comune/genera_config_md5.py": [],
     "crates/plenora-pipeline/tests/comune/genera_hash_attesi.py": [],
@@ -1524,14 +1525,6 @@
       "shared_paths_rejects_non_polygonal_inputs_and_encodes_rows",
       "coppie_candidate_a_capacita_esatta"
     ],
-    "crates/plenora-kernels-geo/src/geodesic_densify/geometry_tests.rs": [
-      "polygon_holes_and_multipart_keep_roles_and_order",
-      "seam_polar_caps_and_traversal_select_the_minor_region",
-      "ambiguous_hemisphere_crossings_and_invalid_holes_are_typed",
-      "geometry_empty_linear_and_unsupported_domains",
-      "geometry_limits_and_interruption_precedence",
-      "black_box_interrupts_during_large_emission"
-    ],
     "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
       "equator_analytic_and_exact_budget",
       "meridian_and_pole_from_metric_integral",
@@ -1541,8 +1534,21 @@
       "rounding_cannot_choose_an_antipodal_branch_or_hide_a_short_edge",
       "exact_seam_identity_and_numeric_length_threshold"
     ],
-    "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs": [
-      "exact_live_memory_and_cumulative_validation_work"
+    "crates/plenora-kernels-geo/src/geodesic_distance/tests.rs": [
+      "internal_equator_and_meridian_minima",
+      "crossing_lines_and_endpoint_minimum",
+      "dateline_and_symmetry",
+      "polygon_interior_hole_and_contained_polygon",
+      "polar_cap_and_antimeridian_surface",
+      "geographiclib_reference_and_antipodes",
+      "exact_work_memory_cancel_deadline_and_crs",
+      "multipart_and_invalid_surfaces",
+      "index_matches_generic_pairs",
+      "independent_geographiclib_global_brackets",
+      "taylor_matches_metric_oracle",
+      "interruption_during_indexing_and_no_product_admission",
+      "surface_orientation_and_complement",
+      "refinement_limits_and_interruptions"
     ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
