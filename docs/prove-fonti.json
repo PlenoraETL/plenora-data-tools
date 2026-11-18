@@ -1613,6 +1613,19 @@
       "requested_capacity_matches_the_pinned_vector_backend",
       "growth_overlap_is_reserved_before_allocation"
     ],
+    "crates/plenora-kernels-geo/src/offset/tests.rs": [
+      "directed_butt_zero_and_collinear",
+      "analytical_mitre_bevel_inner_and_limit",
+      "circular_arc_has_analytic_sagitta_certificate",
+      "oblique_irrational_and_non_dyadic_publication",
+      "rejected_domains_and_parameters",
+      "exact_work_thresholds_and_interruptions",
+      "non_simple_output_and_correlated_radicals",
+      "triple_node_created_by_rounding_is_rejected",
+      "cancellation_and_deadline_during_work",
+      "arc_lens_and_rounded_collapse_are_not_silent",
+      "exact_mitre_limit_and_clockwise_arc"
+    ],
     "crates/plenora-kernels-geo/src/operations.rs": [
       "l_area_si_scala_con_il_quadrato",
       "un_area_che_si_annulla_nella_scala_si_rifiuta",
