@@ -1536,10 +1536,20 @@
     "crates/plenora-kernels-geo/src/geodesic_buffer/point/tests.rs": [
       "primitive_against_equator_and_published_vector",
       "karney_vertices_dense_boundary_and_reverse_edges",
+      "model_change_bound_against_dense_karney_arc",
+      "model_change_controls_planning_and_rejects_invalid_bounds",
+      "planar_fan_rejects_folded_and_multiple_winding_rings",
       "refinement_duplicates_and_distance_major",
       "rejects_surface_profile_and_precision_domains",
       "exact_vertex_memory_work_thresholds_and_atomic_batch",
       "cancellation_and_deadline_inside_generation"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union/tests.rs": [
+      "disjoint_overlap_and_three_centers",
+      "distance_major_nested_radii_and_union_per_distance",
+      "near_tangency_is_certified_or_typed_rejection",
+      "cumulative_exact_budget_and_interruptions_inside_union",
+      "global_surface_is_rejected_before_generation"
     ],
     "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
       "equator_analytic_and_exact_budget",

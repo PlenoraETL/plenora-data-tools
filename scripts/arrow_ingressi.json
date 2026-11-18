@@ -8311,6 +8311,24 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs::from": {
+      "signature": "fn from(error: PredicateError) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs::geodesic_multipoint_buffer_with_limits": {
+      "signature": "pub fn geodesic_multipoint_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, union_per_distance: bool, limits: UnionBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<UnionBufferResult<'a>, UnionBufferError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::reserve_export": {
+      "signature": "pub fn reserve_export(&mut self, bytes: u64) -> Result<(), PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
     }
   },
   "python": {
