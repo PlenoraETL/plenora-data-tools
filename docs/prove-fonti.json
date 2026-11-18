@@ -144,6 +144,7 @@
     "scripts/genera_wkt_integrati.py": [],
     "scripts/interop_pin.py": [],
     "scripts/licenze_artefatto.py": [],
+    "scripts/mgrs_oracle.py": [],
     "scripts/modello_costi.py": [],
     "scripts/rust_esito_tokens.py": [
       "test_ranges"
@@ -387,6 +388,7 @@
       "test_una_raccolta_fallita_dopo_gli_id_non_conta",
       "test_una_raccolta_riuscita_conta_gli_id"
     ],
+    "scripts/usng_oracle.py": [],
     "scripts/verifica_adozione.py": [],
     "scripts/verifica_cli_contratti.py": [],
     "scripts/verifica_interop_crs.py": [],
@@ -1366,6 +1368,9 @@
       "insufficient_points_are_omitted_like_manipola_groups",
       "rejects_wrong_geometry_type_and_self_intersection"
     ],
+    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs": [
+      "exact_square_and_digit_boundaries"
+    ],
     "crates/plenora-kernels-geo/src/coordinate_utm.rs": [
       "half_even_components"
     ],
@@ -1860,12 +1865,24 @@
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
     ],
+    "crates/plenora-kernels-geo/tests/coordinate_mgrs.rs": [
+      "independent_numeric_oracle",
+      "source_worked_examples_and_representatives",
+      "zone_band_and_polar_boundaries",
+      "strict_errors_without_caller_data"
+    ],
     "crates/plenora-kernels-geo/tests/coordinate_text.rs": [
       "analytic_written_expectations",
       "parsing_written_expectations",
       "grammar_rejections",
       "domain_and_precision_rejections",
       "deterministic_round_trip_bound"
+    ],
+    "crates/plenora-kernels-geo/tests/coordinate_usng.rs": [
+      "independent_numeric_oracle",
+      "fgdc_worked_examples",
+      "boundaries_and_representatives",
+      "strict_grammar_datum_and_errors"
     ],
     "crates/plenora-kernels-geo/tests/coordinate_utm.rs": [
       "published_and_analytic_references",
@@ -3131,8 +3148,10 @@
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/aree.csv",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/distanze.csv",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/vertici.csv",
+    "crates/plenora-kernels-geo/tests/fixtures/mgrs-oracle.csv",
     "crates/plenora-kernels-geo/tests/fixtures/reperto_a.wkb",
     "crates/plenora-kernels-geo/tests/fixtures/reperto_b.wkb",
+    "crates/plenora-kernels-geo/tests/fixtures/usng-oracle.csv",
     "crates/plenora-kernels-table/tests/fixtures/join-one-surviving-primary-canonical.json",
     "crates/plenora-kernels-table/tests/riferimenti/primary-composition-provenienza.json",
     "crates/plenora-kernels-table/tests/riferimenti/primary-composition-v1/append-different-ids-same-output.json",
