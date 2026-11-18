@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub use forma::{
     AzimuthalShapeBounds, InverseShapeCertificate, LambertShapeBounds, SeparableShapeBounds,
-    TransverseShapeBounds,
+    StereographicShapeBounds, TransverseShapeBounds,
 };
 
 pub use ntv2::{GrigliaNtv2, MAX_BYTE_GRIGLIA};

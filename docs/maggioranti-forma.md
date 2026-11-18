@@ -21,7 +21,7 @@ rispetto alla coordinata normalizzata psi. La longitudine e' affine.
 | Transverse Mercator (9807) | 1/(a k0) | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Non separabile; certificato esatto sul rettangolo z sotto definito, resto di Krueger incluso nel residuo a intervalli |
 | Lambert Conic Conformal 2SP (9802) | 1/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Composizione polare e inversa isometrica separabile; certificato sul rettangolo LCC sotto definito |
 | Lambert Azimuthal Equal Area (9820) | 2/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Composizione sferica e inversa autalica separabile; rettangolo LAEA sotto definito, bordo del disco escluso |
-| Oblique Stereographic (9809) | - | - | - | AccuracyUnproven: non maggiorata la composizione della rotazione con l'inversa conforme |
+| Oblique Stereographic (9809) | 2/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Sfera conforme di Gauss, rotazione e inversa stereografica; rettangolo aperto sotto definito |
 | Hotine Oblique Mercator B (9815) | - | - | - | AccuracyUnproven: non maggiorata la rotazione obliqua con i suoi tagli; il core implementa solo il caso svizzero, angoli 90 gradi |
 
 Le righe non certificate dichiarano lavoro mancante, non impossibilita'
@@ -140,9 +140,8 @@ poligono obliqui. Il pacchetto e' confinato in target/preserve-oracle;
 pyproj non e' disponibile offline. Le fixture a 16384 e 32768 suddivisioni
 sono controlli indipendenti, non una dimostrazione del bound. Le prove C1
 confrontano direttamente la differenza con il bound restituito, senza
-aggiungervi una tolleranza campionaria. I due metodi non certificati
-hanno prove del rifiuto; le loro prove numeriche C1 restano da realizzare
-insieme ai maggioranti mancanti.
+aggiungervi una tolleranza campionaria. Hotine resta non certificata e ha prove del rifiuto; la sua prova numerica C1
+resta da realizzare insieme ai maggioranti mancanti.
 
 ## Transverse Mercator EPSG 9807
 
@@ -591,3 +590,129 @@ restituito senza tolleranza aggiuntiva. Il riferimento campionario e'
 un controllo indipendente, non la dimostrazione del bound.
 Sono inoltre provati i quattro bordi del rettangolo, il bordo e l'esterno
 del disco, residui alterati, non finiti e l'origine nei due emisferi.
+
+## Oblique Stereographic EPSG 9809
+
+Fonti: [EPSG GN 7-2, settembre 2019, 3.3.1.1, pp. 70-73](https://www.iogp.org/wp-content/uploads/2019/09/373-07-02.pdf)
+per la sfera conforme di Gauss e la formula del motore;
+[Snyder 1987, capitolo 21](https://pubs.usgs.gov/publication/pp1395)
+per la sola stereografica sferica (equazioni 20-14, 20-15 e 21-15).
+Non si usa la variante ellissoidica di Snyder, che EPSG distingue dal
+metodo 9809. Le disuguaglianze seguenti sono derivate qui dalle formule.
+
+### Composizione e dominio continuo
+
+Posti q=e^2, psi(phi) la latitudine isometrica gia' definita, si ha:
+
+```text
+R = a sqrt(1-q)/(1-q sin(phi0)^2)
+n = sqrt(1+q cos(phi0)^4/(1-q))
+L = ln(c)/2 = atanh(sin(phi0)/n)-n psi(phi0)
+s0 = sin(chi0) = sin(phi0)/n; c0 = sqrt(1-s0^2)
+atanh(sin(chi)) = n psi(phi)+L
+Lambda = n (lambda-lambda0)
+u = (x-FE)/(R k0); v = (y-FN)/(R k0); r^2=u^2+v^2
+D = 1+r^2/4; T = (1-r^2/4)/D
+X = u/D; Y = c0 T-s0 v/D; Z = s0 T+c0 v/D
+lambda = lambda0+atan2(X,Y)/n
+psi(phi) = psi(phi0)+[atanh(Z)-atanh(s0)]/n
+```
+
+L'identita' per L segue prendendo il logaritmo della formula EPSG per c:
+atanh(sin(chi00))=n psi(phi0). La forma razionale sferica deriva da
+c_angolare=2 atan(r/2), sin(c_angolare)=r/D e cos(c_angolare)=T.
+Vale anche all'origine, senza divisione per r. La rotazione in Y,Z e'
+ortogonale. La successiva inversa isometrica e' separabile, ma la
+composizione da XY non lo e'.
+
+Profilo qualificato: 6000000<=a<=7000000 m, 0<q<=0.008,
+|phi0|<0.92, |lambda0|<2 radianti, 1<=n<=1.01,
+|s0|<sin(0.92), c0>0.605; false origini finite di modulo <=20000000 m,
+a/2<R k0<2a. Le condizioni sono controllate a intervalli.
+Il dominio preserveShape e' il rettangolo aperto |u|<0.1, |v|<0.1,
+intersecato con il dominio CRS ordinario. Bordo, esterno e appartenenza
+stretta non dimostrata danno AccuracyUnproven prima dell'inversa del core.
+Il motore ordinario ammette un dominio piu' ampio; non viene modificato.
+
+u,v sono affini: la convessita' prova il dominio continuo dei segmenti
+e degli interni degli anelli. Qui r<sqrt(0.02), T>0.99,
+Y>0.605*0.99-0.8*0.1>0.51. Inoltre |X|<0.1 e n>=1, dunque
+|lambda-lambda0|<atan(0.1/0.51)<0.194 e |lambda|<2.194<pi.
+Anche il ramo della formula avanti, |n(lambda-lambda0)|<pi, e' rispettato.
+La distanza sferica dal centro e' 2 atan(r/2)<0.142: |chi|<1.062.
+Non ci sono poli, seam o antipodo; la striscia di longitudine e' <pi.
+Inversa stereografica, rotazione, estrazione degli angoli sul ramo e
+inversa isometrica monotona sono iniettive: preservano la topologia.
+
+### Maggioranti della composizione
+
+Per una retta nel piano normalizzato sia h=|(u',v')|. La metrica della
+sfera unitaria e' D^-2 (du^2+dv^2), percio' la velocita' sferica e'
+h/D<=h. Posto g=grad log(1/D)=-(u,v)/(2D), l'accelerazione covariante
+ha componenti 2(g dot p')p'-h^2 g. La norma euclidea di questa
+espressione e' |g|h^2; la norma sferica e' quindi r h^2/(2D^2)<0.071h^2.
+L'accelerazione normale alla sfera ha modulo h^2/D^2<=h^2. Ne segue
+per il vettore S=(X,Y,Z), anche dopo la rotazione:
+
+```text
+|S'| <= h; |S''| <= sqrt(1+0.071^2) h^2 < 1.2 h^2
+|lambda'| <= h/(n sqrt(X^2+Y^2)) < 3h
+|lambda''| <= (1.2/0.51+1/0.51^2)h^2/n < 9h^2
+```
+
+Si sono usate le norme del gradiente e della Hessiana di atan2, 1/H e
+1/H^2. Per la latitudine sferica, il gradiente intrinseco ha norma 1
+e la Hessiana intrinseca ha norma |tan(chi)|. Pertanto:
+
+```text
+|chi'| <= h
+|chi''| <= (0.071+tan(1.062))h^2 < 1.87h^2
+psi = [atanh(sin(chi))-L]/n
+|psi'| <= h/(n cos(1.062)) < 2.06h
+|psi''| <= [1.87+tan(1.062)]h^2/(n cos(1.062)) < 7.6h^2
+|phi'| <= B1*2.06h < 4h
+|phi''| <= [B2*2.06^2+B1*7.6]h^2 < 20h^2
+```
+
+B1<1.01, B2<1.033 sono i maggioranti globali dell'inversa isometrica
+Mercator gia' dimostrati. Non occorre presumere phi vicino a chi per
+questa stima. Sono riusate le costanti non separabili 3/9 e 4/20,
+con h <= 2(|delta_x|+|delta_y|)/a, quindi i resti comuni
+|r_ECEF''|<=1.1a78h^2 e resto area <=8.25a^2h^3.
+
+### Certificato numerico a intervalli
+
+[stereographic.rs](../crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/stereographic.rs)
+ricostruisce R k0, n, s0, c0 e psi(phi0) dai parametri originali del
+registro, con ShapeInterval. Usa solo le serie con resto gia' dimostrate
+per seno, coseno, atan, atanh/log e la radice IEEE 754: nessuna costante
+libm del core viene assunta esatta. La forma relativa all'origine evita
+il calcolo separato di ln(c), includendolo per identita' algebrica.
+La differenza fra psi(phi_core) e il target, moltiplicata verso l'alto
+per 1.01, maggiora l'errore di latitudine; l'inversa isometrica e' globale.
+Si richiede |phi_core|<1.2 per la disponibilita' delle serie. La differenza
+di longitudine viene confrontata direttamente. Entrambi gli errori devono
+essere <=2048epsilon radianti; intervalli larghi o non finiti rifiutano.
+Il certificato comprende costanti, conversioni e Newton del core; non
+attesta precisione contando le iterazioni o osservando convergenza.
+
+Si riusano i margini TM/LCC/LAEA: 30 micrometri per sottosegmento e
+16384epsilon a^2 per l'area. |x|,|y|<21400000 m e R k0>a/2 danno
+lo stesso limite <64epsilon alle perturbazioni normalizzate delle
+interpolazioni del profilo LAEA. Le stesse derivate e la stessa soglia
+angolare giustificano gli stessi margini. Disponibilita' numerica e budget
+possono restringere ulteriormente il dominio; nessun risultato parziale.
+
+### Prove C1 indipendenti
+
+[stereographic.py](../crates/plenora-kernels-geo/tests/fixtures/preserve_shape/stereographic.py)
+calcola c e chi0 con le formule EPSG, inverte la parte sferica con
+l'angolo centrale e risolve psi per bisezione. Non importa il kernel Rust.
+La copia eseguita e GeographicLib Python 2.1 sono sotto target/preserve-oracle.
+La fixture contiene linea e poligono obliqui EPSG:28992 (Bessel 1841),
+unico CRS del metodo nel registro, a 16384 e 32768 suddivisioni.
+Il confronto con 32768 usa direttamente il bound restituito, senza
+aggiungere tolleranze campionarie. L'oracolo controlla l'implementazione;
+la dimostrazione dei resti resta analitica. Sono provati i quattro bordi,
+punti esterni, origine nei due emisferi e all'equatore, residui angolari
+alterati e non finiti. Hotine mantiene il proprio motivo AccuracyUnproven.

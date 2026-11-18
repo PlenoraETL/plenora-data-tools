@@ -27,10 +27,10 @@ unita' sono fissate dalla funzione. Nessun cambio di datum: le conversioni
 riusano `Riproiettore::geografiche_sorgente` con piano identita'.
 
 Il dominio certificato comprende i CRS geografici integrati, EPSG:3857, Mercator A (EPSG:3395)
-e Transverse Mercator EPSG 9807, LCC 2SP EPSG 9802 e LAEA EPSG 9820 nei rettangoli qualificati in [maggioranti-forma](maggioranti-forma.md),
+e Transverse Mercator EPSG 9807, LCC 2SP EPSG 9802, LAEA EPSG 9820 e Oblique Stereographic EPSG 9809 nei rettangoli qualificati in [maggioranti-forma](maggioranti-forma.md),
 con ellissoide terrestre `6e6 <= a <= 7e6` metri e `250 <= 1/f <= 350`.
-**Il supporto a qualunque CRS riproiettabile non e' completo:** gli altri
-due metodi integrati restituiscono `AccuracyUnproven`. Anche TM, LCC e LAEA rifiutano
+**Il supporto a qualunque CRS riproiettabile non e' completo:** Hotine
+restituisce `AccuracyUnproven`. Anche TM, LCC, LAEA e stereografica obliqua rifiutano
 fuori dal proprio dominio qualificato o quando il residuo a intervalli non
 dimostra la precisione numerica richiesta. Una convergenza campionaria non li
 sostituisce. CRS senza inversa integrata e punti fuori dominio danno
@@ -48,7 +48,7 @@ usa i predicati esatti del kernel geometrico, anche per i test di
 contenimento. Tutti gli anelli di un poligono devono stare in una striscia
 aperta di longitudine larga meno di 180 gradi, senza poli. Per geografico
 e per i due metodi Mercator la trasformazione e' iniettiva in questa striscia e conserva
-la topologia. Anche TM, LCC e LAEA sono iniettive nei rispettivi rettangoli qualificati. La superficie e' strettamente minore di mezzo ellissoide;
+la topologia. Anche TM, LCC, LAEA e stereografica obliqua sono iniettive nei rispettivi rettangoli qualificati. La superficie e' strettamente minore di mezzo ellissoide;
 complementi, cappe polari e regioni piu' larghe sono `UnsupportedSurface`.
 Z, M e curve non appartengono a questa API XY.
 

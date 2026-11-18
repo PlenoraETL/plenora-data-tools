@@ -130,10 +130,7 @@ impl Proiezione {
             Self::Tm(p) => InverseShapeCertificate::TransverseMercator(p.shape_parameters),
             Self::Lcc(p) => InverseShapeCertificate::LambertConicConformal(p.shape_parameters),
             Self::Laea(p) => InverseShapeCertificate::LambertAzimuthalEqualArea(p.shape_parameters),
-            Self::Stereo(_) => InverseShapeCertificate::Unproven {
-                method: 9809,
-                reason: "derivate della rotazione e inversa conforme non maggiorate",
-            },
+            Self::Stereo(p) => InverseShapeCertificate::ObliqueStereographic(p.shape_parameters),
             Self::Svizzera(_) => InverseShapeCertificate::Unproven {
                 method: 9815,
                 reason: "derivate della rotazione obliqua e tagli angolari non maggiorati",
@@ -682,6 +679,7 @@ impl Laea {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Stereo {
+    shape_parameters: super::StereographicShapeBounds,
     e: f64,
     lon0: f64,
     n: f64,
@@ -723,6 +721,14 @@ impl Stereo {
             lon0: lon0.to_radians(),
             n,
             mezzo_ln_c,
+            shape_parameters: super::StereographicShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat0,
+                longitude_origin: lon0,
+                central_scale: k0,
+                false_easting: falsa_est,
+                false_northing: falsa_nord,
+            },
             seno_chi0: chi0.sin(),
             coseno_chi0: chi0.cos(),
             due_rk: 2.0 * raggio * k0,
