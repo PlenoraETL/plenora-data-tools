@@ -2308,6 +2308,64 @@
     "[[\"token\",\"[\"],[\"token\",\"serde\"],[\"token\",\"(\"],[\"token\",\"rename_all\"],[\"token\",\"=\"],[\"string\",\"snake_case\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"pub\"],[\"token\",\"enum\"],[\"token\",\"SpatialPredicate\"]]",
     "[[\"token\",\"{\"],[\"token\",\"validate\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"validate\"],[\"token\",\"(\"]]"
   ],
+  "crates/plenora-kernels-geo/src/extended_algorithms/baseline_600.rs": [
+    "[[\"token\",\":\"],[\"token\",\"InvalidParameter\"],[\"token\",\"{\"],[\"token\",\"name\"],[\"token\",\":\"],[\"string\",\"tolerance\"],[\"token\",\",\"],[\"token\",\"reason\"],[\"token\",\":\"],[\"string\",\"deve essere finita e non negativa\"],[\"token\",\",\"]]",
+    "[[\"token\",\":\"],[\"token\",\"UnsupportedGeometry\"],[\"token\",\"{\"],[\"token\",\"operation\"],[\"token\",\":\"],[\"string\",\"split\"],[\"token\",\",\"],[\"token\",\"actual\"],[\"token\",\":\"],[\"token\",\"geometry_type\"],[\"token\",\"(\"]]",
+    "[[\"token\",\";\"],[\"token\",\"validate_ratio\"],[\"token\",\"(\"],[\"token\",\"end_ratio\"],[\"token\",\",\"],[\"string\",\"end_ratio\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"if\"],[\"token\",\"start_ratio\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"validate_ratio\"],[\"token\",\"(\"],[\"token\",\"start_ratio\"],[\"token\",\",\"],[\"string\",\"start_ratio\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"validate_ratio\"],[\"token\",\"(\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/extended_algorithms/compatibility_600.rs": [
+    "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{baseline:?}\"],[\"token\",\")\"]]",
+    "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{current:?}\"],[\"token\",\")\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/extended_algorithms/polygonize_limited/tests.rs": [
+    "[[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"anello\"],[\"token\",\")\"],[\"token\",\"}\"],[\"token\",\"fn\"],[\"token\",\"polygon_keys\"],[\"token\",\"(\"]]",
+    "[[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"conteggio\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"assert\"],[\"token\",\"!\"]]",
+    "[[\"token\",\"None\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"C1\"],[\"token\",\")\"],[\"token\",\"}\"],[\"token\",\"fn\"],[\"token\",\"ring_key\"],[\"token\",\"(\"]]",
+    "[[\"token\",\"None\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"soglia\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"expected\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"None\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"sparso\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"is_empty\"],[\"token\",\"(\"],[\"token\",\")\"]]",
+    "[[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"misura\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"assert_eq\"],[\"token\",\"!\"],[\"token\",\"(\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/extended_algorithms/polygonize_limited.rs": [
+    "[[\"token\",\":\"],[\"token\",\"InvalidGeometry\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"linework\"],[\"token\",\",\"],[\"token\",\"reason\"],[\"token\",\":\"],[\"string\",\"linea senza segmenti\"],[\"token\",\".\"]]",
+    "[[\"token\",\":\"],[\"token\",\"NonFiniteCoordinate\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"linework\"],[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\"}\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/extended_algorithms/split_limited/tests.rs": [
+    "[[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"decimo\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"let\"],[\"token\",\"point\"],[\"token\",\"=\"]]",
+    "[[\"token\",\",\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"razionale\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"let\"],[\"token\",\"offset\"],[\"token\",\"=\"]]",
+    "[[\"token\",\"0\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"dieci\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"]]",
+    "[[\"token\",\"1\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"uno\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"try_div\"],[\"token\",\"(\"],[\"token\",\"&\"]]",
+    "[[\"token\",\":\"],[\"token\",\"NonFiniteCoordinate\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"right\"],[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"None\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"soglia\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"expected\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"None\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"sparso\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"vec\"],[\"token\",\"!\"],[\"token\",\"[\"]]",
+    "[[\"token\",\"measured\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"misura\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"assert_eq\"],[\"token\",\"!\"],[\"token\",\"(\"]]",
+    "[[\"token\",\"offset\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"somma\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"y\"],[\"token\",\":\"],[\"token\",\"huge\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/extended_algorithms/split_limited.rs": [
+    "[[\"token\",\",\"],[\"token\",\"p\"],[\"token\",\".\"],[\"token\",\"0\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\";\"],[\"token\",\"line_edges\"],[\"token\",\"(\"],[\"token\",\"source\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"edges\"],[\"token\",\",\"]]",
+    "[[\"token\",\">\"],[\"token\",\"line_edges\"],[\"token\",\"(\"],[\"token\",\"l\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"edges\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"line_edges\"],[\"token\",\"(\"],[\"token\",\"l\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"edges\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/rust_backend/compatibility_600.rs": [
+    "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{baseline:?}\"],[\"token\",\")\"]]",
+    "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{current:?}\"],[\"token\",\")\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/rust_backend/polygonize/compatibility_600.rs": [
+    "[[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"residui\"],[\"token\",\")\"],[\"token\",\",\"],[\"token\",\"0\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"pettine\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"polygons\"],[\"token\",\".\"],[\"token\",\"len\"]]",
+    "[[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"reticolo\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"assert_eq\"],[\"token\",\"!\"],[\"token\",\"(\"]]",
+    "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{baseline:?}\"],[\"token\",\")\"]]",
+    "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{current:?}\"],[\"token\",\")\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_exhaustive.rs": [
+    "[[\"token\",\";\"],[\"token\",\"b\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"dimension\"],[\"token\",\"-\"],[\"token\",\"b\"],[\"char\",\"'0'\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"a_connected\"],[\"token\",\",\"]]",
+    "[[\"token\",\"dimension\"],[\"token\",\"-\"],[\"token\",\"b\"],[\"char\",\"'0'\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"b_connected\"],[\"token\",\",\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"a\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
+  ],
   "crates/plenora-kernels-geo/src/coordinate_utm.rs": [
     "[[\"token\",\";\"],[\"token\",\"2\"],[\"token\",\"0\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"string\",\"CDEFGHJKLMNPQRSTUVWX\"],[\"token\",\";\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"],[\"token\",\"(\"]]"
   ]

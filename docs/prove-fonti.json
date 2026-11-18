@@ -121,6 +121,8 @@
     "scripts/check_prove_fonti.py": [],
     "scripts/check_python_version.py": [],
     "scripts/check_tempo.py": [],
+    "scripts/ci_locale.py": [],
+    "scripts/ci_locale_expr.py": [],
     "scripts/corpus_definizioni_crs.py": [],
     "scripts/esegui_guardie.py": [],
     "scripts/esito_python_ast.py": [],
@@ -286,6 +288,24 @@
       "test_conversione_checked",
       "test_conversioni_infallibili_e_alias",
       "test_frazione_assente_non_e_fallback_di_data"
+    ],
+    "scripts/test_ci_locale.py": [
+      "test_all_profiles_present_release_never_executes",
+      "test_checkout_source_pin_and_sha_mismatch",
+      "test_condition_uses_current_step_environment",
+      "test_conditions_services_platform_and_unknown_action",
+      "test_defaults_and_working_directory",
+      "test_empty_job_is_not_pass",
+      "test_exported_environment_and_step_precedence",
+      "test_expression_types_are_not_silently_coerced",
+      "test_false_step_does_not_prevent_next_step",
+      "test_matrix_needs_env_defaults_and_filters",
+      "test_missing_step_blocks_following_and_never_green",
+      "test_process_failure_and_default_condition",
+      "test_repository_covers_every_job_and_step",
+      "test_runtime_temp_directory",
+      "test_status_conditions_are_evaluated_at_runtime",
+      "test_status_function_in_literal_is_not_a_function"
     ],
     "scripts/test_clippy_esito.py": [
       "test_metodi_risolti_e_produzione_esente"
@@ -1430,6 +1450,26 @@
       "stessi_esiti_su_pochi_punti_collineari_e_duplicati",
       "stessi_esiti_alle_scale_estreme"
     ],
+    "crates/plenora-kernels-geo/src/extended_algorithms/compatibility_600.rs": [
+      "published_split_matches_literal_600_on_sourced_corpus"
+    ],
+    "crates/plenora-kernels-geo/src/extended_algorithms/polygonize_limited/tests.rs": [
+      "rectangular_grids_have_exact_faces",
+      "nested_rings_holes_overlaps_and_dangles",
+      "large_sparse_input_succeeds_without_pairs",
+      "exact_limits_and_interruptions",
+      "invalid_and_unrepresentable_nodes_are_explicit",
+      "rounded_triangle_cannot_silently_become_collinear"
+    ],
+    "crates/plenora-kernels-geo/src/extended_algorithms/split_limited/tests.rs": [
+      "transverse_rational_endpoints_and_600",
+      "vertices_overlap_reverse_and_points_match_600",
+      "comb_and_large_sparse",
+      "exact_thresholds_and_interruptions",
+      "explicit_invalid_and_precision_errors",
+      "repeated_vertices_do_not_create_degenerate_pieces",
+      "polygon_boundary_and_invalid_polygon"
+    ],
     "crates/plenora-kernels-geo/src/extensions.rs": [
       "from_wkt_column_parses_preserves_nulls_and_decodes_back",
       "from_wkt_column_applies_the_on_error_policy",
@@ -1574,15 +1614,26 @@
       "work_limit_and_cancellation_follow_actual_progress",
       "duplicate_nodes_are_limited_before_emission",
       "deadline_is_checked_next_to_cancellation",
+      "noding_live_arithmetic_and_exact_resource_thresholds",
+      "foreign_edge_budget_is_rejected",
       "indexed_intersections_match_exhaustive_pairs"
     ],
     "crates/plenora-kernels-geo/src/noding/bounds.rs": [
+      "formula_envelopes_cover_the_entire_classification_dag",
+      "unreduced_extreme_samples_and_directions_fit_the_envelopes",
       "normalized_intersections_fit_the_per_object_bound"
+    ],
+    "crates/plenora-kernels-geo/src/noding/exact.rs": [
+      "clone_drop_and_arithmetic_share_the_live_budget",
+      "exact_threshold_and_single_value_overshoot",
+      "failed_clone_releases_partial_receipts_and_rejects_foreign_budgets",
+      "counted_arithmetic_matches_the_generic_oracle"
     ],
     "crates/plenora-kernels-geo/src/noding/storage.rs": [
       "capacity_lifetime_and_failed_growth",
       "changing_budget_is_rejected_before_growth",
-      "requested_capacity_matches_the_pinned_vector_backend"
+      "requested_capacity_matches_the_pinned_vector_backend",
+      "growth_overlap_is_reserved_before_allocation"
     ],
     "crates/plenora-kernels-geo/src/operations.rs": [
       "l_area_si_scala_con_il_quadrato",
@@ -1636,6 +1687,7 @@
       "nested_members_and_permutations_preserve_cells"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs": [
+      "sparse_work_and_exact_public_threshold",
       "unreleased_limits_may_change_without_changing_the_matrix",
       "rational_intersection_and_full_finite_exponent_range",
       "actual_work_and_reservation_thresholds",
@@ -1645,6 +1697,11 @@
       "invalid_polygon_topology_is_not_silently_classified",
       "every_named_predicate_on_the_cartesian_corpus",
       "nested_members_and_permutations_preserve_cells"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
+      "sparse_queries_have_analytic_work",
+      "grid_queries_have_analytic_work",
+      "interval_candidates_match_exhaustive_including_reversed_bounds"
     ],
     "crates/plenora-kernels-geo/src/riproiezione/tests.rs": [
       "tipi_e_struttura_si_conservano",
@@ -1696,6 +1753,9 @@
       "livelli",
       "oracolo_a_blocchi_contro_tratto_unico_e_definizione",
       "il_segmento_condiviso_non_degenera_sulla_griglia"
+    ],
+    "crates/plenora-kernels-geo/src/rust_backend/compatibility_600.rs": [
+      "published_wrapper_matches_literal_600"
     ],
     "crates/plenora-kernels-geo/src/rust_backend/exact.rs": [
       "i_limiti_del_dominio_sono_le_potenze_dichiarate",
@@ -1752,6 +1812,9 @@
       "iterated_noding_matches_geos_on_near_coincident_crossings",
       "preserves_near_endpoint_face_on_anisotropic_linework",
       "scorciatoie_uguali_al_percorso_generico"
+    ],
+    "crates/plenora-kernels-geo/src/rust_backend/polygonize/compatibility_600.rs": [
+      "published_polygonize_matches_literal_600_on_sourced_corpus"
     ],
     "crates/plenora-kernels-geo/src/rust_backend/precision.rs": [
       "un_centimetro_nelle_unita_del_crs",
@@ -1970,6 +2033,9 @@
       "coverage_validate_alle_tre_scale",
       "il_rifiuto_e_unsupported_senza_dati",
       "booleane_e_buffer_non_rifiutano_a_scala_italiana"
+    ],
+    "crates/plenora-kernels-geo/tests/heap_reale.rs": [
+      "real_heap_certification"
     ],
     "crates/plenora-kernels-geo/tests/margine_memoria.rs": [
       "join_within_e_conteggi_si_fermano_al_margine",
