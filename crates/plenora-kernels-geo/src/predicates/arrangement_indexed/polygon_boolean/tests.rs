@@ -362,6 +362,25 @@ fn independent_rational_cell_oracle_area_and_de9im() {
             )
             .unwrap();
             assert_eq!(generic.cells(), expected);
+            let general = crate::general_boolean::boolean_with_limits(
+                &ga,
+                &gb,
+                op,
+                None,
+                PolygonBooleanLimits::default(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                crate::predicates::relate_matrix(&general, &ga)
+                    .unwrap()
+                    .cells(),
+                expected
+            );
+            assert_eq!(
+                rational_twice_area(&general).cmp(&Fraction::integer(2 * expected_area)),
+                Ordering::Equal
+            );
         }
     }
 }
@@ -372,6 +391,26 @@ struct Fraction {
     n: num_bigint::BigInt,
     d: num_bigint::BigInt,
 }
+
+fn rational_twice_area(g: &Geometry<f64>) -> Fraction {
+    let Geometry::MultiPolygon(ps) = g else {
+        assert_eq!(g.coords_count(), 0);
+        return Fraction::integer(0);
+    };
+    let mut result = Fraction::integer(0);
+    for p in &ps.0 {
+        for ring in std::iter::once(p.exterior()).chain(p.interiors()) {
+            for pair in ring.0.windows(2) {
+                let cross = Fraction::float(pair[0].x)
+                    .mul(&Fraction::float(pair[1].y))
+                    .sub(&Fraction::float(pair[1].x).mul(&Fraction::float(pair[0].y)));
+                result = result.add(&cross);
+            }
+        }
+    }
+    result
+}
+use geo::CoordsIter;
 impl Fraction {
     fn new(n: num_bigint::BigInt, d: num_bigint::BigInt) -> Self {
         assert_ne!(d, num_bigint::BigInt::from(0));

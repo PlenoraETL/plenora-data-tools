@@ -372,3 +372,46 @@ scaduta prima del token; la politica delle API precedenti non cambia. Il limite
 non promette una latenza a tempo reale. Ricostruzione dei successori e verifica
 della corrispondenza dei lati possono richiedere lavoro quadratico, interrotto
 dai contatori reali; non viene promesso un algoritmo subquadratico.
+
+## Booleane generali Rust con limiti
+
+`plenora_kernels_geo::general_boolean` adotta GOP-014/015/015A/027/028 per
+Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon e
+GeometryCollection anche annidate, nelle combinazioni di dimensioni 0/1/2.
+Il modello e' planare XY finito, nello stesso CRS risolto e ordine degli assi
+forniti dal chiamante. Nessun legame con Esri o modifica delle API precedenti.
+
+`boolean_with_limits` applica un operatore a due geometrie.
+`union_with_limits` prende uno slice di geometrie e restituisce un solo
+risultato, anche per input vuoto. `intersection_with_limits` e
+`difference_with_limits` prendono uno slice A e una geometria B: restituiscono
+un risultato per A, nell'ordine originale, conservando vuoti e duplicati.
+Le chiamate sono atomiche; anche con A vuoto si valida B. Tutte espongono il
+filtro dimensionale opzionale, che conserva componenti senza estrarre confini.
+Contenitori, chiusura dei residui, ordine canonico e precisione sono quelli
+delle booleane poligonali descritte sopra.
+
+GOP-002 vieta riparazioni implicite: un MultiPolygon con interni sovrapposti
+o un tratto di confine condiviso e' invalido secondo SFA 1.2.1, 6.1.14, e viene
+rifiutato con `PredicateError::InvalidGeometry`. Il contatto puntuale valido
+e' ammesso. Le componenti valide di una GeometryCollection, anche sovrapposte,
+e gli elementi dell'unione molti-a-uno sono interpretati come unione dei loro
+insiemi. La selezione avviene sul grafo razionale complessivo: non si piegano
+unioni binarie su risultati intermedi gia' arrotondati. Parti coperte e
+duplicati geometrici sono eliminati prima del filtro e della pubblicazione.
+
+Il noder, il ricostruttore degli anelli, l'arrotondatore e il verificatore sono
+condivisi con `polygon_boolean` e `line_boolean`. I punti isolati non occupano
+intervalli aperti, anche quando coincidono con il midpoint usato per la
+classificazione. Tutti i siti nodati partecipano alla selezione puntuale,
+compresi gli incroci di linee.
+
+`GeneralBooleanLimits` riusa `PolygonBooleanLimits`: passi, coppie, nodi,
+byte vivi, incidenze atomiche, facce e anelli sono cumulativi per l'intera
+chiamata, anche sugli array. Output precedenti e ricevute restano vivi fino
+al ritorno. Sono esclusi input preso in prestito, overhead dell'allocatore e
+scratch aritmetico privato, come in `RelateLimits`; non e' un tetto RSS.
+L'aritmetica conserva il massimo per valore indipendente dal numero degli
+elementi. Le visite di componenti vuote e collezioni hanno checkpoint contati.
+Deadline precede cancellazione allo stesso checkpoint; nessun successo
+parziale e nessun dato degli operandi negli errori.

@@ -521,10 +521,39 @@ impl Originals {
         b: &Geometry<f64>,
         work: &mut Work<'_>,
     ) -> Result<Self, PredicateError> {
+        Self::many([a, b], work)
+    }
+    pub(super) fn many<'g>(
+        geometries: impl IntoIterator<Item = &'g Geometry<f64>>,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
         let mut values = CountedVec::new();
-        for c in a.coords_iter().chain(b.coords_iter()) {
-            work.nodes(1)?;
-            work.push(&mut values, (P::of_in(c, work)?, c))?;
+        let mut pending = CountedVec::new();
+        for geometry in geometries {
+            work.push(&mut pending, geometry)?;
+            while let Some(geometry) = pending.pop() {
+                work.step()?;
+                if let Geometry::GeometryCollection(gs) = geometry {
+                    for child in gs.0.iter().rev() {
+                        work.push(&mut pending, child)?;
+                    }
+                } else {
+                    match geometry {
+                        Geometry::MultiLineString(ls) => {
+                            for line in &ls.0 {
+                                Self::collect(line.coords_iter(), &mut values, work)?;
+                            }
+                        }
+                        Geometry::Polygon(p) => Self::collect_polygon(p, &mut values, work)?,
+                        Geometry::MultiPolygon(ps) => {
+                            for polygon in &ps.0 {
+                                Self::collect_polygon(polygon, &mut values, work)?;
+                            }
+                        }
+                        _ => Self::collect(geometry.coords_iter(), &mut values, work)?,
+                    }
+                }
+            }
         }
         let mut ids = CountedVec::new();
         for id in 0..values.len() {
@@ -537,6 +566,29 @@ impl Originals {
         )?;
         ids.dedup_by(|a, b| Ok(values[*a].0 == values[*b].0), work)?;
         Ok(Self { values, ids })
+    }
+    fn collect(
+        coords: impl Iterator<Item = Coord<f64>>,
+        values: &mut CountedVec<(P, Coord<f64>)>,
+        work: &mut Work<'_>,
+    ) -> Result<(), PredicateError> {
+        work.step()?;
+        for c in coords {
+            work.nodes(1)?;
+            work.push(values, (P::of_in(c, work)?, c))?;
+        }
+        Ok(())
+    }
+    fn collect_polygon(
+        p: &geo::Polygon<f64>,
+        values: &mut CountedVec<(P, Coord<f64>)>,
+        work: &mut Work<'_>,
+    ) -> Result<(), PredicateError> {
+        work.step()?;
+        for ring in std::iter::once(p.exterior()).chain(p.interiors()) {
+            Self::collect(ring.coords_iter(), values, work)?;
+        }
+        Ok(())
     }
     pub(super) fn coordinate(
         &self,

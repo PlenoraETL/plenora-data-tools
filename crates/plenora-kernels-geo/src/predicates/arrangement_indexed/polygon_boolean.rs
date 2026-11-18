@@ -179,12 +179,27 @@ fn supported(g: &Geometry<f64>, work: &mut Work<'_>) -> Result<(), PolygonBoolea
 struct Boundary {
     edges: CountedVec<Edge>,
     contacts: CountedVec<Edge>,
+    sites: CountedVec<P>,
+}
+// Un punto isolato non occupa un intervallo aperto, neppure se coincide
+// con il campione scelto per classificarlo (chiusura GOP-015).
+fn occupies_interval(shape: &Shape, p: &P, work: &mut Work<'_>) -> Result<bool, PredicateError> {
+    if shape.area_contains(p, None, work)? {
+        return Ok(true);
+    }
+    for edge in shape.edges() {
+        work.step()?;
+        if edge.contains(p)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 fn boundary(
     a: &Shape,
     b: &Shape,
     op: PolygonBooleanOp,
-    limits: PolygonBooleanLimits,
+    limits: &mut PolygonBooleanLimits,
     work: &mut Work<'_>,
 ) -> Result<Boundary, PredicateError> {
     let mut source = CountedVec::new();
@@ -250,9 +265,11 @@ fn boundary(
             };
             work.push(&mut edges, value)?;
         } else if !l
-            && op == PolygonBooleanOp::Intersection
-            && a.position(&p, work)? != 2
-            && b.position(&p, work)? != 2
+            && selected(
+                op,
+                occupies_interval(a, &p, work)?,
+                occupies_interval(b, &p, work)?,
+            )
         {
             work.nodes(2)?;
             work.push(
@@ -264,7 +281,18 @@ fn boundary(
             )?;
         }
     }
-    Ok(Boundary { edges, contacts })
+    let mut sites = CountedVec::new();
+    limits.max_edges -= count;
+    for path in nodes {
+        for p in path {
+            work.push(&mut sites, p)?;
+        }
+    }
+    Ok(Boundary {
+        edges,
+        contacts,
+        sites,
+    })
 }
 
 struct Cycle {
@@ -346,7 +374,7 @@ fn cycle(ids: &[usize], edges: &[Edge], work: &mut Work<'_>) -> Result<Cycle, Pr
 }
 fn cycles(
     edges: &[Edge],
-    limits: PolygonBooleanLimits,
+    limits: &mut PolygonBooleanLimits,
     work: &mut Work<'_>,
 ) -> Result<CountedVec<Cycle>, PredicateError> {
     let mut points = CountedVec::new();
@@ -390,6 +418,8 @@ fn cycles(
             work.push(&mut result, value)
         },
     )?;
+    limits.max_faces -= faces;
+    limits.max_rings -= rings;
     Ok(result)
 }
 
@@ -555,10 +585,23 @@ fn execute(
     a.build_indices(work)?;
     b.build_indices(work)?;
     let originals = Originals::new(left, right, work)?;
-    let boundary = boundary(&a, &b, op, limits, work)?;
+    assemble_result(&a, &b, op, filter, &mut { limits }, &originals, work)
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn assemble_result(
+    a: &Shape,
+    b: &Shape,
+    op: PolygonBooleanOp,
+    filter: Option<u8>,
+    limits: &mut PolygonBooleanLimits,
+    originals: &Originals,
+    work: &mut Work<'_>,
+) -> Result<Geometry<f64>, PolygonBooleanError> {
+    let boundary = boundary(a, b, op, limits, work)?;
     let rings = cycles(&boundary.edges, limits, work)?;
     let polygons = if filter.is_none_or(|d| d == 2) {
-        assemble(&rings, &originals, work)?
+        assemble(&rings, originals, work)?
     } else {
         Geometry::MultiPolygon(MultiPolygon::new(Vec::new()))
     };
@@ -578,21 +621,16 @@ fn execute(
         work.push(&mut publications, value)?;
     }
     let mut candidates = CountedVec::new();
-    for edge in a.edges().chain(b.edges()) {
-        work.push(&mut candidates, &edge.a)?;
-        work.push(&mut candidates, &edge.b)?;
+    for p in boundary.sites.iter().chain(&a.points).chain(&b.points) {
+        work.push(&mut candidates, p)?;
     }
-    // Un incrocio trasversale appartiene a una frontiera; un contatto
-    // puntuale isolato ha almeno un estremo originale.
+    // Tutti i siti nodati sono candidati, compresi gli incroci fra linee.
     let ids = ordered_ids(&candidates, |a, b| point_cmp(a, b), work)?;
     let mut points = CountedVec::new();
     for id in ids {
         work.step()?;
-        if op != PolygonBooleanOp::Intersection {
-            break;
-        }
         let p = candidates[id];
-        if a.position(p, work)? == 2 || b.position(p, work)? == 2 {
+        if !selected(op, a.position(p, work)? != 2, b.position(p, work)? != 2) {
             continue;
         }
         let mut covered = false;
@@ -604,9 +642,12 @@ fn execute(
             }
         }
         if !covered && filter.is_none_or(|d| d == 0) {
-            // Se un sito e' strettamente interno a un operando, il contatto
-            // con l'altro contiene area e non e' una componente isolata.
-            if a.position(p, work)? == 0 || b.position(p, work)? == 0 {
+            // Fuori dalla frontiera selezionata basta l'appartenenza all'area.
+            if selected(
+                op,
+                a.area_contains(p, None, work)?,
+                b.area_contains(p, None, work)?,
+            ) {
                 continue;
             }
             let c = originals.coordinate(p, work)?;
@@ -615,7 +656,7 @@ fn execute(
             work.push(&mut points, Point(c))?;
         }
     }
-    line_boolean::verify_publication(&publications, &originals, Some(&polygons), work)?;
+    line_boolean::verify_publication(&publications, originals, Some(&polygons), work)?;
     let mut components = CountedVec::new();
     if filter.is_none_or(|d| d == 0) && !points.is_empty() {
         sort_output(&mut points, |a, b| coordinate_cmp(a.0, b.0), work)?;
@@ -655,6 +696,60 @@ fn execute(
         }
     }
     Ok(line_boolean::finish(components, filter, work)?)
+}
+
+pub(super) fn execute_many(
+    left: &[Geometry<f64>],
+    right: &[Geometry<f64>],
+    op: PolygonBooleanOp,
+    filter: Option<u8>,
+    limits: &mut PolygonBooleanLimits,
+    work: &mut Work<'_>,
+) -> Result<Geometry<f64>, PolygonBooleanError> {
+    work.step()?;
+    if filter.is_some_and(|d| d > 2) {
+        return Err(PolygonBooleanError::InvalidOutputDimension);
+    }
+    let empty = Geometry::MultiPoint(MultiPoint::new(Vec::new()));
+    let mut a = Shape::default();
+    let mut b = Shape::default();
+    for (geometries, shape) in [(left, &mut a), (right, &mut b)] {
+        for geometry in geometries {
+            work.step()?;
+            general_supported(geometry, work)?;
+            super::relate(geometry, &empty, work)?;
+            shape.geometry(geometry, work)?;
+        }
+        shape.build_indices(work)?;
+    }
+    let originals = Originals::many(left.iter().chain(right), work)?;
+    assemble_result(&a, &b, op, filter, limits, &originals, work)
+}
+
+pub(super) fn general_supported(
+    g: &Geometry<f64>,
+    work: &mut Work<'_>,
+) -> Result<(), PolygonBooleanError> {
+    let mut pending = CountedVec::new();
+    work.push(&mut pending, g)?;
+    while let Some(g) = pending.pop() {
+        work.step()?;
+        match g {
+            Geometry::Point(_)
+            | Geometry::MultiPoint(_)
+            | Geometry::LineString(_)
+            | Geometry::MultiLineString(_)
+            | Geometry::Polygon(_)
+            | Geometry::MultiPolygon(_) => {}
+            Geometry::GeometryCollection(gs) => {
+                for g in &gs.0 {
+                    work.push(&mut pending, g)?;
+                }
+            }
+            _ => return Err(PolygonBooleanError::UnsupportedOperands),
+        }
+    }
+    Ok(())
 }
 
 /// Unione binaria; contratto e limiti di [`boolean_with_limits`].

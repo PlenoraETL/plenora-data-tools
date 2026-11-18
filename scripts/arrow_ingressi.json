@@ -8251,6 +8251,30 @@
       "classification": "non riceve dati esterni",
       "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::boolean_with_limits": {
+      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: GeneralBooleanOp, output_dimension: Option<u8>, mut limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, GeneralBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::union_with_limits": {
+      "signature": "pub fn union_with_limits( inputs: &[Geometry<f64>], output_dimension: Option<u8>, mut limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, GeneralBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::intersection_with_limits": {
+      "signature": "pub fn intersection_with_limits( inputs: &[Geometry<f64>], right: &Geometry<f64>, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<Geometry<f64>>, GeneralBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::difference_with_limits": {
+      "signature": "pub fn difference_with_limits( inputs: &[Geometry<f64>], right: &Geometry<f64>, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<Geometry<f64>>, GeneralBooleanError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {
