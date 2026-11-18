@@ -258,8 +258,8 @@ fn typed_domain_and_topology_errors_without_data() {
             Err(ShapeMeasureError::InvalidTolerance)
         );
     }
-    // GOP-006: LCC rimane priva di maggiorante qualificato.
-    let unproven = resolve_crs("EPSG:2154", "crs").unwrap();
+    // GOP-006: LAEA rimane priva di maggiorante qualificato.
+    let unproven = resolve_crs("EPSG:3035", "crs").unwrap();
     assert_eq!(
         preserve_shape_length_with_limits(&[], &unproven, tolerance(1.0), limits(), None),
         Err(ShapeMeasureError::AccuracyUnproven)
@@ -436,7 +436,7 @@ fn projected_domain_edges_and_unproven_methods_are_rejected() {
             );
         }
     }
-    for code in ["EPSG:2154", "EPSG:3035", "EPSG:28992", "EPSG:2056"] {
+    for code in ["EPSG:3035", "EPSG:28992", "EPSG:2056"] {
         let crs = resolve_crs(code, "crs").unwrap();
         assert_eq!(
             preserve_shape_length_with_limits(&[], &crs, tolerance(1.0), limits(), None),
@@ -510,6 +510,84 @@ fn transverse_proof_domain_boundary_is_rejected() {
             Err(ShapeMeasureError::AccuracyUnproven)
         );
         let polygon = Polygon::new(rectangle(490_000.0, 4_900_000.0, x, y), vec![]);
+        assert_eq!(
+            preserve_shape_area_with_limits(
+                &[polygon],
+                &crs,
+                tolerance(1_000_000.0),
+                limits(),
+                None
+            ),
+            Err(ShapeMeasureError::AccuracyUnproven)
+        );
+    }
+}
+
+// C1: Snyder 1987 cap. 15; EPSG GN 7-2 3.1.1.1; driver lcc.py e GeographicLib Python 2.1.
+// La fixture usa bisezione della latitudine isometrica e nessun import Rust.
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn lambert_line_and_polygon_against_independent_reference() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/preserve_shape/lcc.json")).unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let code = format!("EPSG:{}", case["epsg"].as_u64().unwrap());
+        let crs = resolve_crs(&code, "crs").unwrap();
+        let coordinates = |name: &str| {
+            LineString::from(
+                case[name]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|point| (point[0].as_f64().unwrap(), point[1].as_f64().unwrap()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let measured = preserve_shape_length_with_limits(
+            &[coordinates("line_xy")],
+            &crs,
+            tolerance(2.0),
+            limits(),
+            None,
+        )
+        .unwrap();
+        let expected = case["measurements"]["32768"]["length_m"].as_f64().unwrap();
+        assert!((measured.value - expected).abs() <= measured.absolute_error_bound);
+        let measured = preserve_shape_area_with_limits(
+            &[Polygon::new(coordinates("ring_xy"), vec![])],
+            &crs,
+            tolerance(1_000_000.0),
+            limits(),
+            None,
+        )
+        .unwrap();
+        let expected = case["measurements"]["32768"]["area_m2"].as_f64().unwrap();
+        assert!((measured.value - expected).abs() <= measured.absolute_error_bound);
+    }
+}
+
+// C1: Snyder cap. 15; dominio convesso LCC, apice e taglio esclusi analiticamente.
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn lambert_proof_domain_boundary_is_rejected() {
+    let crs = resolve_crs("EPSG:2154", "crs").unwrap();
+    let axis = 6_378_137.0;
+    // Raggio d'origine da formula indipendente Snyder, non dal kernel.
+    let radius = 6_055_612.049_875_986;
+    for (x, y) in [
+        (700_000.0 + 0.25 * axis, 6_600_000.0),
+        (700_000.0 - 0.25 * axis, 6_600_000.0),
+        (700_000.0, 6_600_000.0 + radius - 0.75 * axis),
+        (700_000.0, 6_600_000.0 + radius - 1.5 * axis),
+        (700_000.0, 6_600_000.0 + radius),
+        (700_000.0, 6_600_000.0 + radius + axis),
+    ] {
+        let line = LineString::from(vec![(700_000.0, 6_600_000.0), (x, y)]);
+        assert_eq!(
+            preserve_shape_length_with_limits(&[line], &crs, tolerance(2.0), limits(), None),
+            Err(ShapeMeasureError::AccuracyUnproven)
+        );
+        let polygon = Polygon::new(rectangle(690_000.0, 6_500_000.0, x, y), vec![]);
         assert_eq!(
             preserve_shape_area_with_limits(
                 &[polygon],

@@ -72,7 +72,7 @@ impl ComplexEnclosure {
     }
 }
 
-fn cosine(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
+pub(super) fn cosine(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     if x.max_abs() >= 1.5 {
         return Err(ShapeMeasureError::AccuracyUnproven);
     }
@@ -128,7 +128,7 @@ fn complex_trig(
     ))
 }
 
-fn square_root(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
+pub(super) fn square_root(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     if x.lo < 0.0 || !x.hi.is_finite() {
         return Err(ShapeMeasureError::AccuracyUnproven);
     }
@@ -138,7 +138,7 @@ fn square_root(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     })
 }
 
-fn arctangent(mut x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
+pub(super) fn arctangent(mut x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     let one = ShapeInterval::exact(1.0);
     if x.max_abs() > 8.0 {
         return Err(ShapeMeasureError::AccuracyUnproven);

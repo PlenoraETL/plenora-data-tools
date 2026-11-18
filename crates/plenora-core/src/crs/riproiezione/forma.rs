@@ -27,6 +27,8 @@ pub enum InverseShapeCertificate {
     Separable(SeparableShapeBounds),
     /// TM esatta sul rettangolo normalizzato dichiarato in maggioranti-forma.
     TransverseMercator(TransverseShapeBounds),
+    /// LCC 2SP sul rettangolo polare qualificato.
+    LambertConicConformal(LambertShapeBounds),
     /// Nessun certificato: il consumatore deve rifiutare la misura.
     Unproven {
         /// Codice EPSG del metodo.
@@ -34,6 +36,23 @@ pub enum InverseShapeCertificate {
         /// Motivo statico, senza dati dell'ingresso.
         reason: &'static str,
     },
+}
+
+/// Parametri originali del metodo EPSG 9802, prima delle trascendenti del core.
+#[derive(Clone, Copy, Debug)]
+pub struct LambertShapeBounds {
+    /// Semiasse maggiore in metri.
+    pub semi_major_axis: f64,
+    /// Latitudine della falsa origine in gradi.
+    pub latitude_origin: f64,
+    /// Longitudine della falsa origine in gradi.
+    pub longitude_origin: f64,
+    /// Paralleli standard in gradi, nell'ordine della definizione.
+    pub standard_parallels: [f64; 2],
+    /// Ascissa della falsa origine in metri.
+    pub false_easting: f64,
+    /// Ordinata della falsa origine in metri.
+    pub false_northing: f64,
 }
 
 /// Parametri esatti del registro per il certificato residuale TM EPSG 9807.
@@ -88,6 +107,10 @@ mod tests {
                 InverseShapeCertificate::Unproven { method, reason } => {
                     assert!(!reason.is_empty());
                     method
+                }
+                InverseShapeCertificate::LambertConicConformal(bounds) => {
+                    assert!(bounds.semi_major_axis > 0.0);
+                    9802
                 }
                 InverseShapeCertificate::TransverseMercator(bounds) => {
                     assert!(bounds.central_scale > 0.0);

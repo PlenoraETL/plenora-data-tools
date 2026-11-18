@@ -3,6 +3,8 @@
 
 use super::ShapeMeasureError;
 
+mod lambert;
+pub(super) use lambert::LambertCertificate;
 mod transverse;
 pub(super) use transverse::TransverseCertificate;
 

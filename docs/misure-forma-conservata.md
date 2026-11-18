@@ -27,11 +27,11 @@ unita' sono fissate dalla funzione. Nessun cambio di datum: le conversioni
 riusano `Riproiettore::geografiche_sorgente` con piano identita'.
 
 Il dominio certificato comprende i CRS geografici integrati, EPSG:3857, Mercator A (EPSG:3395)
-e Transverse Mercator EPSG 9807 nel rettangolo qualificato in [maggioranti-forma](maggioranti-forma.md),
+e Transverse Mercator EPSG 9807 e LCC 2SP EPSG 9802 nei rettangoli qualificati in [maggioranti-forma](maggioranti-forma.md),
 con ellissoide terrestre `6e6 <= a <= 7e6` metri e `250 <= 1/f <= 350`.
 **Il supporto a qualunque CRS riproiettabile non e' completo:** gli altri
-quattro metodi integrati restituiscono `AccuracyUnproven`. Anche TM rifiuta
-fuori dal suo dominio qualificato o quando il residuo a intervalli non
+tre metodi integrati restituiscono `AccuracyUnproven`. Anche TM e LCC rifiutano
+fuori dal proprio dominio qualificato o quando il residuo a intervalli non
 dimostra la precisione numerica richiesta. Una convergenza campionaria non li
 sostituisce. CRS senza inversa integrata e punti fuori dominio danno
 `CrsDomain`. Non si ripiega su WGS 84.

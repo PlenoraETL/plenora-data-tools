@@ -128,10 +128,7 @@ impl Proiezione {
                 })
             }
             Self::Tm(p) => InverseShapeCertificate::TransverseMercator(p.shape_parameters),
-            Self::Lcc(_) => InverseShapeCertificate::Unproven {
-                method: 9802,
-                reason: "distanza continua dall'apice e dal taglio angolare non certificata",
-            },
+            Self::Lcc(p) => InverseShapeCertificate::LambertConicConformal(p.shape_parameters),
             Self::Laea(_) => InverseShapeCertificate::Unproven {
                 method: 9820,
                 reason: "derivate presso il bordo del disco e inversa autalica non maggiorate",
@@ -494,6 +491,7 @@ impl PseudoMercatore {
 
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Lcc {
+    shape_parameters: super::LambertShapeBounds,
     e: f64,
     lon_origine: f64,
     n: f64,
@@ -531,6 +529,14 @@ impl Lcc {
         let rf = af * (-n * isometrica(lat_origine.to_radians(), e)).exp();
         Ok(Self {
             e,
+            shape_parameters: super::LambertShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat_origine,
+                longitude_origin: lon_origine,
+                standard_parallels: [lat1, lat2],
+                false_easting: est_origine,
+                false_northing: nord_origine,
+            },
             lon_origine: lon_origine.to_radians(),
             n,
             af,
