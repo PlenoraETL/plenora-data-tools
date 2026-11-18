@@ -1386,6 +1386,9 @@
       "insufficient_points_are_omitted_like_manipola_groups",
       "rejects_wrong_geometry_type_and_self_intersection"
     ],
+    "crates/plenora-kernels-geo/src/coordinate_utm.rs": [
+      "half_even_components"
+    ],
     "crates/plenora-kernels-geo/src/crs.rs": [
       "missing_backend_never_trusts_an_unverified_declaration",
       "geometry_domain_wrapper_matches_coordinate_level_contract"
@@ -1928,6 +1931,19 @@
       "divergenza_dodici_punti",
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
+    ],
+    "crates/plenora-kernels-geo/tests/coordinate_text.rs": [
+      "analytic_written_expectations",
+      "parsing_written_expectations",
+      "grammar_rejections",
+      "domain_and_precision_rejections",
+      "deterministic_round_trip_bound"
+    ],
+    "crates/plenora-kernels-geo/tests/coordinate_utm.rs": [
+      "published_and_analytic_references",
+      "zone_and_hemisphere_boundaries",
+      "invalid_text_is_enumerated_and_typed",
+      "round_trip_ground_bound"
     ],
     "crates/plenora-kernels-geo/tests/crs_integrati_analisi.rs": [
       "operazioni_con_requisito_proiettato_girano_con_epsg_32632",

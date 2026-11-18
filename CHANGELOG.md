@@ -14,6 +14,14 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API scalare `coordinate_utm` WGS84 conforme a GOP-023: `to_utm`,
+  `from_utm`, `format_utm`, `parse_utm`, `UtmCoordinate` e `UtmError`.
+  Testo canonico `zone hemisphere easting northing`, emisfero N/S,
+  risoluzione esplicita 1 m e arrotondamento half-even. Dominio 80S..84N
+  con eccezioni Norvegia/Svalbard; fuori dominio errore tipizzato.
+  Il prototipo non rilasciato con banda e UPS e' sostituito: nessun
+  ingresso con banda, formato UPS pubblico o riconoscimento implicito.
+
 - `extended_algorithms::polygonize_with_limits`: facce del linework sul noder comune con `RelateLimits` e `PredicateError`; polygonize 6.0.0 invariata.
 
 - `extended_algorithms::split_line_with_limits`: split sul noder comune con `RelateLimits` e `PredicateError`; `split_line` 6.0.0 invariata.

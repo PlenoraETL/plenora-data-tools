@@ -2365,5 +2365,8 @@
     "[[\"token\",\"dimension\"],[\"token\",\"-\"],[\"token\",\"b\"],[\"char\",\"'0'\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"b_connected\"],[\"token\",\",\"]]",
     "[[\"token\",\"{\"],[\"token\",\"a\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\"{\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/coordinate_utm.rs": [
+    "[[\"token\",\";\"],[\"token\",\"2\"],[\"token\",\"0\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"string\",\"CDEFGHJKLMNPQRSTUVWX\"],[\"token\",\";\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"],[\"token\",\"(\"]]"
   ]
 }
