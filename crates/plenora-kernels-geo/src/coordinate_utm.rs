@@ -68,7 +68,26 @@ pub enum UtmError {
 /// # Errors
 /// `Domain` per non finiti o fuori +/-180, -80..=84; `Projection` se il calcolo fallisce.
 pub fn to_utm(lon: f64, lat: f64) -> Result<UtmCoordinate, UtmError> {
-    to_utm_on(lon, lat, GridEllipsoid::Wgs84)
+    let value = to_utm_on(lon, lat, GridEllipsoid::Wgs84)?;
+    let UtmCoordinate {
+        zone,
+        hemisphere,
+        easting,
+        northing,
+    } = value;
+    // Il falso nord puo' assorbire una latitudine negativa piccolissima.
+    // Il nodo equatoriale rappresentabile ha una sola designazione.
+    let (hemisphere, northing) = if hemisphere == 'S' && northing == 10_000_000.0 {
+        ('N', 0.0)
+    } else {
+        (hemisphere, northing)
+    };
+    Ok(UtmCoordinate {
+        zone,
+        hemisphere,
+        easting,
+        northing,
+    })
 }
 
 pub(crate) fn to_utm_on(
@@ -180,6 +199,9 @@ fn inverse(value: UtmCoordinate, margin: f64) -> Result<(f64, f64), UtmError> {
     if !(100_000.0..=900_000.0).contains(&easting) || !(0.0..=10_000_000.0).contains(&northing) {
         return Err(UtmError::Domain);
     }
+    if !is_north && northing == 10_000_000.0 {
+        return Err(UtmError::Domain);
+    }
     // Il core ha un dominio maggiore; gli ingressi arbitrari fuori da quello
     // sono comunque rifiuti di dominio, non errori interni della proiezione.
     let (mut lon, lat) =
@@ -233,7 +255,11 @@ pub fn format_utm(lon: f64, lat: f64, resolution_m: u8) -> Result<String, UtmErr
     Ok(format_coordinate(value))
 }
 
-fn format_coordinate(value: UtmCoordinate) -> String {
+fn format_coordinate(mut value: UtmCoordinate) -> String {
+    if value.hemisphere == 'S' && value.northing.round_ties_even() == 10_000_000.0 {
+        value.hemisphere = 'N';
+        value.northing = 0.0;
+    }
     format!(
         "{} {} {:.0} {:.0}",
         value.zone,

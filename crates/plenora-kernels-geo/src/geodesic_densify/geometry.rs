@@ -83,11 +83,11 @@ fn emit_polygon(
 /// tale politica non e' disponibile. Emisferi ambigui sono rifiutati.
 /// Seam continuo e calotte polari ammessi; nessuna riproiezione o riparazione.
 /// Valida anche contenimento dei buchi, buchi annidati e parti sovrapposte.
-/// Bordi non adiacenti entro 8 mm possono essere rifiutati; classificazione
-/// o area non certificabile fallisce. Usa palle metriche ellissoidiche e
-/// classificazione mediante la mappa normale, senza topologia planare lon/lat.
-/// Il modulo comune alla distanza rifiuta aree assolute non superiori a
-/// n coordinate m2 + perimetro per margine di posizione, chiusura inclusa.
+/// Separazione proporzionale all'errore posizionale effettivo delle primitive.
+/// L'orientamento usa un ventaglio della mappa normale, con errore proporzionale
+/// a somma dei cubi dei passi e perimetro; vicino al complemento ambiguo usa
+/// il certificato globale delle primitive d'area e della loro accumulazione.
+/// Limiti residui e categorie in `docs/geodetica-coordinate.md`.
 /// Sui lati oltre 1000 km richiede m12>=1024 m e propaga il margine
 /// di posizione dipendente da m12, inferiore a 0.25 mm.
 /// Bordi quasi paralleli distanti meno di un metro possono esaurire il

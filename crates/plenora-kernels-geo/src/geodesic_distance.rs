@@ -74,7 +74,7 @@ pub enum GeodesicDistanceError {
     #[error("geodetica minima ambigua")]
     AmbiguousGeodesic,
     /// Topologia, ramo numerico o precisione non certificabile.
-    #[error("accuratezza geodetica non dimostrata")]
+    #[error("GEOMETRY_ACCURACY_UNPROVEN")]
     AccuracyUnproven,
     /// Anelli che si toccano/incrociano o complemento ambiguo.
     #[error("superficie geodetica non supportata")]
@@ -120,7 +120,7 @@ pub enum GeodesicDistanceError {
 /// I lati non unici G2 falliscono, mentre la distanza fra punti antipodali
 /// rimane definita. Come nel densify, la fascia numerica delta lon>178 gradi,
 /// 0<abs(lat1+lat2)<1e-12 gradi con azimut estremi diversi non e' certificata.
-/// Le superfici con bordi non adiacenti entro 8 mm possono essere rifiutate;
+/// La separazione delle superfici dipende dal margine effettivo delle primitive;
 /// orientamento/area o classificazione non certificabili falliscono.
 /// Sui lati oltre 1000 km si richiede m12>=1024 m per limitare
 /// l'amplificazione numerica vicino ai punti coniugati.

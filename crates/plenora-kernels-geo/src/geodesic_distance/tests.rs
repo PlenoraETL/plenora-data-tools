@@ -585,6 +585,8 @@ fn direct_failure_is_accuracy_and_tiny_area_is_explicit() {
     };
     let arc = ArcPiece {
         origin: Coord { x: 0., y: 0. },
+        end: Coord { x: 0., y: 1. },
+        length: 1.0,
         azimuth: f64::NAN,
         lo: 0.,
         hi: 1.,
@@ -599,9 +601,8 @@ fn direct_failure_is_accuracy_and_tiny_area_is_explicit() {
         Err(GeodesicDistanceError::AccuracyUnproven)
     ));
     let tiny: Geometry = Polygon::new(rectangle(0., 0.000_001), vec![]).into();
-    // G2: la soglia conservativa d'area rifiuta un quadrato di circa 0.01 m2.
-    assert!(matches!(
-        geodesic_distance_with_limits(&point(1., 1.), &tiny, &crs, limits(), None),
-        Err(GeodesicDistanceError::UnsupportedSurface)
-    ));
+    // GOP-006: orientamento normale certificato anche per circa 0.01 m2.
+    let distance =
+        geodesic_distance_with_limits(&point(1., 1.), &tiny, &crs, limits(), None).unwrap();
+    assert!(distance.metres > 150_000.0 && distance.metres < 160_000.0);
 }

@@ -2465,5 +2465,14 @@
     "[[\"token\",\"v\"],[\"token\",\"|\"],[\"token\",\"v\"],[\"token\",\"=\"],[\"token\",\"=\"],[\"string\",\"geoarrow.wkb\"],[\"token\",\")\"],[\"token\",\"&\"],[\"token\",\"&\"],[\"token\",\"(\"],[\"token\",\"proprieta\"]]",
     "[[\"token\",\"{\"],[\"token\",\"verifica_nome\"],[\"token\",\"(\"],[\"token\",\"nome\"],[\"token\",\",\"],[\"string\",\"input\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"limiti_piano\"],[\"token\",\")\"],[\"token\",\"?\"]]",
     "[[\"token\",\"}\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"oltre\"],[\"token\",\"(\"],[\"string\",\"max_inputs\"],[\"token\",\",\"],[\"token\",\"piano\"],[\"token\",\".\"],[\"token\",\"inputs\"],[\"token\",\".\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_densify.rs": [
+    "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_distance.rs": [
+    "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/preserve_shape_measure.rs": [
+    "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]"
   ]
 }

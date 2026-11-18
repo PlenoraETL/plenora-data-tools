@@ -187,13 +187,6 @@ fn ambiguous_hemisphere_crossings_and_invalid_holes_are_typed() {
             rectangle(0.0, 0.0, 4.0, 4.0),
             vec![rectangle(0.0, 1.0, 2.0, 2.0)],
         ),
-        Polygon::new(
-            rectangle(-5.0, -5.0, 5.0, 5.0),
-            vec![
-                rectangle(-3.0, -3.0, 3.0, 3.0),
-                rectangle(-1.0, -1.0, 1.0, 1.0),
-            ],
-        ),
     ] {
         assert_eq!(
             run(&Geometry::Polygon(polygon), 1e6),
@@ -324,5 +317,100 @@ fn black_box_interrupts_during_large_emission() {
     assert_eq!(
         geodesic_densify_geometry_with_limits(&input, &crs, 10.0, budget, None),
         Err(GeodesicDensifyError::DeadlineExceeded)
+    );
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn independent_reader_small_surfaces_and_steps() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    // t_dens2.py: rettangoli circa 79x111 m, 4x5.5 m e 0.8x1.1 m.
+    for (width, maximum) in [
+        (0.001, 0.02),
+        (0.001, 0.003),
+        (0.00005, 0.5),
+        (0.00001, 10.0),
+    ] {
+        let ring = rectangle(10.0, 45.0, 10.0 + width, 45.0 + width);
+        let input = Geometry::Polygon(Polygon::new(ring.clone(), vec![]));
+        let budget = GeodesicGeometryDensifyLimits {
+            output: GeodesicDensifyLimits {
+                max_points: 200_000,
+                max_reserved_bytes: 200_000_000,
+                deadline: None,
+            },
+            max_validation_work: 100_000_000,
+        };
+        let Geometry::Polygon(output) =
+            geodesic_densify_geometry_with_limits(&input, &crs, maximum, budget, None).unwrap()
+        else {
+            panic!("tipo inatteso")
+        };
+        assert_eq!(output.exterior().0.first(), ring.0.first());
+        assert_eq!(output.exterior().0.last(), ring.0.last());
+        let expected =
+            geodesic_densify_with_limits(&[ring], &crs, maximum, budget.output, None).unwrap();
+        assert_eq!(output.exterior(), &expected[0]);
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn nested_holes_are_invalid_geometry() {
+    let polygon = Polygon::new(
+        rectangle(0.0, 0.0, 10.0, 10.0),
+        vec![rectangle(2.0, 2.0, 8.0, 8.0), rectangle(4.0, 4.0, 6.0, 6.0)],
+    );
+    assert_eq!(
+        run(&polygon.into(), 1e6),
+        Err(GeodesicDensifyError::InvalidGeometry)
+    );
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn close_edges_and_uncertifiable_area_have_distinct_categories() {
+    // Lati opposti a circa 2 mm: il GAP fisso non e' un limite geometrico.
+    let close = Polygon::new(rectangle(10.0, 45.0, 10.000_000_25, 45.000_000_018), vec![]);
+    let output = run(&close.clone().into(), 10.0).unwrap();
+    assert_eq!(output, close.into());
+    // Sotto il certificato delle primitive non si dichiara un incrocio.
+    let tiny = Polygon::new(
+        rectangle(10.0, 45.0, 10.000_000_001, 45.000_000_001),
+        vec![],
+    );
+    assert_eq!(
+        run(&tiny.into(), 10.0),
+        Err(GeodesicDensifyError::AccuracyUnproven)
+    );
+    let touch = Polygon::new(
+        LineString::from(vec![
+            (0.0, 0.0),
+            (4.0, 0.0),
+            (4.0, 4.0),
+            (2.0, 0.0),
+            (0.0, 4.0),
+            (0.0, 0.0),
+        ]),
+        vec![],
+    );
+    assert_eq!(
+        run(&touch.into(), 1e6),
+        Err(GeodesicDensifyError::UnsupportedSurface)
+    );
+    // t_surf.py: bowtie simmetrico, area nulla ma incrocio dimostrato.
+    let bowtie = Polygon::new(
+        LineString::from(vec![
+            (0.0, 0.0),
+            (2.0, 2.0),
+            (2.0, 0.0),
+            (0.0, 2.0),
+            (0.0, 0.0),
+        ]),
+        vec![],
+    );
+    assert_eq!(
+        run(&bowtie.into(), 1e6),
+        Err(GeodesicDensifyError::UnsupportedSurface)
     );
 }

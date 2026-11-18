@@ -229,3 +229,16 @@ fn round_trip_ground_bound() {
         }
     }
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn equator_has_only_the_northern_canonical_representation() {
+    use plenora_kernels_geo::coordinate_utm::{format_utm, parse_utm};
+    assert_eq!(
+        parse_utm("31 S 500000 10000000"),
+        Err(plenora_kernels_geo::coordinate_utm::UtmError::Domain)
+    );
+    for latitude in [-1e-300, -f64::from_bits(1), -0.0, 0.0] {
+        assert_eq!(format_utm(3.0, latitude, 1).unwrap(), "31 N 500000 0");
+    }
+}

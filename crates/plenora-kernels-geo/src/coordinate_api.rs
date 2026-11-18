@@ -12,12 +12,17 @@
 //! pubblicati; indice zero-based solo per errori dell'elemento. Configurazione
 //! verificata anche sui batch vuoti. Testi entro 256 byte che violano i limiti
 //! grammaticali dei codec sono `data_mapping`.
+//! Ordine di validazione: profilo/cardinalita' opzioni, presenza/duplicati,
+//! poi valori in ordine Precision, Resolution, Representative, Datum.
+//! Permutare le opzioni non cambia la categoria. GOP-022 ammette zeri iniziali
+//! anche nei minuti/secondi: tre cifre intere sono ammesse solo entro [0,60).
+//! La scrittura resta canonica a due cifre per minuti/secondi.
 //!
 //! Quantizzazione: mezzo passo per DD/DDM/DMS e UTM; troncamento inferiore a un
 //! lato per celle (uguaglianza al bordo globale +90/+180). Le estensioni restano
 //! nella griglia sorgente e nel datum selezionato. Nessuna promessa centimetrica
 //! sul punto originale; valgono i limiti numerici documentati dai singoli codec.
-//! Questa superficie diretta non qualifica runtime, cancellazione o contabilita'
+//! Le varianti `with_limits` supportano GOP-028. Non qualificano runtime o contabilita'
 //! della memoria di GOP-026..031 e non introduce operazioni Arrow/CLI.
 
 use crate::{
@@ -61,6 +66,12 @@ pub enum CoordinateErrorKind {
     /// Proiezione non certificabile.
     #[error("execution")]
     Execution,
+    /// Annullamento cooperativo.
+    #[error("cancelled")]
+    Cancelled,
+    /// Scadenza monotona raggiunta.
+    #[error("timeout")]
+    DeadlineExceeded,
 }
 
 /// Errore atomico: nessun output parziale, testo statico e indice opzionale.
@@ -286,7 +297,11 @@ fn validate(
         resolution: None,
         representative: None,
     };
-    for option in request.options {
+    // Profilo e presenze precedono i valori; valori nell'ordine pubblico ALL.
+    for option in CoordinateOptionKind::ALL
+        .iter()
+        .filter_map(|key| request.options.iter().find(|option| option.kind() == *key))
+    {
         match *option {
             CoordinateOption::Datum(datum) => {
                 if !rule.datums.contains(&datum) {
@@ -487,11 +502,55 @@ pub fn decode_coordinate(
     Ok(validate(request, CoordinateDirection::Decode)?.decode(text)?)
 }
 
+/// Limiti del batch; il massimo locale resta `MAX_BATCH_ITEMS`.
+#[derive(Clone, Copy, Debug)]
+pub struct CoordinateLimits {
+    pub max_items: usize,
+    pub deadline: Option<std::time::Instant>,
+}
+
+impl Default for CoordinateLimits {
+    fn default() -> Self {
+        Self {
+            max_items: MAX_BATCH_ITEMS,
+            deadline: None,
+        }
+    }
+}
+
+fn checkpoint(work: &mut crate::noding::Work<'_>) -> Result<(), CoordinateApiError> {
+    work.step().map_err(|error| {
+        CoordinateApiError::from(match error {
+            crate::predicates::PredicateError::DeadlineExceeded => {
+                CoordinateErrorKind::DeadlineExceeded
+            }
+            crate::predicates::PredicateError::Cancelled => CoordinateErrorKind::Cancelled,
+            _ => CoordinateErrorKind::ResourceLimit,
+        })
+    })
+}
+
+fn control(
+    limits: CoordinateLimits,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> crate::noding::Work<'_> {
+    crate::noding::Work::with_deadline_precedence(
+        crate::predicates::RelateLimits {
+            max_steps: (MAX_BATCH_ITEMS as u64) + 4,
+            deadline: limits.deadline,
+            ..crate::predicates::RelateLimits::default()
+        },
+        cancelled,
+    )
+}
+
 fn batch<T, U>(
     input: &[T],
+    limits: CoordinateLimits,
+    work: &mut crate::noding::Work<'_>,
     mut convert: impl FnMut(&T) -> Result<U, CoordinateErrorKind>,
 ) -> Result<Vec<U>, CoordinateApiError> {
-    if input.len() > MAX_BATCH_ITEMS {
+    if input.len() > MAX_BATCH_ITEMS.min(limits.max_items) {
         return Err(CoordinateErrorKind::ResourceLimit.into());
     }
     let mut output = Vec::new();
@@ -499,11 +558,13 @@ fn batch<T, U>(
         .try_reserve_exact(input.len())
         .map_err(|_| CoordinateErrorKind::ResourceLimit)?;
     for (index, value) in input.iter().enumerate() {
+        checkpoint(work)?;
         output.push(convert(value).map_err(|kind| CoordinateApiError {
             kind,
             index: Some(index),
         })?);
     }
+    checkpoint(work)?;
     Ok(output)
 }
 
@@ -514,8 +575,7 @@ pub fn encode_coordinates(
     request: CoordinateRequest<'_>,
     points: &[CoordinatePoint],
 ) -> Result<Vec<String>, CoordinateApiError> {
-    let options = validate(request, CoordinateDirection::Encode)?;
-    batch(points, |point| options.encode(*point))
+    encode_coordinates_with_limits(request, points, CoordinateLimits::default(), None)
 }
 
 /// Decodifica atomica; nessun prefisso viene restituito in caso di errore.
@@ -525,8 +585,38 @@ pub fn decode_coordinates(
     request: CoordinateRequest<'_>,
     texts: &[&str],
 ) -> Result<Vec<DecodedCoordinate>, CoordinateApiError> {
+    decode_coordinates_with_limits(request, texts, CoordinateLimits::default(), None)
+}
+
+/// Codifica cooperativa: checkpoint all'ingresso, per elemento e prima del ritorno.
+/// L'intervallo massimo e' un codec scalare, con testo limitato a 256 byte.
+/// # Errors
+/// Errori atomici della famiglia; la deadline prevale sulla cancellazione.
+pub fn encode_coordinates_with_limits(
+    request: CoordinateRequest<'_>,
+    points: &[CoordinatePoint],
+    limits: CoordinateLimits,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Vec<String>, CoordinateApiError> {
+    let mut work = control(limits, cancelled);
+    checkpoint(&mut work)?;
+    let options = validate(request, CoordinateDirection::Encode)?;
+    batch(points, limits, &mut work, |point| options.encode(*point))
+}
+
+/// Decodifica cooperativa con gli stessi checkpoint della codifica.
+/// # Errors
+/// Errori atomici della famiglia; la deadline prevale sulla cancellazione.
+pub fn decode_coordinates_with_limits(
+    request: CoordinateRequest<'_>,
+    texts: &[&str],
+    limits: CoordinateLimits,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Vec<DecodedCoordinate>, CoordinateApiError> {
+    let mut work = control(limits, cancelled);
+    checkpoint(&mut work)?;
     let options = validate(request, CoordinateDirection::Decode)?;
-    batch(texts, |text| options.decode(text))
+    batch(texts, limits, &mut work, |text| options.decode(text))
 }
 
 impl From<CoordinateTextError> for CoordinateErrorKind {
@@ -577,6 +667,32 @@ impl From<GridTextError> for CoordinateErrorKind {
             GridTextError::InvalidConfiguration => Self::InvalidConfiguration,
             GridTextError::DataMapping => Self::DataMapping,
             GridTextError::ResourceLimit => Self::ResourceLimit,
+        }
+    }
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod tests {
+    use super::*;
+    #[test]
+    #[deny(clippy::disallowed_methods)]
+    fn interruption_at_each_element_and_publication_is_atomic() {
+        use std::sync::atomic::AtomicBool;
+        for deadline in [false, true] {
+            for at in 0..=3 {
+                let flag = AtomicBool::new(false);
+                let limits = CoordinateLimits::default();
+                let mut work = control(limits, Some(&flag));
+                work.interrupt_at = Some((at, deadline));
+                let result = batch(&[1, 2, 3], limits, &mut work, |value| Ok(*value));
+                let kind = if deadline {
+                    CoordinateErrorKind::DeadlineExceeded
+                } else {
+                    CoordinateErrorKind::Cancelled
+                };
+                assert_eq!(result, Err(kind.into()));
+            }
         }
     }
 }

@@ -167,7 +167,7 @@ fn zone_band_and_polar_boundaries() {
         (33.0, 72.0, "37X"),
         (42.0, 72.0, "38X"),
         (0.0, -80.0, "31C"),
-        (0.0, 84.0, "31X"),
+        (0.0, 84.0, "Z"),
         (-90.0, (-80.0_f64).next_down(), "A"),
         (90.0, (-80.0_f64).next_down(), "B"),
         (-90.0, 84.0_f64.next_up(), "Y"),
@@ -258,4 +258,18 @@ fn strict_errors_without_caller_data() {
         project_ups_wgs84(false, true, 1e308, 1e308),
         Err(plenora_core::crs::CrsError::ReprojectionNotConverged)
     ));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn northern_utm_boundary_belongs_to_ups() {
+    use plenora_kernels_geo::coordinate_mgrs::format_mgrs;
+    assert!(format_mgrs(0.0, 84.0, 5).unwrap().starts_with('Z'));
+    assert!(format_mgrs(0.0, 84.0_f64.next_down(), 5)
+        .unwrap()
+        .starts_with("31X"));
+    assert!(format_mgrs(0.0, -80.0, 5).unwrap().starts_with("31C"));
+    assert!(format_mgrs(0.0, (-80.0_f64).next_down(), 5)
+        .unwrap()
+        .starts_with('B'));
 }

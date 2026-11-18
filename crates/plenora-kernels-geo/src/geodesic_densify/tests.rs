@@ -364,3 +364,44 @@ fn exact_seam_identity_and_numeric_length_threshold() {
         Err(GeodesicDensifyError::PointLimit)
     );
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn independent_reader_large_division_ratios() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let ellipsoid = crate::geodetica::wgs84_di_prova();
+    // t_dens2.py: equatore WGS84, L=a*delta_lambda (oracolo analitico).
+    for (maximum, length) in [(0.01, 1_000.0), (0.1, 10_000.0), (1.0, 3_000_000.0)] {
+        let longitude = (length / 6_378_137.0_f64).to_degrees();
+        let input = LineString::from(vec![(0.0, 0.0), (longitude, 0.0)]);
+        let segment = edge(input.0[0], input.0[1], &ellipsoid, maximum).unwrap();
+        assert!(f64::from(segment.divisions) > (length / maximum).ceil() + 1.0);
+        let count = u64::from(segment.divisions) + 1;
+        let exact = GeodesicDensifyLimits {
+            max_points: count,
+            max_reserved_bytes: count * size_of::<Coord>() as u64 + size_of::<LineString>() as u64,
+            deadline: None,
+        };
+        let output =
+            geodesic_densify_with_limits(std::slice::from_ref(&input), &crs, maximum, exact, None)
+                .unwrap();
+        assert_eq!(output[0].0.len() as u64, count);
+        for pair in output[0].0.windows(2) {
+            let distance = (pair[1].x - pair[0].x).to_radians() * 6_378_137.0;
+            assert!(distance + ROUND_OFF_M <= maximum);
+        }
+        assert_eq!(
+            geodesic_densify_with_limits(
+                std::slice::from_ref(&input),
+                &crs,
+                maximum,
+                GeodesicDensifyLimits {
+                    max_points: count - 1,
+                    ..exact
+                },
+                None
+            ),
+            Err(GeodesicDensifyError::PointLimit)
+        );
+    }
+}

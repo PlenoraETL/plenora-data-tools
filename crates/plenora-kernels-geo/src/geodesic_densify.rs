@@ -71,7 +71,7 @@ pub enum GeodesicDensifyError {
     #[error("allocazione geodetica fallita")]
     Allocation,
     /// Precisione o lunghezza delle divisioni non certificabile.
-    #[error("accuratezza geodetica non dimostrata")]
+    #[error("GEOMETRY_ACCURACY_UNPROVEN")]
     AccuracyUnproven,
     /// Annullamento cooperativo.
     #[error("densify geodetico annullato")]
@@ -199,14 +199,25 @@ fn edge(
     let divisions = if length == 0.0 || length + ROUND_OFF_M <= maximum {
         1
     } else {
-        let count = (length / maximum).ceil().max(2.0);
+        if (length / maximum).ceil() > f64::from(u32::MAX) {
+            return Err(GeodesicDensifyError::PointLimit);
+        }
+        let available = 4.0_f64.mul_add(-ROUND_OFF_M, maximum);
+        if available <= 0.0 {
+            return Err(GeodesicDensifyError::AccuracyUnproven);
+        }
+        // Salto al primo intero compatibile con il certificato, poi verifica.
+        let count = (length / available).ceil().max(2.0);
         if !count.is_finite() || count > f64::from(u32::MAX) {
             return Err(GeodesicDensifyError::PointLimit);
         }
         // Il controllo precedente rende esatta la conversione intera.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let mut divisions = count as u32;
-        if 4.0_f64.mul_add(ROUND_OFF_M, length / f64::from(divisions)) > maximum {
+        loop {
+            if 4.0_f64.mul_add(ROUND_OFF_M, length / f64::from(divisions)) <= maximum {
+                break;
+            }
             divisions = divisions
                 .checked_add(1)
                 .ok_or(GeodesicDensifyError::PointLimit)?;
@@ -229,7 +240,7 @@ fn edge(
 ///
 /// Per lunghezza L, parte da n=max(1,ceil(L/h)); le divisioni sono a i*L/n
 /// dal primo estremo. Se il margine numerico di 4 micrometri non permette
-/// di certificare il massimo, aumenta n di uno. Un lato entro un micrometro
+/// di certificare il massimo, aumenta n fino a soddisfare il certificato. Un lato entro un micrometro
 /// dalla soglia riceve almeno due divisioni. Ogni tratto prodotto viene
 /// verificato con inverse e margine di un micrometro; se non certificabile,
 /// fallisce atomicamente. Il passo non e' un limite all'errore della forma.

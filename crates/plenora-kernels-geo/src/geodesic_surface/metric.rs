@@ -128,6 +128,9 @@ impl Work<'_> {
         if offset == 0.0 {
             return Ok(arc.origin);
         }
+        if offset == arc.length {
+            return Ok(arc.end);
+        }
         self.step()?;
         let (lat, lon): (f64, f64) =
             self.ellipsoid
@@ -147,6 +150,8 @@ pub(crate) fn coordinate(point: Coord) -> Result<Coord, GeodesicDistanceError> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ArcPiece {
     pub(crate) origin: Coord,
+    pub(crate) end: Coord,
+    pub(crate) length: f64,
     pub(crate) azimuth: f64,
     pub(crate) lo: f64,
     pub(crate) hi: f64,
@@ -169,6 +174,8 @@ impl MetricBall {
             tangent: 0.0,
             arc: ArcPiece {
                 origin: point,
+                end: point,
+                length: 0.0,
                 azimuth: 0.0,
                 lo: 0.0,
                 hi: 0.0,
@@ -262,6 +269,8 @@ pub(crate) fn edge(
     MetricBall::piece(
         ArcPiece {
             origin: a,
+            end: b,
+            length,
             azimuth,
             lo: 0.0,
             hi: length,
@@ -315,13 +324,13 @@ impl GeometryIndex {
             if self.nodes.len() - begin < 3 {
                 return Err(GeodesicDistanceError::UnsupportedSurface);
             }
-            let area = surface::ring_area(ring, work)?;
+            let orientation = surface::ring_area(ring, work)?;
             work.push(
                 &mut self.rings,
                 surface::SurfaceRing {
                     begin,
                     end: self.nodes.len(),
-                    area,
+                    orientation,
                     shell,
                 },
             )?;
@@ -493,7 +502,7 @@ impl SearchQueue {
             ));
         }
         if if self.separation_only {
-            lower > GAP_M
+            lower > 16.0 * work.position_margin
         } else {
             lower >= self.best - GAP_M
         } {
@@ -542,13 +551,19 @@ pub(crate) fn minimum(
     queue.add(a, b, work)?;
     while let Some(candidate) = queue.heap.pop() {
         work.step()?;
-        if queue.best <= if separation_only { 2.0 * GAP_M } else { GAP_M } {
+        if queue.best
+            <= if separation_only {
+                32.0 * work.position_margin
+            } else {
+                GAP_M
+            }
+        {
             break;
         }
         if !separation_only && candidate.lower >= queue.best - GAP_M {
             continue;
         }
-        if separation_only && candidate.lower > GAP_M {
+        if separation_only && candidate.lower > 16.0 * work.position_margin {
             continue;
         }
         if candidate.a.radius >= candidate.b.radius {
@@ -565,7 +580,13 @@ pub(crate) fn minimum(
     drop(queue);
     work.bytes = before;
     Ok(
-        if best <= if separation_only { 2.0 * GAP_M } else { GAP_M } {
+        if best
+            <= if separation_only {
+                32.0 * work.position_margin
+            } else {
+                GAP_M
+            }
+        {
             0.0
         } else {
             best
