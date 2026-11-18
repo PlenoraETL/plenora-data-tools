@@ -2307,5 +2307,8 @@
     "[[\"token\",\";\"],[\"token\",\"validate\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"evaluate_unchecked\"],[\"token\",\"(\"]]",
     "[[\"token\",\"[\"],[\"token\",\"serde\"],[\"token\",\"(\"],[\"token\",\"rename_all\"],[\"token\",\"=\"],[\"string\",\"snake_case\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"pub\"],[\"token\",\"enum\"],[\"token\",\"SpatialPredicate\"]]",
     "[[\"token\",\"{\"],[\"token\",\"validate\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"validate\"],[\"token\",\"(\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/grid_text.rs": [
+    "[[\"token\",\";\"],[\"token\",\"2\"],[\"token\",\"4\"],[\"token\",\"]\"],[\"token\",\"=\"],[\"string\",\"ABCDEFGHJKLMNPQRSTUVWXYZ\"],[\"token\",\";\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"],[\"token\",\"(\"]]"
   ]
 }

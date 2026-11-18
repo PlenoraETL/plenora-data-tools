@@ -1950,6 +1950,12 @@
       "aree_e_lunghezze_contro_geographiclib",
       "ed50_e_wgs84_non_danno_la_stessa_distanza"
     ],
+    "crates/plenora-kernels-geo/tests/grid_text.rs": [
+      "standard_examples_and_edges",
+      "quadrant_keypad_and_exact_boundary_ownership",
+      "closed_grammar_and_typed_errors",
+      "cells_and_canonical_roundtrips"
+    ],
     "crates/plenora-kernels-geo/tests/griglia_overlay.rs": [
       "booleane_alle_tre_scale",
       "dissolve_clip_overlay_alle_tre_scale",

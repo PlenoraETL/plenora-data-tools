@@ -8021,6 +8021,30 @@
       "classification": "non riceve dati esterni",
       "reason": "Codec scalare con valori Rust e testo limitato; nessun buffer o cella Arrow.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::format_gars": {
+      "signature": "pub fn format_gars( latitude: f64, longitude: f64, resolution: GarsResolution, ) -> Result<String, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Codec scalare con valori Rust e testo limitato; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::parse_gars": {
+      "signature": "pub fn parse_gars( text: &str, resolution: GarsResolution, representative: CellRepresentative, ) -> Result<DecodedGridCell, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Codec scalare con valori Rust e testo limitato; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::format_georef": {
+      "signature": "pub fn format_georef( latitude: f64, longitude: f64, precision: u8, ) -> Result<String, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Codec scalare con valori Rust e testo limitato; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/grid_text.rs::parse_georef": {
+      "signature": "pub fn parse_georef( text: &str, precision: u8, representative: CellRepresentative, ) -> Result<DecodedGridCell, GridTextError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Codec scalare con valori Rust e testo limitato; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {
