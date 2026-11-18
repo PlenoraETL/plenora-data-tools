@@ -615,3 +615,79 @@ fn geographic_cells_and_batch_order() -> Result<(), Box<dyn std::error::Error>> 
     );
     Ok(())
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn option_order_cannot_change_error_category() {
+    let a = CoordinateOption::Precision(9);
+    let b = CoordinateOption::Datum(CoordinateDatum::Nad83);
+    let point = CoordinatePoint {
+        longitude: 0.0,
+        latitude: 0.0,
+    };
+    for values in [[a, b], [b, a]] {
+        assert_eq!(
+            encode_coordinate(request(CoordinateFormat::Mgrs, &values), point),
+            Err(CoordinateErrorKind::InvalidConfiguration.into())
+        );
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn batch_deadline_precedes_cancel_even_when_empty() {
+    use std::sync::atomic::AtomicBool;
+    let flag = AtomicBool::new(true);
+    let limits = CoordinateLimits {
+        max_items: 0,
+        deadline: Some(std::time::Instant::now()),
+    };
+    let encode = options(CoordinateFormat::Dd, CoordinateDirection::Encode);
+    let decode = options(CoordinateFormat::Dd, CoordinateDirection::Decode);
+    assert_eq!(
+        encode_coordinates_with_limits(
+            request(CoordinateFormat::Dd, &encode),
+            &[],
+            limits,
+            Some(&flag)
+        ),
+        Err(CoordinateErrorKind::DeadlineExceeded.into())
+    );
+    assert_eq!(
+        decode_coordinates_with_limits(
+            request(CoordinateFormat::Dd, &decode),
+            &["0N 0E"],
+            limits,
+            Some(&flag)
+        ),
+        Err(CoordinateErrorKind::DeadlineExceeded.into())
+    );
+    assert_eq!(
+        encode_coordinates_with_limits(
+            request(CoordinateFormat::Dd, &encode),
+            &[],
+            CoordinateLimits::default(),
+            Some(&flag)
+        ),
+        Err(CoordinateErrorKind::Cancelled.into())
+    );
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn angular_leading_zeros_are_an_explicit_grammar_exception() {
+    for (format, text) in [
+        (CoordinateFormat::Dms, "10 000 000.0N 020 000 000.0E"),
+        (CoordinateFormat::Ddm, "10 000.0N 020 000.0E"),
+    ] {
+        let options = options(format, CoordinateDirection::Decode);
+        let decoded = decode_coordinate(request(format, &options), text).unwrap();
+        assert_eq!(
+            decoded.point,
+            CoordinatePoint {
+                longitude: 20.0,
+                latitude: 10.0
+            }
+        );
+    }
+}

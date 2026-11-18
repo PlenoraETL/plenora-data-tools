@@ -1400,6 +1400,9 @@
       "insufficient_points_are_omitted_like_manipola_groups",
       "rejects_wrong_geometry_type_and_self_intersection"
     ],
+    "crates/plenora-kernels-geo/src/coordinate_api.rs": [
+      "interruption_at_each_element_and_publication_is_atomic"
+    ],
     "crates/plenora-kernels-geo/src/coordinate_mgrs.rs": [
       "exact_square_and_digit_boundaries"
     ],
@@ -1558,7 +1561,10 @@
       "ambiguous_hemisphere_crossings_and_invalid_holes_are_typed",
       "geometry_empty_linear_and_unsupported_domains",
       "geometry_limits_and_interruption_precedence",
-      "black_box_interrupts_during_large_emission"
+      "black_box_interrupts_during_large_emission",
+      "independent_reader_small_surfaces_and_steps",
+      "nested_holes_are_invalid_geometry",
+      "close_edges_and_uncertifiable_area_have_distinct_categories"
     ],
     "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
       "equator_analytic_and_exact_budget",
@@ -1567,7 +1573,8 @@
       "ambiguities_domains_and_controls",
       "multipart_empty_closure_seam_and_duplicates",
       "rounding_cannot_choose_an_antipodal_branch_or_hide_a_short_edge",
-      "exact_seam_identity_and_numeric_length_threshold"
+      "exact_seam_identity_and_numeric_length_threshold",
+      "independent_reader_large_division_ratios"
     ],
     "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs": [
       "exact_live_memory_and_cumulative_validation_work",
@@ -1597,7 +1604,8 @@
       "direct_failure_is_accuracy_and_tiny_area_is_explicit"
     ],
     "crates/plenora-kernels-geo/src/geodesic_surface.rs": [
-      "ring_classification_has_one_implementation"
+      "ring_classification_has_one_implementation",
+      "normal_orientation_matches_area_oracle_for_dense_global_and_local_rings"
     ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
@@ -1935,7 +1943,9 @@
       "stereographic_line_and_polygon_against_independent_reference",
       "stereographic_proof_domain_boundary_is_rejected",
       "hotine_line_and_polygon_against_independent_reference",
-      "hotine_proof_domain_boundary_is_rejected"
+      "hotine_proof_domain_boundary_is_rejected",
+      "certificate_components_are_public_and_sum_to_absolute_bound",
+      "overlapping_independent_area_operands_are_summed"
     ],
     "crates/plenora-kernels-geo/src/reshape/tests.rs": [
       "directed_replacement_and_vertices",
@@ -2188,13 +2198,17 @@
       "atomic_limits_and_private_errors",
       "cell_extents_representatives_and_nad27",
       "angular_pair_grammar_and_rounding",
-      "geographic_cells_and_batch_order"
+      "geographic_cells_and_batch_order",
+      "option_order_cannot_change_error_category",
+      "batch_deadline_precedes_cancel_even_when_empty",
+      "angular_leading_zeros_are_an_explicit_grammar_exception"
     ],
     "crates/plenora-kernels-geo/tests/coordinate_mgrs.rs": [
       "independent_numeric_oracle",
       "source_worked_examples_and_representatives",
       "zone_band_and_polar_boundaries",
-      "strict_errors_without_caller_data"
+      "strict_errors_without_caller_data",
+      "northern_utm_boundary_belongs_to_ups"
     ],
     "crates/plenora-kernels-geo/tests/coordinate_text.rs": [
       "analytic_written_expectations",
@@ -2213,7 +2227,8 @@
       "published_and_analytic_references",
       "zone_and_hemisphere_boundaries",
       "invalid_text_is_enumerated_and_typed",
-      "round_trip_ground_bound"
+      "round_trip_ground_bound",
+      "equator_has_only_the_northern_canonical_representation"
     ],
     "crates/plenora-kernels-geo/tests/crs_integrati_analisi.rs": [
       "operazioni_con_requisito_proiettato_girano_con_epsg_32632",

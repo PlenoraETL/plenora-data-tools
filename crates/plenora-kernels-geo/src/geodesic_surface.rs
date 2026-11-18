@@ -4,11 +4,8 @@
     reason = "Visibilita esplicita del supporto condiviso interno al crate"
 )]
 //!
-//! Area non certificabile: si rifiutano anelli con area assoluta non
-//! superiore a n coordinate m2 + perimetro per margine di posizione,
-//! inclusa la chiusura.
-//! La somma d'area senza compensazione impone questo limite anche ad
-//! anelli OGC validi molto piccoli; non e' un controllo di semplicita'.
+//! Il certificato d'area scala con perimetro, condizionamento polare e
+//! accumulazione; quello di separazione con l'errore posizionale effettivo.
 
 #![allow(clippy::float_cmp, reason = "Identita geodetiche esatte")]
 #![allow(
@@ -18,13 +15,13 @@
 pub(crate) mod metric;
 use crate::geodesic_distance::GeodesicDistanceError;
 use geo::{Coord, LineString};
-use geographiclib_rs::{PolygonArea, Winding};
-use metric::{minimum, GeometryIndex, MetricBall, Work, GAP_M};
+use geographiclib_rs::{InverseGeodesic, PolygonArea, Winding};
+use metric::{minimum, GeometryIndex, MetricBall, Work};
 
 pub(crate) struct SurfaceRing {
     pub(crate) begin: usize,
     pub(crate) end: usize,
-    pub(crate) area: f64,
+    pub(crate) orientation: f64,
     pub(crate) shell: usize,
 }
 
@@ -67,24 +64,117 @@ pub(crate) fn ring_area(
     }
     let ellipsoid = work.ellipsoid;
     let mut polygon = PolygonArea::new(ellipsoid.geodetica(), Winding::CounterClockwise);
+    match local_orientation(ring, work) {
+        Ok(Some(orientation)) => return Ok(orientation),
+        Err(GeodesicDistanceError::AccuracyUnproven) | Ok(None) => {}
+        Err(error) => return Err(error),
+    }
     let mut margin = 0.0;
+    let mut magnitude = 0.0;
+    for pair in ring.0.windows(2) {
+        work.step()?;
+        let (_, _, _, _, _, _, area, _): (f64, f64, f64, f64, f64, f64, f64, f64) = ellipsoid
+            .geodetica()
+            .inverse(pair[0].y, pair[0].x, pair[1].y, pair[1].x);
+        if !area.is_finite() {
+            return Err(GeodesicDistanceError::AccuracyUnproven);
+        }
+        magnitude = (magnitude + area.abs()).next_up();
+    }
     for point in &ring.0 {
         work.step()?;
         polygon.add_point(point.y, point.x);
-        // Somma non compensata del crate con default-features=false:
-        // 1 m2 per lato maggiora il round-off delle primitive terrestri.
         margin += 1.0;
     }
     work.step()?;
     let (perimeter, area, _) = polygon.compute(true);
-    margin += perimeter * work.position_margin;
-    if !area.is_finite()
-        || area.abs() <= margin
-        || ellipsoid.geodetica().area() * 0.5 - area.abs() <= margin
-    {
+    let epsilon = margin * f64::EPSILON;
+    if epsilon >= 0.5 {
+        return Err(GeodesicDistanceError::AccuracyUnproven);
+    }
+    margin += perimeter * work.position_margin + epsilon / (1.0 - epsilon) * magnitude;
+    if !margin.is_finite() {
+        return Err(GeodesicDistanceError::AccuracyUnproven);
+    }
+    if !area.is_finite() || area.abs() <= margin {
+        return Ok(0.0);
+    }
+    if ellipsoid.geodetica().area() * 0.5 - area.abs() <= margin {
         return Err(GeodesicDistanceError::UnsupportedSurface);
     }
     Ok(area)
+}
+
+// La mappa normale preserva orientamento. Kmin>=(1-f)^2/a^2 e
+// area_totale>=4pi*a^2*(1-f)^2: area normale <6 sr certifica la regione
+// minore anche per f=1/250. Il ventaglio deve restare ben condizionato.
+// Certifichiamo il segno, non un'area ellissoidica da pubblicare.
+fn local_orientation(
+    ring: &LineString,
+    work: &mut Work<'_>,
+) -> Result<Option<f64>, GeodesicDistanceError> {
+    let mut perimeter = 0.0;
+    let mut strip = 0.0;
+    for pair in ring.0.windows(2) {
+        let length = work.inverse(pair[0], pair[1])?.0 + metric::ROUND_M;
+        perimeter = (perimeter + length).next_up();
+        strip = (strip + 16.0 * (length / 5.9e6).powi(3)).next_up();
+    }
+    let origin = ring.0[0];
+    let normal = |point: Coord| {
+        let latitude = point.y.to_radians();
+        let base = origin.y.to_radians();
+        let delta = (point.y - origin.y).to_radians();
+        let longitude = (point.x - origin.x).to_radians();
+        let half_lon = (longitude * 0.5).sin().powi(2);
+        [
+            latitude.cos() * longitude.sin(),
+            delta.sin() + 2.0 * latitude.cos() * base.sin() * half_lon,
+            1.0 - 2.0 * ((delta * 0.5).sin().powi(2) + latitude.cos() * base.cos() * half_lon),
+        ]
+    };
+    let mut sum = 0.0;
+    let mut magnitude = 0.0;
+    let mut rounding = 0.0;
+    let mut count = 0.0;
+    for pair in ring.0[1..].windows(2) {
+        work.step()?;
+        let a = normal(pair[0]);
+        let b = normal(pair[1]);
+        let denominator = 1.0 + a[2] + b[2] + a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let first = a[0] * b[1];
+        let second = a[1] * b[0];
+        if (first - second).hypot(denominator) <= 0.5 {
+            return Ok(None);
+        }
+        let angle = 2.0 * (first - second).atan2(denominator);
+        sum += angle;
+        magnitude += angle.abs();
+        rounding += 128.0 * f64::EPSILON * (first.abs() + second.abs());
+        count += 1.0;
+    }
+    let epsilon = count * f64::EPSILON;
+    if epsilon >= 0.5 {
+        return Err(GeodesicDistanceError::AccuracyUnproven);
+    }
+    let error = strip
+        + 512.0 * perimeter * work.position_margin / 5.9e6_f64.powi(2)
+        + rounding
+        + epsilon / (1.0 - epsilon) * magnitude;
+    let error = error + 32.0 * f64::EPSILON * sum.abs();
+    let full = 4.0 * std::f64::consts::PI;
+    let sum = if sum.abs() <= 2.0 * std::f64::consts::PI {
+        sum
+    } else {
+        (sum + 2.0 * std::f64::consts::PI).rem_euclid(full) - 2.0 * std::f64::consts::PI
+    };
+    if sum.abs() + error >= 6.0 {
+        return Ok(None);
+    }
+    if !sum.is_finite() || !error.is_finite() || sum.abs() <= error {
+        return Err(GeodesicDistanceError::AccuracyUnproven);
+    }
+    Ok(Some(sum.signum()))
 }
 
 fn adjacent(
@@ -101,7 +191,20 @@ fn adjacent(
     let angle_error =
         (8.0 * work.position_margin / back_length.min(forward_length)).to_degrees() + 1e-8;
     if gap.min(360.0 - gap) <= angle_error {
-        return Err(GeodesicDistanceError::UnsupportedSurface);
+        let meridian_overlap = join.x == before.x
+            && join.x == after.x
+            && (before.y - join.y).signum() == (after.y - join.y).signum();
+        let equator_overlap = join.y == 0.0
+            && before.y == 0.0
+            && after.y == 0.0
+            && (before.x - join.x).abs() < 180.0
+            && (after.x - join.x).abs() < 180.0
+            && (before.x - join.x).signum() == (after.x - join.x).signum();
+        return Err(if before == after || meridian_overlap || equator_overlap {
+            GeodesicDistanceError::UnsupportedSurface
+        } else {
+            GeodesicDistanceError::AccuracyUnproven
+        });
     }
     Ok(())
 }
@@ -118,6 +221,9 @@ pub(crate) fn validate(
             let next = if i + 1 == ring.end { ring.begin } else { i + 1 };
             adjacent(index.nodes[i], index.nodes[next], work)?;
         }
+        if ring.orientation == 0.0 {
+            return Err(GeodesicDistanceError::AccuracyUnproven);
+        }
         if ring.shell != ri {
             let point = index.nodes[ring.begin].centre;
             if !in_ring(point, &index.rings[ring.shell], &index.nodes, work)? {
@@ -127,7 +233,7 @@ pub(crate) fn validate(
                 if in_ring(point, other, &index.nodes, work)?
                     || in_ring(index.nodes[other.begin].centre, ring, &index.nodes, work)?
                 {
-                    return Err(GeodesicDistanceError::UnsupportedSurface);
+                    return Err(GeodesicDistanceError::InvalidGeometry);
                 }
             }
         }
@@ -144,7 +250,7 @@ pub(crate) fn validate(
             if in_polygon(index.nodes[ring.begin].centre, j, index, work)?
                 || in_polygon(index.nodes[other.begin].centre, i, index, work)?
             {
-                return Err(GeodesicDistanceError::UnsupportedSurface);
+                return Err(GeodesicDistanceError::InvalidGeometry);
             }
         }
     }
@@ -171,7 +277,7 @@ fn separate(
         return Ok(());
     }
     if work.inverse(a.centre, b.centre)?.0 - a.radius - b.radius - 4.0 * work.position_margin
-        > GAP_M
+        > 16.0 * work.position_margin
     {
         return Ok(());
     }
@@ -193,10 +299,69 @@ fn separate(
     if hi < ring.end && (hi == lo + 1 || (lo == ring.begin && hi + 1 == ring.end)) {
         return Ok(());
     }
-    if minimum(a, b, &[], &[], true, work)? <= GAP_M {
-        return Err(GeodesicDistanceError::UnsupportedSurface);
+    if minimum(a, b, &[], &[], true, work)? == 0.0 {
+        return Err(if crossing(a, b, work)? {
+            GeodesicDistanceError::UnsupportedSurface
+        } else {
+            GeodesicDistanceError::AccuracyUnproven
+        });
     }
     Ok(())
+}
+
+// Entro un intorno convesso, due archi con estremi su lati opposti
+// delle rispettive geodetiche hanno un incrocio trasverso.
+fn crossing(
+    a: MetricBall,
+    b: MetricBall,
+    work: &mut Work<'_>,
+) -> Result<bool, GeodesicDistanceError> {
+    let endpoints = [
+        work.at(a.arc, a.arc.lo)?,
+        work.at(a.arc, a.arc.hi)?,
+        work.at(b.arc, b.arc.lo)?,
+        work.at(b.arc, b.arc.hi)?,
+    ];
+    for x in &endpoints[..2] {
+        for y in &endpoints[2..] {
+            if x == y {
+                return Ok(true);
+            }
+        }
+    }
+    for (p, q, r) in [
+        (endpoints[0], endpoints[1], endpoints[2]),
+        (endpoints[0], endpoints[1], endpoints[3]),
+        (endpoints[2], endpoints[3], endpoints[0]),
+        (endpoints[2], endpoints[3], endpoints[1]),
+    ] {
+        if (p.x == q.x && p.x == r.x && (p.y.min(q.y)..=p.y.max(q.y)).contains(&r.y))
+            || (p.y == 0.0
+                && q.y == 0.0
+                && r.y == 0.0
+                && (p.x - q.x).abs() < 180.0
+                && (p.x.min(q.x)..=p.x.max(q.x)).contains(&r.x))
+        {
+            return Ok(true);
+        }
+    }
+    let mut opposite = true;
+    for (p, q, r, t) in [
+        endpoints.into(),
+        (endpoints[2], endpoints[3], endpoints[0], endpoints[1]),
+    ] {
+        let (base_length, axis, _, _) = work.inverse(p, q)?;
+        let (dr, ar, _, _) = work.inverse(p, r)?;
+        let (dt, at, _, _) = work.inverse(p, t)?;
+        if dr.max(dt) > 1_000_000.0 {
+            return Ok(false);
+        }
+        let sr = (ar - axis).to_radians().sin();
+        let st = (at - axis).to_radians().sin();
+        let uncertainty = 32.0 * work.position_margin / base_length.min(dr).min(dt) + 1e-10;
+        opposite &= sr.abs() > uncertainty && st.abs() > uncertainty && sr.signum() != st.signum();
+    }
+    Ok(opposite)
 }
 
 // (n(vertex)-n(point)) nel riferimento est/nord/normale di point.
@@ -281,7 +446,7 @@ fn in_ring(
     // Con il verso positivo Sigma=A fuori e A-4pi<-6.22 dentro.
     // La soglia -pi separa i due intervalli anche per A arbitrariamente
     // piccola e quando punto e antipode appartengono entrambi alla regione.
-    let oriented = sum.angle * ring.area.signum();
+    let oriented = sum.angle * ring.orientation.signum();
     let threshold = -std::f64::consts::PI;
     if oriented + sum.error < threshold {
         Ok(true)
@@ -378,5 +543,70 @@ mod tests {
         }
         let duplicate = ["fn ", "in_ring", "() {}\n"].concat().repeat(2);
         assert_eq!(classification_definitions(&duplicate, "in_ring"), 2);
+    }
+    #[test]
+    #[deny(clippy::disallowed_methods)]
+    fn normal_orientation_matches_area_oracle_for_dense_global_and_local_rings() {
+        use super::*;
+        use crate::geodesic_densify::{geodesic_densify_with_limits, GeodesicDensifyLimits};
+        use crate::geodesic_distance::GeodesicDistanceLimits;
+        use crate::geodetica::EllissoideGeodetico;
+        let crs = plenora_core::crs::resolve_crs("EPSG:4326", "crs").unwrap();
+        for (west, east, south, north, step) in [
+            (-10.0, 10.0, 45.0, 45.000_001, 100.0),
+            (10.0, 10.00001, 45.0, 45.00001, 0.01),
+            (179.0, -179.0, -1.0, 1.0, 10_000.0),
+        ] {
+            let ring = LineString::from(vec![
+                (west, south),
+                (east, south),
+                (east, north),
+                (west, north),
+                (west, south),
+            ]);
+            let dense = geodesic_densify_with_limits(
+                &[ring],
+                &crs,
+                step,
+                GeodesicDensifyLimits {
+                    max_points: 100_000,
+                    max_reserved_bytes: 10_000_000,
+                    deadline: None,
+                },
+                None,
+            )
+            .unwrap();
+            for reverse in [false, true] {
+                let mut ring = dense[0].clone();
+                if reverse {
+                    ring.0.reverse();
+                }
+                let ellipsoid = EllissoideGeodetico::da_crs(&crs).unwrap();
+                let mut polygon =
+                    PolygonArea::new(ellipsoid.geodetica(), Winding::CounterClockwise);
+                for point in &ring.0 {
+                    polygon.add_point(point.y, point.x);
+                }
+                let (_, area, _) = polygon.compute(true);
+                let mut work = Work {
+                    limits: GeodesicDistanceLimits {
+                        max_work: 1_000_000,
+                        max_reserved_bytes: 10_000_000,
+                        deadline: None,
+                    },
+                    cancel: None,
+                    count: 0,
+                    bytes: 0,
+                    peak: 0,
+                    ellipsoid,
+                    taylor: true,
+                    position_margin: metric::ROUND_M,
+                };
+                assert_eq!(
+                    local_orientation(&ring, &mut work).unwrap(),
+                    Some(area.signum())
+                );
+            }
+        }
     }
 }

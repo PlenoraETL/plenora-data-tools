@@ -316,7 +316,7 @@ mod tests {
                         generous_limits(),
                         None
                     ),
-                    Err(GeodesicDensifyError::UnsupportedSurface)
+                    Err(GeodesicDensifyError::InvalidGeometry)
                 );
             }
         }

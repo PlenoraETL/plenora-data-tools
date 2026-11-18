@@ -9349,6 +9349,24 @@
       "classification": "non riceve dati esterni",
       "reason": "Solo schema/metadati o dati prodotti in uscita; nessun buffer Arrow in ingresso.",
       "signature": "pub fn validate(&self, schemas: &[(&str, SchemaRef)]) -> Result<PipelineValidata>"
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinates_with_limits": {
+      "signature": "pub fn decode_coordinates_with_limits( request: CoordinateRequest<'_>, texts: &[&str], limits: CoordinateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<DecodedCoordinate>, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinates_with_limits": {
+      "signature": "pub fn encode_coordinates_with_limits( request: CoordinateRequest<'_>, points: &[CoordinatePoint], limits: CoordinateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<String>, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::default": {
+      "signature": "fn default() -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
     }
   },
   "rust_variants": {

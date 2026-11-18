@@ -144,7 +144,9 @@ pub(crate) fn format_on(
     {
         return Err(MgrsError::DataMapping);
     }
-    let (zone, band, x, y) = if (-80.0..=84.0).contains(&latitude) {
+    let (zone, band, x, y) = if (-80.0..84.0).contains(&latitude)
+        || (latitude == 84.0 && ellipsoid != GridEllipsoid::Wgs84)
+    {
         let utm = to_utm_on(longitude, latitude, ellipsoid).map_err(|_| MgrsError::Execution)?;
         let band = BANDS
             .iter()
