@@ -68,6 +68,7 @@ fn karney_vertices_dense_boundary_and_reverse_edges() {
                 >= disk.certificate.discretization_m
                     + disk.certificate.geographiclib_m
                     + disk.certificate.rounding_m
+                    + disk.certificate.model_change_m
         );
         let n = u32::try_from(coords.len() - 1).unwrap();
         for (k, edge) in coords.windows(2).enumerate() {
@@ -95,9 +96,103 @@ fn karney_vertices_dense_boundary_and_reverse_edges() {
                 let radial: f64 = ellipsoid.geodetica().inverse(p.y(), p.x(), lat, lon);
                 // La geodetica radiale incontra il confine esatto a distanza r.
                 assert!((radial - 2.0).abs() <= disk.certificate.absolute_m);
+                let linear_lat = (b.y - a.y).mul_add(t, a.y);
+                let linear_lon = (b.x - a.x).mul_add(t, a.x);
+                let planar_radial: f64 =
+                    ellipsoid
+                        .geodetica()
+                        .inverse(p.y(), p.x(), linear_lat, linear_lon);
+                assert!((planar_radial - 2.0).abs() <= disk.certificate.absolute_m);
             }
         }
     }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn model_change_bound_against_dense_karney_arc() {
+    // C1: equazioni metriche e interpolazione, docs/buffer-punto.md.
+    // Il punto allo stesso parametro sul segmento e' un testimone nei due versi.
+    for (axis, flattening) in [(6e6, 250.0), (7e6, 350.0)] {
+        let ellipsoid = EllissoideGeodetico::nuovo(plenora_core::crs::Ellipsoid {
+            semi_major_axis_metre: axis,
+            inverse_flattening: flattening,
+        })
+        .unwrap();
+        for latitude in [-80.0, -45.0, 0.0, 45.0, 80.0] {
+            for azimuth in [0.0, 30.0, 90.0, 135.0, 180.0, 270.0] {
+                for h in [1.0, 10.0, 1000.0, 60_000.0] {
+                    let (end_lat, end_lon): (f64, f64) =
+                        ellipsoid.geodetica().direct(latitude, 10.0, azimuth, h);
+                    let bound = side_model_error_m(h).unwrap();
+                    for j in 0..=128 {
+                        let t = f64::from(j) / 128.0;
+                        let (lat, lon): (f64, f64) =
+                            ellipsoid.geodetica().direct(latitude, 10.0, azimuth, h * t);
+                        let linear_lat = (end_lat - latitude).mul_add(t, latitude);
+                        let linear_lon = (end_lon - 10.0).mul_add(t, 10.0);
+                        let measured: f64 = ellipsoid
+                            .geodetica()
+                            .inverse(lat, lon, linear_lat, linear_lon);
+                        assert!(measured <= bound);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn model_change_controls_planning_and_rejects_invalid_bounds() {
+    // C1: il termine quadratico entra nel budget prima della generazione.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let (n, certificate) = plan(1.0, 0.01, &crs).unwrap();
+    let old_bound = ((certificate.discretization_m + NUMERIC_M).next_up() + ROUNDING_M).next_up();
+    let (refined, finer) = plan(1.0, old_bound, &crs).unwrap();
+    assert_eq!(refined, n * 2);
+    assert!(finer.absolute_m <= old_bound);
+    assert!(finer.model_change_m < certificate.model_change_m);
+    assert_eq!(side_model_error_m(0.0).unwrap(), 0.0);
+    for h in [-1.0, f64::NAN, f64::INFINITY, 60_000.0_f64.next_up()] {
+        assert_eq!(
+            side_model_error_m(h),
+            Err(DegenerateBufferError::AccuracyUnproven)
+        );
+    }
+    for h in [1e-150, 0.001, 1.0, 1000.0, 60_000.0] {
+        assert!(side_model_error_m(h / 2.0).unwrap() < side_model_error_m(h).unwrap());
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn planar_fan_rejects_folded_and_multiple_winding_rings() {
+    // C1: orientamenti esatti e numero di giri distinguono un disco da una stella.
+    let center = Coord { x: 0.0, y: 0.0 };
+    let ring = [
+        Coord { x: 1.0, y: 0.0 },
+        Coord { x: 0.0, y: 1.0 },
+        Coord { x: -1.0, y: 0.0 },
+        Coord { x: 0.0, y: -1.0 },
+        Coord { x: 1.0, y: 0.0 },
+    ];
+    verify_planar_fan(center, &ring, || Ok(())).unwrap();
+    let mut reversed = ring;
+    reversed.reverse();
+    assert_eq!(
+        verify_planar_fan(center, &reversed, || Ok(())),
+        Err(DegenerateBufferError::AccuracyUnproven)
+    );
+    let doubled: Vec<_> = ring[..4].iter().chain(ring.iter()).copied().collect();
+    assert_eq!(
+        verify_planar_fan(center, &doubled, || Ok(())),
+        Err(DegenerateBufferError::AccuracyUnproven)
+    );
+    assert_eq!(
+        verify_planar_fan(center, &[], || Ok(())),
+        Err(DegenerateBufferError::AccuracyUnproven)
+    );
 }
 
 #[test]

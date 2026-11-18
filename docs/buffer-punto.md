@@ -12,9 +12,10 @@ Il CRS geografico risolto fornisce datum ed ellissoide; nessun default Esri.
 Il disco esatto e' `{X: d(P,X)<=r}` nella metrica dell'ellissoide.
 Il confine campionato usa `direct(P,-360*k/n,r)` di Karney.
 Il segno meno produce un esterno antiorario; si copia il primo vertice
-alla fine. Nessun buco. I lati sono **geodetiche minime**, come in
-`geodesic_densify.rs` e `geodesic_distance.rs`, non corde nel piano lon/lat.
-Consumatori e serializzatori devono mantenere questa interpretazione.
+alla fine. Nessun buco. Il certificato copre sia i lati come geodetiche
+minime sia i segmenti lineari lon/lat consumati dalla 1c-c. La metrica
+dell'errore resta geodetica in entrambi i casi; il campo `MODEL` identifica
+questa metrica. Il termine `model_change_m` copre il passaggio fra i lati.
 
 Dominio ammesso, deliberatamente piu' piccolo di GOP-005:
 
@@ -83,9 +84,11 @@ azimut di meno di `2e/r` (si integra la metrica polare lungo il piccolo
 segmento perturbato, dove il raggio resta almeno `r-e`). Il primo `n`
 che soddisfa il budget effettivo `T>=1e-4 m` rispetta
 `r/n > 1.2e-5 m`: senza arrotondamenti il fallimento del candidato
-precedente darebbe `(T-2.2e-6)/8 >= 1.2225e-5 m`; i tre `next_up`
-e le addizioni a questa scala costano meno di `1e-17 m`, largamente
-assorbiti dalla riduzione a `1.2e-5`. Il candidato iniziale n=16 non
+precedente darebbe `(T-2.2e-6)/8 >= 1.2225e-5 m`. Con il termine di
+cambio modello, se r/n fosse <=1.2e-5, il candidato precedente avrebbe
+discretizzazione <=9.6e-5, numerico 2.2e-6 e cambio modello <4e-13 metri:
+sarebbe gia' accettato. Gli arrotondamenti diretti a questa scala costano
+meno di 1e-17 metri, assorbiti dal margine. Il candidato iniziale n=16 non
 puo' riuscire, dato r>=1 e T<=0.01.
 Quindi `2pi/n > 4e/r`: l'ordine angolare dei vertici non puo' invertirsi,
 e ogni passo e' molto minore di pi. I lati occupano settori consecutivi
@@ -113,7 +116,8 @@ di lunghezza al piu' `r+1`. I lati rimangono nella stessa palla convessa.
 
 Il certificato riporta CRS/datum, `shortest_geodesic`, metri,
 trasformazione zero, discretizzazione `next_up(4*r/n)`,
-componente GeographicLib `2e-7 m`, arrotondamenti `2e-6 m`.
+componente GeographicLib `2e-7 m`, arrotondamenti `2e-6 m` e
+`model_change_m`, calcolato come descritto sotto.
 La somma assoluta B usa `next_up` dopo ogni addizione; il relativo
 e' `next_up(B/r)`. Sono due descrizioni dello stesso bound, non due
 budget da sommare; il relativo e' normalizzato al raggio richiesto.
@@ -159,8 +163,9 @@ nessuna crescita implicita durante i push, ne' copia di anelli alla chiusura.
 L'allocatore puo' riservare memoria fisica addizionale, fuori da questo budget.
 I fallimenti di prenotazione sono `Allocation`.
 
-Il lavoro conta raggi, letture geometriche, coordinate e checkpoint
-di costruzione/assemblaggio. La pianificazione ha al piu' 28 raddoppi,
+Il lavoro conta raggi, letture geometriche, coordinate, controlli dei
+settori planari e checkpoint di costruzione/assemblaggio.
+La pianificazione ha al piu' 28 raddoppi,
 senza primitive geodetiche. Ogni direct e' preceduta da un checkpoint;
 ce n'e' uno anche dopo l'ultima direct e prima della pubblicazione.
 La deadline precede la cancellazione allo stesso checkpoint.
@@ -239,5 +244,105 @@ verificare separatamente la topologia promessa e dichiarare l'eventuale
 trattamento delle feature sotto la precisione del motore. La validita'
 OGC dell'unione planare non e' tale verifica per il modello geodetico.
 
-Queste lacune non dimostrano un'impossibilita' dell'estensione. Indicano
-le garanzie ancora necessarie prima di esporla come buffer GOP-006/008.
+Il cambio dei lati in ingresso e' coperto dal lemma seguente e dal
+certificato del disco. Restano da implementare l'unione cumulativa,
+la sua composizione numerica e la qualifica dei contatti. Non viene
+ancora esposto un buffer di multipunti distinti.
+
+## Lemma implementato del cambio di modello dei lati
+
+`side_model_error_m(h)` maggiora la distanza fra la geodetica minima
+di lunghezza <=h e l'interpolazione lineare delle sue coordinate lon/lat.
+Premesse: ellissoide del profilo, h<=60000 metri, estremi entro 81 gradi
+e arco senza attraversamento dell'antimeridiano. Questo include il caso
+richiesto con estremi entro 80 gradi e tutti i lati generati dal disco.
+Il bound e' **8e-6 h^2 metri**, arrotondato in alto a ogni prodotto.
+Zero restituisce zero; h negativo, non finito o fuori dominio produce
+`AccuracyUnproven`. La funzione e' interna: le premesse geometriche
+sono garantite dal dominio del disco, non dedotte dal solo h.
+
+Fonte della metrica ellissoidale e delle equazioni differenziali:
+[R. H. Rapp, Geometric Geodesy, Part I, equazioni 4.74-4.77](https://feng.stafpu.bu.edu.eg/Surveying%20Engineering/4251/crs-18763/Files/Rapp_Geom_Geod_Vol_I.pdf).
+La seguente stima uniforme e' una derivazione del profilo, non una
+costante di accuratezza attribuita a GeographicLib.
+
+In radianti, poniamo q=f(2-f), M=a(1-q)/(1-q sin^2(phi))^(3/2),
+N=a/sqrt(1-q sin^2(phi)), L=N cos(phi). La metrica e'
+ds^2=M^2 dphi^2+L^2 dlambda^2. Per una geodetica a velocita' unitaria,
+le equazioni di Eulero-Lagrange dell'energia danno
+
+```text
+phi'' = -(M'/M) phi'^2 + (L L'/M^2) lambda'^2
+lambda'' = -2 (L'/L) phi' lambda'
+M^2 phi'^2 + L^2 lambda'^2 = 1
+```
+
+Gli apici su M e L indicano derivazione rispetto a phi, quelli sulle
+coordinate rispetto alla lunghezza. M>=R=5800000 limita la variazione
+di latitudine lungo l'arco a h/R<0.6 gradi: l'intero arco sta entro 82.
+Nel dominio q<0.008, M,N<8e6, cos(82 gradi)>1/8;
+quindi L>R/8, |phi'|<=1/R e |lambda'|<=8/R.
+Dalle formule esplicite,
+|M'/M|<=3q/(1-q)<0.025 e
+|L'/L|<=q/(1-q)+tan(82 gradi)<8.
+Usando L^2 lambda'^2<=1 nella prima equazione si ottiene
+|phi''|<9/R^2; dalla seconda |lambda''|<=128/R^2.
+
+Per una funzione due volte derivabile su [0,l], il resto rispetto
+all'interpolante dei due estremi e' limitato da
+sup|u''| s(l-s)/2 <= sup|u''| l^2/8. Si dimostra sottraendo
+all'errore le due parabole +/-sup|u''| s(l-s)/2 e applicando
+convessita'/concavita' con valori zero agli estremi.
+Applicato alle coordinate, limita gli scarti a 9h^2/(8R^2) e
+128h^2/(8R^2). Il segmento che collega in coordinate i due punti
+allo stesso parametro resta entro 82 gradi e ha lunghezza metrica
+<=8e6(|delta_phi|+|delta_lambda|). Ne segue
+
+```text
+d(geodetica(t), segmento_lonlat(t))
+  <= 8e6 * 137 * h^2 / (8 * 5800000^2)
+  < 8e-6 * h^2.
+```
+
+La corrispondenza parametrica e' suriettiva su entrambe le curve:
+il bound vale per Hausdorff in entrambi i versi. Vale anche per tutti
+i punti dell'omotopia lineare in coordinate fra le due curve, perche'
+gli scarti intermedi sono frazioni degli stessi scarti maggiorati.
+Il fattore 8e-6 e ogni prodotto sono arrotondati con `next_up`;
+non occorre valutare funzioni trigonometriche nella funzione Rust.
+
+## Dal lemma al disco planare certificato
+
+La pianificazione usa h=8r/n+2.2e-6, con arrotondamenti verso l'alto:
+8>2pi e il termine numerico copre entrambi gli estremi. Somma
+`model_change_m=side_model_error_m(h)` alle altre componenti prima di
+scegliere n. Il termine decresce con h; non viene aggiunto a posteriori
+a un certificato che abbia gia' consumato tutta la tolleranza.
+
+Prima della pubblicazione `verify_planar_fan` verifica con il kernel
+di orientamento esatto che ogni coppia consecutiva formi con il centro
+un settore strettamente antiorario di angolo minore di pi. Conta inoltre
+un unico attraversamento crescente della semiretta est. I settori
+percorrono quindi un solo giro, hanno interni disgiunti e ogni lato
+interseca una volta ciascuna semiretta interna al proprio settore.
+L'anello planare e' semplice, antiorario e stellato. Non basta verificare
+solo gli orientamenti: un anello che percorre due giri viene rifiutato.
+Ogni lato controllato ha un checkpoint e un addebito di lavoro.
+
+Per estendere il lemma agli insiemi pieni, si usa l'omotopia dei confini.
+Un punto a distanza maggiore di D=8e-6 h^2 da uno dei due confini non
+puo' essere attraversato dall'omotopia, contenuta nel suo D-intorno.
+Il numero di avvolgimento non cambia. Per i due dischi semplici,
+un punto interno al primo ed esterno al secondo deve dunque distare
+al piu' D dal secondo, e viceversa. La disuguaglianza triangolare con
+il bound del disco geodetico da' il certificato totale pubblicato.
+
+Le prove C1 campionano 129 parametri, incluso il punto medio, per
+due ellissoidi estremi, cinque latitudini, sei azimut e quattro lunghezze
+da 1 metro a 60 km. Inverse di Karney misura la distanza dal testimone
+allo stesso parametro sul segmento: maggiora la distanza minima al
+segmento e verifica simultaneamente i due versi. Le prove non sostituiscono
+la derivazione uniforme; per i lati millimetrici l'errore del misuratore
+puo' superare il termine quadratico, gia' coperto dal budget numerico.
+Una prova di soglia isola una tolleranza che accetterebbe il vecchio
+certificato e verifica che il nuovo termine imponga il raddoppio di n.

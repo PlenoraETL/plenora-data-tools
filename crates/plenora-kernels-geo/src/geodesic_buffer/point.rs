@@ -2,6 +2,7 @@
 
 use super::{BufferWork, DegenerateBufferError, DegenerateBufferLimits};
 use crate::geodetica::EllissoideGeodetico;
+use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{Coord, Geometry, LineString, Polygon};
 use geographiclib_rs::DirectGeodesic;
 use plenora_core::crs::{CrsKind, ResolvedCrs};
@@ -30,6 +31,8 @@ pub struct PointBufferCertificate<'a> {
     pub relative: f64,
     /// Campionamento del confine esatto.
     pub discretization_m: f64,
+    /// Cambio da arco geodetico a segmento lineare nelle coordinate lon/lat.
+    pub model_change_m: f64,
     /// Due errori di primitiva da 0.1 micrometri; fonte in docs.
     pub geographiclib_m: f64,
     /// Due margini di coordinate/azimut e aritmetica, da 1 micrometro.
@@ -37,7 +40,7 @@ pub struct PointBufferCertificate<'a> {
 }
 
 impl PointBufferCertificate<'_> {
-    /// Lati come densify e distanza geodetica.
+    /// Metrica del disco esatto e della distanza certificata.
     pub const MODEL: &'static str = "shortest_geodesic";
     /// Unita' dei raggi e dell'errore assoluto.
     pub const UNIT: &'static str = "metre";
@@ -48,7 +51,7 @@ impl PointBufferCertificate<'_> {
 /// Un disco, anello antiorario chiuso senza buchi.
 #[derive(Debug)]
 pub struct PointBufferDisk<'a> {
-    /// I lati sono archi geodetici minimi, non segmenti lon/lat.
+    /// Il certificato copre sia archi geodetici sia segmenti lineari lon/lat.
     pub polygon: Polygon,
     /// Garanzia sul confine e sul disco pieno, con topologia di disco.
     pub certificate: PointBufferCertificate<'a>,
@@ -69,6 +72,19 @@ pub struct PointBufferResult<'a> {
 
 const NUMERIC_M: f64 = 2e-7;
 const ROUNDING_M: f64 = 2e-6;
+
+/// Maggiorante metrico del cambio di modello, in metri.
+/// Premesse: ellissoide del profilo, estremi entro 81 gradi, nessun seam,
+/// lunghezza geodetica <= h <= 60 km. Prova in docs/buffer-punto.md.
+fn side_model_error_m(h: f64) -> Result<f64, DegenerateBufferError> {
+    if !h.is_finite() || !(0.0..=60_000.0).contains(&h) {
+        return Err(DegenerateBufferError::AccuracyUnproven);
+    }
+    if h == 0.0 {
+        return Ok(0.0);
+    }
+    Ok(((8e-6_f64.next_up() * h).next_up() * h).next_up())
+}
 
 fn center(input: &Geometry, work: &mut BufferWork<'_>) -> Result<Coord, DegenerateBufferError> {
     work.step()?;
@@ -126,7 +142,12 @@ fn plan(
     loop {
         // 4 > pi; n potenza di due, conversione u32 -> f64 esatta.
         let discretization_m = (4.0 * radius / f64::from(n)).next_up();
-        let absolute_m = ((discretization_m + NUMERIC_M).next_up() + ROUNDING_M).next_up();
+        // 8 > 2*pi; include lo spostamento di entrambi gli estremi numerici.
+        let h = ((8.0 * radius / f64::from(n)).next_up() + NUMERIC_M).next_up();
+        let model_change_m = side_model_error_m((h + ROUNDING_M).next_up())?;
+        let absolute_m = (((discretization_m + NUMERIC_M).next_up() + ROUNDING_M).next_up()
+            + model_change_m)
+            .next_up();
         if absolute_m <= tolerance_m.min(0.01) {
             return Ok((
                 n,
@@ -135,6 +156,7 @@ fn plan(
                     absolute_m,
                     relative: (absolute_m / radius).next_up(),
                     discretization_m,
+                    model_change_m,
                     geographiclib_m: NUMERIC_M,
                     rounding_m: ROUNDING_M,
                 },
@@ -176,7 +198,34 @@ fn ring(
         .copied()
         .ok_or(DegenerateBufferError::AccuracyUnproven)?;
     vertices.push(first);
+    verify_planar_fan(p, &vertices, &mut checkpoint)?;
     Ok(Polygon::new(LineString::new(vertices), Vec::new()))
+}
+
+/// Settori strettamente antiorari, con un solo giro: disco planare stellato.
+fn verify_planar_fan(
+    center: Coord,
+    vertices: &[Coord],
+    mut checkpoint: impl FnMut() -> Result<(), DegenerateBufferError>,
+) -> Result<(), DegenerateBufferError> {
+    let mut crossings = 0_u32;
+    for edge in vertices.windows(2) {
+        checkpoint()?;
+        let [a, b] = [edge[0], edge[1]];
+        if RobustKernel::orient2d(center, a, b) != Orientation::CounterClockwise {
+            return Err(DegenerateBufferError::AccuracyUnproven);
+        }
+        // Ogni attraversamento crescente della semiretta est conta un giro.
+        if a.y <= center.y && b.y > center.y {
+            crossings = crossings
+                .checked_add(1)
+                .ok_or(DegenerateBufferError::AccuracyUnproven)?;
+        }
+    }
+    if crossings != 1 {
+        return Err(DegenerateBufferError::AccuracyUnproven);
+    }
+    Ok(())
 }
 
 /// Buffer positivo di `Point` o `MultiPoint` con un solo punto distinto.
