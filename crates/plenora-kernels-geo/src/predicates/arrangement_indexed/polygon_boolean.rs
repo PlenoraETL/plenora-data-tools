@@ -85,8 +85,9 @@ const fn selected(op: PolygonBooleanOp, a: bool, b: bool) -> bool {
         PolygonBooleanOp::Difference => a && !b,
     }
 }
-fn charge(count: &mut u64, limit: u64, work: &mut Work<'_>) -> Result<(), PredicateError> {
+fn charge(slot: usize, limit: u64, work: &mut Work<'_>) -> Result<(), PredicateError> {
     work.step()?;
+    let count = &mut work.polygon_counts[slot];
     *count = count
         .checked_add(1)
         .filter(|n| *n <= limit)
@@ -193,10 +194,9 @@ fn boundary(
     }
     let nodes = crate::noding::node(&source, work)?;
     let mut atomic = CountedVec::new();
-    let mut count = 0;
     for path in &nodes {
         for pair in path.windows(2) {
-            charge(&mut count, limits.max_edges, work)?;
+            charge(0, limits.max_edges, work)?;
             work.nodes(2)?;
             let (a, b) = if point_cmp(&pair[0], &pair[1])?.is_gt() {
                 (&pair[1], &pair[0])
@@ -378,14 +378,13 @@ fn cycles(
         work.push(&mut arcs, arc)?;
     }
     let mut result = CountedVec::new();
-    let (mut faces, mut rings) = (0, 0);
     crate::noding::faces::walk(
         &mut arcs,
         ids.len(),
         work,
-        |work| charge(&mut faces, limits.max_faces, work),
+        |work| charge(1, limits.max_faces, work),
         |path, _, work| {
-            charge(&mut rings, limits.max_rings, work)?;
+            charge(2, limits.max_rings, work)?;
             let value = cycle(path, edges, work)?;
             work.push(&mut result, value)
         },
@@ -528,7 +527,7 @@ pub(super) fn verify_rings(
 }
 
 #[allow(clippy::too_many_lines)]
-fn execute(
+pub(crate) fn execute(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     op: PolygonBooleanOp,
@@ -536,6 +535,10 @@ fn execute(
     limits: PolygonBooleanLimits,
     work: &mut Work<'_>,
 ) -> Result<Geometry<f64>, PolygonBooleanError> {
+    #[cfg(test)]
+    {
+        work.polygon_active = true;
+    }
     work.step()?;
     if filter.is_some_and(|d| d > 2) {
         return Err(PolygonBooleanError::InvalidOutputDimension);
@@ -654,7 +657,12 @@ fn execute(
             }
         }
     }
-    Ok(line_boolean::finish(components, filter, work)?)
+    let result = line_boolean::finish(components, filter, work)?;
+    #[cfg(test)]
+    {
+        work.polygon_active = false;
+    }
+    Ok(result)
 }
 
 /// Unione binaria; contratto e limiti di [`boolean_with_limits`].

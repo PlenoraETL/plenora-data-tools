@@ -173,8 +173,18 @@ fn ring(
     radius: f64,
     n: u32,
     ellipsoid: &EllissoideGeodetico,
-    mut checkpoint: impl FnMut() -> Result<(), DegenerateBufferError>,
+    checkpoint: impl FnMut() -> Result<(), DegenerateBufferError>,
 ) -> Result<Polygon, DegenerateBufferError> {
+    ring_shared(p, radius, n, ellipsoid, checkpoint)
+}
+
+fn ring_shared<E: From<DegenerateBufferError>>(
+    p: Coord,
+    radius: f64,
+    n: u32,
+    ellipsoid: &EllissoideGeodetico,
+    mut checkpoint: impl FnMut() -> Result<(), E>,
+) -> Result<Polygon, E> {
     checkpoint()?;
     let count =
         usize::try_from(u64::from(n) + 1).map_err(|_| DegenerateBufferError::VertexLimit)?;
@@ -182,13 +192,16 @@ fn ring(
     vertices
         .try_reserve_exact(count)
         .map_err(|_| DegenerateBufferError::Allocation)?;
+    if vertices.capacity() != count {
+        return Err(DegenerateBufferError::MemoryLimit.into());
+    }
     for k in 0..n {
         checkpoint()?;
         // Azimut da nord in senso orario: il segno meno rende l'esterno antiorario.
         let azimuth = -360.0 * f64::from(k) / f64::from(n);
         let (lat, lon): (f64, f64) = ellipsoid.geodetica().direct(p.y, p.x, azimuth, radius);
         if !(lat.is_finite() && lon.is_finite() && lat.abs() < 81.0 && lon.abs() < 180.0) {
-            return Err(DegenerateBufferError::AccuracyUnproven);
+            return Err(DegenerateBufferError::AccuracyUnproven.into());
         }
         vertices.push(Coord { x: lon, y: lat });
     }
@@ -203,17 +216,17 @@ fn ring(
 }
 
 /// Settori strettamente antiorari, con un solo giro: disco planare stellato.
-fn verify_planar_fan(
+fn verify_planar_fan<E: From<DegenerateBufferError>>(
     center: Coord,
     vertices: &[Coord],
-    mut checkpoint: impl FnMut() -> Result<(), DegenerateBufferError>,
-) -> Result<(), DegenerateBufferError> {
+    mut checkpoint: impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     let mut crossings = 0_u32;
     for edge in vertices.windows(2) {
         checkpoint()?;
         let [a, b] = [edge[0], edge[1]];
         if RobustKernel::orient2d(center, a, b) != Orientation::CounterClockwise {
-            return Err(DegenerateBufferError::AccuracyUnproven);
+            return Err(DegenerateBufferError::AccuracyUnproven.into());
         }
         // Ogni attraversamento crescente della semiretta est conta un giro.
         if a.y <= center.y && b.y > center.y {
@@ -223,7 +236,7 @@ fn verify_planar_fan(
         }
     }
     if crossings != 1 {
-        return Err(DegenerateBufferError::AccuracyUnproven);
+        return Err(DegenerateBufferError::AccuracyUnproven.into());
     }
     Ok(())
 }
@@ -333,3 +346,6 @@ pub fn geodesic_point_buffer_with_limits<'a>(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Unioni certificate di dischi per punti distinti.
+pub mod union;

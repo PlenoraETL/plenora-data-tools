@@ -25,10 +25,13 @@ pub struct Work<'a> {
     pub pairs: u64,
     budget: Rc<storage::Budget>,
     pub nodes: u64,
+    pub polygon_counts: [u64; 3],
     exports: CountedVec<storage::Lease>,
     deadline_first: bool,
     #[cfg(test)]
     pub interrupt_at: Option<(u64, bool)>,
+    #[cfg(test)]
+    pub polygon_active: bool,
 }
 impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
@@ -39,10 +42,13 @@ impl<'a> Work<'a> {
             pairs: 0,
             budget: Rc::new(storage::Budget::new(limits.max_reserved_bytes)),
             nodes: 0,
+            polygon_counts: [0; 3],
             exports: CountedVec::new(),
             deadline_first: false,
             #[cfg(test)]
             interrupt_at: None,
+            #[cfg(test)]
+            polygon_active: false,
         }
     }
     /// Politica GOP-028 opt-in; i chiamanti preesistenti conservano la precedenza.
@@ -50,6 +56,14 @@ impl<'a> Work<'a> {
         self.deadline_first = true;
         self
     }
+    /// Prenota un buffer esportato prima della sua allocazione.
+    /// La ricevuta resta viva fino al termine dell'intera operazione.
+    pub fn reserve_export(&mut self, bytes: u64) -> Result<(), PredicateError> {
+        self.step()?;
+        let lease = storage::Lease::created(&self.budget, bytes)?;
+        self.exports.push(lease, &self.budget)
+    }
+
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
         Q::int_in(value, &self.budget)
     }

@@ -177,7 +177,7 @@ fn planar_fan_rejects_folded_and_multiple_winding_rings() {
         Coord { x: 0.0, y: -1.0 },
         Coord { x: 1.0, y: 0.0 },
     ];
-    verify_planar_fan(center, &ring, || Ok(())).unwrap();
+    verify_planar_fan(center, &ring, || Ok::<(), DegenerateBufferError>(())).unwrap();
     let mut reversed = ring;
     reversed.reverse();
     assert_eq!(
