@@ -22,11 +22,11 @@ rispetto alla coordinata normalizzata psi. La longitudine e' affine.
 | Lambert Conic Conformal 2SP (9802) | 1/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Composizione polare e inversa isometrica separabile; certificato sul rettangolo LCC sotto definito |
 | Lambert Azimuthal Equal Area (9820) | 2/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Composizione sferica e inversa autalica separabile; rettangolo LAEA sotto definito, bordo del disco escluso |
 | Oblique Stereographic (9809) | 2/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Sfera conforme di Gauss, rotazione e inversa stereografica; rettangolo aperto sotto definito |
-| Hotine Oblique Mercator B (9815) | - | - | - | AccuracyUnproven: non maggiorata la rotazione obliqua con i suoi tagli; il core implementa solo il caso svizzero, angoli 90 gradi |
+| Hotine Oblique Mercator B (9815), caso svizzero del motore | 2/a | phi: 4; lambda: 3 | phi: 20; lambda: 9 | Sfera di Gauss e Mercator ruotata; soli angoli 90 gradi, rettangolo aperto sotto definito |
 
-Le righe non certificate dichiarano lavoro mancante, non impossibilita'
-matematica. Non ricevono coefficienti sostitutivi. Anche gli ingressi vuoti
-sono rifiutati per questi metodi. Il supporto di tutti i CRS rimane incompleto.
+Ogni famiglia implementata ha maggioranti dimostrati. Il supporto resta
+limitato ai domini qualificati e alla disponibilita' del certificato numerico:
+non equivale a coprire ogni punto dei domini CRS ordinari.
 
 ## Derivazione Mercator e regola comune
 
@@ -140,8 +140,7 @@ poligono obliqui. Il pacchetto e' confinato in target/preserve-oracle;
 pyproj non e' disponibile offline. Le fixture a 16384 e 32768 suddivisioni
 sono controlli indipendenti, non una dimostrazione del bound. Le prove C1
 confrontano direttamente la differenza con il bound restituito, senza
-aggiungervi una tolleranza campionaria. Hotine resta non certificata e ha prove del rifiuto; la sua prova numerica C1
-resta da realizzare insieme ai maggioranti mancanti.
+aggiungervi una tolleranza campionaria. Il caso Hotine svizzero ha le prove C1 descritte nella sua sezione.
 
 ## Transverse Mercator EPSG 9807
 
@@ -715,4 +714,121 @@ Il confronto con 32768 usa direttamente il bound restituito, senza
 aggiungere tolleranze campionarie. L'oracolo controlla l'implementazione;
 la dimostrazione dei resti resta analitica. Sono provati i quattro bordi,
 punti esterni, origine nei due emisferi e all'equatore, residui angolari
-alterati e non finiti. Hotine mantiene il proprio motivo AccuracyUnproven.
+alterati e non finiti. Il caso Hotine svizzero e' qualificato nella sezione seguente.
+
+## Hotine Oblique Mercator B EPSG 9815: caso svizzero del motore
+
+Fonti: [EPSG GN 7-2, settembre 2019, 3.2.4.1, pp. 60-63](https://www.iogp.org/wp-content/uploads/2019/09/373-07-02.pdf),
+per la definizione Hotine B e la distinzione delle varianti;
+[Snyder 1987, capitolo 9, pp. 66-75](https://pubs.usgs.gov/publication/pp1395),
+per Mercator obliqua e rotazione sferica (equazioni 9-9 e 9-10, p. 70);
+[formula del motore Svizzera](../crates/plenora-core/src/crs/riproiezione/proiezioni.rs).
+Il registro contiene solo EPSG:2056. Il motore accetta esclusivamente
+azimut=angolo_reticolo=90 gradi e usa la Swiss Oblique Mercator su sfera
+conforme di Gauss (Rosenmund), come dichiara Svizzera. Non implementa la
+Hotine generale sull'aposfera: le due formule non sono identiche, nemmeno
+ponendo gli angoli a 90 gradi. Questa prova certifica esattamente la formula
+svizzera del motore; non attribuisce la sua formula alla Hotine generale
+di EPSG e non estende il registro o l'implementazione.
+
+### Formula, rotazione e dominio continuo
+
+Con q=e^2 e psi isometrica ellissoidica:
+
+```text
+n=sqrt(1+q cos(phi0)^4/(1-q))
+s0=sin(phi0)/n; c0=sqrt(1-s0^2)
+K=atanh(s0)-n psi(phi0)
+D=a k0 sqrt(1-q)/(1-q sin(phi0)^2)
+u=(x-FE)/D; v=(y-FN)/D
+X=sech(v) sin(u)
+Y=c0 sech(v) cos(u)-s0 tanh(v)
+Z=s0 sech(v) cos(u)+c0 tanh(v)
+lambda=lambda0+atan2(X,Y)/n
+psi(phi)=psi(phi0)+[atanh(Z)-atanh(s0)]/n
+```
+
+La rotazione in Y,Z e' ortogonale. Prima di essa la latitudine sferica e'
+atan(sinh(v)), la longitudine u. La forma atan2 coincide con l'asin del
+motore sul dominio dimostrato, poiche' Y>0. L'ultima inversa isometrica
+e' separabile, ma l'intera composizione da XY non lo e'.
+
+Si qualificano 6000000<=a<=7000000, 0<q<=0.008, |phi0|<0.92,
+|lambda0|<2, 1<=n<=1.01, |s0|<sin(0.92), c0>0.605, a/2<D<2a,
+false origini finite di modulo <=20000000. Tutti i vincoli sono verificati
+a intervalli. Il dominio preserveShape e' |u|<0.1, |v|<0.1, intersecato
+con il dominio CRS ordinario. Bordi, esterno e appartenenza stretta non
+provata danno AccuracyUnproven prima dell'inversa del core. Il profilo e'
+limitato rispetto alla formula globale, ma contiene l'intero inviluppo
+proiettato ordinario dell'unico CRS integrato EPSG:2056 (x circa 2309013..3013018,
+y circa 961302..1412610 metri). Non restringe quindi geometricamente
+quel CRS: restano la sua verifica ordinaria e i possibili rifiuti numerici.
+I bordi del profilo sono esterni a tale inviluppo e vengono rifiutati
+anticipatamente; non si modifica il dominio della riproiezione.
+
+u,v sono affini: il rettangolo convesso contiene i segmenti e gli interni
+degli anelli dai loro estremi. sech(v)cos(u)>0.99 e |tanh(v)|<0.1,
+quindi Y>0.605*0.99-0.8*0.1>0.51. Anche la coordinata normale prima
+della rotazione e' positiva: sono esclusi entrambi i tagli asin della
+formula avanti e inversa, non soltanto il taglio atan2. |X|<0.1 implica
+|lambda-lambda0|<atan(0.1/0.51)<0.194, |lambda|<2.194<pi e
+|n(lambda-lambda0)|<0.194. Nessuna riduzione modulo interviene.
+La distanza sferica dall'origine e' al piu' sqrt(u^2+v^2)<0.142,
+perche' la metrica Mercator inversa e' sech(v)^2(du^2+dv^2).
+Dunque |chi|<1.062, lontano dai poli. Mercator sul ramo |u|<0.1,
+rotazione, estrazione angolare con Y>0 e inversa isometrica monotona
+sono iniettive: la topologia e' conservata, la striscia longitudinale <pi.
+
+### Maggioranti dimostrati
+
+Per una retta normalizzata sia h=|(u',v')|. Il fattore metrico e' sech(v),
+quindi |S'|<=h per S=(X,Y,Z). Posto g=grad log(sech(v))=(0,-tanh(v)),
+l'accelerazione covariante ha componenti 2(g dot p')p'-h^2 g, norma
+sferica sech(v)|g|h^2<0.1h^2. La normale ha modulo |S'|^2<=h^2:
+|S''|<sqrt(1.01)h^2<1.2h^2. Rotazione e norme sono compatibili.
+Il gradiente e la Hessiana di atan2 hanno norme 1/H e 1/H^2, H>0.51:
+
+```text
+|lambda'| < h/0.51 < 3h
+|lambda''| < (1.2/0.51+1/0.51^2)h^2 < 9h^2
+|chi'| <= h
+|chi''| <= [0.1+tan(1.062)]h^2 < 2h^2
+|psi'| <= h/cos(1.062) < 2.06h
+|psi''| <= [2+tan(1.062)]h^2/cos(1.062) < 8.1h^2
+|phi'| <= B1*2.06h < 4h
+|phi''| <= [B2*2.06^2+B1*8.1]h^2 < 20h^2
+```
+
+B1<1.01 e B2<1.033 sono quelli globali isometrici gia' dimostrati.
+Con h<=2(|delta_x|+|delta_y|)/a si riusano senza modifiche le costanti
+3/9/4/20, il resto ECEF 1.1a78h^2 e il resto area 8.25a^2h^3.
+
+### Certificato numerico e prove C1
+
+[hotine.rs](../crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/hotine.rs)
+ricostruisce tutte le costanti con ShapeInterval, senza fidarsi delle
+trascendenti del core. exp(v) riusa Taylor grado 40 con resto <1e-35
+per |v|<2; sech(v)=2/(exp(v)+1/exp(v)) e
+ tanh(v)=(exp(v)-1/exp(v))/(exp(v)+1/exp(v)). Seno, coseno,
+atan, atanh e radice riusano le serie e i resti qualificati sopra.
+Si verificano il residuo isometrico moltiplicato verso l'alto per 1.01
+e il residuo di longitudine: entrambi <=2048epsilon radianti. Si richiede
+|phi_core|<1.2 per le serie; non finiti o intervalli larghi rifiutano.
+Non si presume precisione dal numero di iterazioni o dalla convergenza.
+
+I limiti |x|,|y|<21400000 e D>a/2 danno perturbazione normalizzata
+<64epsilon per interpolazione, come LAEA e stereografica. Derivate e
+soglia angolare sono le stesse: si riusano i margini comuni di 30 micrometri
+per sottosegmento e 16384epsilon a^2 per l'area. Disponibilita' numerica,
+tolleranza e budget possono produrre ulteriori rifiuti espliciti.
+
+[hotine.py](../crates/plenora-kernels-geo/tests/fixtures/preserve_shape/hotine.py)
+usa la formula svizzera con angoli sferici asin, inversa isometrica per
+bisezione e GeographicLib Python 2.1, mai il kernel Rust. La copia
+eseguita e il pacchetto sono in target/preserve-oracle. La fixture contiene
+una linea e un poligono EPSG:2056 a 16384 e 32768 divisioni; la differenza
+dal riferimento maggiore deve rientrare direttamente nel bound restituito,
+senza tolleranza campionaria aggiuntiva. Il riferimento controlla il codice,
+non sostituisce la dimostrazione analitica. Sono provati anche i quattro
+bordi e punti esterni, origini nei due emisferi e all'equatore, residui
+alterati e non finiti. Nessuna famiglia implementata rimane senza prova.

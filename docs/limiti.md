@@ -358,9 +358,11 @@ prodotto. Per l'assenza del controllo a posteriori, vedi l'hazard
 
 Le API Rust additive di [misura a forma conservata](misure-forma-conservata.md)
 seguono la retta nello SR originale. Certificano CRS geografici integrati ed
-EPSG:3857, Mercator A (EPSG:3395), TM EPSG 9807, LCC EPSG 9802, LAEA EPSG 9820 e Oblique Stereographic EPSG 9809 nel
-[dominio qualificato](maggioranti-forma.md). TM, LCC, LAEA e stereografica obliqua fuori da tale dominio e
-Hotine restituiscono `AccuracyUnproven`.
+EPSG:3857, Mercator A (EPSG:3395), TM EPSG 9807, LCC EPSG 9802, LAEA EPSG 9820, Oblique Stereographic EPSG 9809 e il caso svizzero Hotine B
+EPSG 9815 (angoli 90 gradi, EPSG:2056) nel
+[dominio qualificato](maggioranti-forma.md). Fuori dai profili qualificati
+o se il residuo non prova la precisione, queste inverse restituiscono
+`AccuracyUnproven`; il dominio CRS ordinario resta applicabile.
 La guida dichiara separatamente bound di lunghezza e area, dominio delle
 superfici, antimeridiano, budget e interruzione. Le misure geodetiche qui
 descritte mantengono la loro semantica.

@@ -29,7 +29,7 @@ fn isometric(phi: ShapeInterval, e: ShapeInterval) -> Result<ShapeInterval, Shap
 }
 
 // Taylor grado 40: per |x|<2, e^2*2^41/41! < 1e-35.
-fn exponential(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
+pub(super) fn exponential(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     if x.max_abs() >= 2.0 {
         return Err(ShapeMeasureError::AccuracyUnproven);
     }

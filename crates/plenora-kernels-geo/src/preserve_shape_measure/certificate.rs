@@ -2,6 +2,8 @@
 //! Serie e resti: `docs/maggioranti-forma.md`, nessuna chiamata libm.
 
 use super::ShapeMeasureError;
+mod hotine;
+pub(super) use hotine::HotineCertificate;
 
 mod stereographic;
 pub(super) use stereographic::StereographicCertificate;

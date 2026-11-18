@@ -33,6 +33,8 @@ pub enum InverseShapeCertificate {
     LambertAzimuthalEqualArea(AzimuthalShapeBounds),
     /// Sfera conforme di Gauss e stereografica sul rettangolo qualificato.
     ObliqueStereographic(StereographicShapeBounds),
+    /// Caso svizzero a 90 gradi, rettangolo aperto |u|,|v|<0.1; maggioranti-forma.md.
+    HotineObliqueMercatorB(HotineShapeBounds),
     /// Nessun certificato: il consumatore deve rifiutare la misura.
     Unproven {
         /// Codice EPSG del metodo.
@@ -40,6 +42,23 @@ pub enum InverseShapeCertificate {
         /// Motivo statico, senza dati dell'ingresso.
         reason: &'static str,
     },
+}
+
+/// Parametri originali del caso svizzero EPSG 9815 (angoli 90 gradi), prima delle trascendenti del core.
+#[derive(Clone, Copy, Debug)]
+pub struct HotineShapeBounds {
+    /// Semiasse maggiore in metri.
+    pub semi_major_axis: f64,
+    /// Latitudine del centro in gradi.
+    pub latitude_origin: f64,
+    /// Longitudine del centro in gradi.
+    pub longitude_origin: f64,
+    /// Scala al centro.
+    pub central_scale: f64,
+    /// Falsa ascissa in metri.
+    pub false_easting: f64,
+    /// Falsa ordinata in metri.
+    pub false_northing: f64,
 }
 
 /// Parametri originali EPSG 9809, prima delle trascendenti del core.
@@ -143,6 +162,10 @@ mod tests {
                 InverseShapeCertificate::Unproven { method, reason } => {
                     assert!(!reason.is_empty());
                     method
+                }
+                InverseShapeCertificate::HotineObliqueMercatorB(bounds) => {
+                    assert!(bounds.central_scale > 0.0);
+                    9815
                 }
                 InverseShapeCertificate::ObliqueStereographic(bounds) => {
                     assert!(bounds.central_scale > 0.0);

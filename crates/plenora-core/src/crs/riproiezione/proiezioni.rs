@@ -131,10 +131,9 @@ impl Proiezione {
             Self::Lcc(p) => InverseShapeCertificate::LambertConicConformal(p.shape_parameters),
             Self::Laea(p) => InverseShapeCertificate::LambertAzimuthalEqualArea(p.shape_parameters),
             Self::Stereo(p) => InverseShapeCertificate::ObliqueStereographic(p.shape_parameters),
-            Self::Svizzera(_) => InverseShapeCertificate::Unproven {
-                method: 9815,
-                reason: "derivate della rotazione obliqua e tagli angolari non maggiorati",
-            },
+            Self::Svizzera(p) => {
+                InverseShapeCertificate::HotineObliqueMercatorB(p.shape_parameters)
+            }
         }
     }
 
@@ -794,6 +793,7 @@ impl Stereo {
 /// Hotine B si rifiuta (nessuna nella tabella).
 #[derive(Clone, Debug)]
 pub(in crate::crs) struct Svizzera {
+    shape_parameters: super::HotineShapeBounds,
     e: f64,
     lon0: f64,
     /// `alpha` della sfera di Gauss (`c` in PROJ).
@@ -832,6 +832,14 @@ impl Svizzera {
         let esp = e * phi0.sin();
         let kr = a * k_centro * (1.0 - e2).sqrt() / (1.0 - esp * esp);
         Ok(Self {
+            shape_parameters: super::HotineShapeBounds {
+                semi_major_axis: a,
+                latitude_origin: lat_centro,
+                longitude_origin: lon_centro,
+                central_scale: k_centro,
+                false_easting: est_centro,
+                false_northing: nord_centro,
+            },
             e,
             lon0: lon_centro.to_radians(),
             c,
