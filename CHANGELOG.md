@@ -14,6 +14,13 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API comune `coordinate_api`, profilo esplicito `standard_v1`: DD, DMS,
+  DDM, UTM, MGRS, USNG, GARS e GeoRef sopra i codec esistenti. Datum
+  obbligatorio, tabella dichiarativa delle opzioni senza default, coppia
+  angolare latitudine/longitudine, estensione e rappresentante delle celle.
+  Conversioni scalari e batch atomici, errori tipizzati senza dati con indice
+  opzionale, massimo 256 byte per testo e 65.536 elementi per batch.
+
 - API scalare `coordinate_usng`: `format_usng`, `parse_usng`, `UsngDatum`,
   `DecodedUsng` e `UsngError`. NAD83/GRS80 o NAD27/Clarke 1866 espliciti,
   senza trasformazioni; lettere e celle MGRS condivise. Grammatica ASCII

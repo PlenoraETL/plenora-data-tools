@@ -30,6 +30,7 @@ pub mod analyze;
 pub mod arrow_adapter;
 pub mod cluster;
 pub mod construction;
+pub mod coordinate_api;
 pub mod coordinate_mgrs;
 pub mod coordinate_text;
 pub mod coordinate_usng;
