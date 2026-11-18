@@ -6,13 +6,15 @@
 
 use crate::predicates::{PredicateError, RelateLimits};
 use geo::Coord;
-use num_bigint::{BigInt, Sign};
 use std::cmp::Ordering;
 use std::rc::Rc;
 
+pub mod bounds;
+mod exact;
+pub mod faces;
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
-mod bounds;
+mod oracle;
 mod storage;
 pub use storage::CountedVec;
 
@@ -23,6 +25,10 @@ pub struct Work<'a> {
     pub pairs: u64,
     budget: Rc<storage::Budget>,
     pub nodes: u64,
+    exports: CountedVec<storage::Lease>,
+    deadline_first: bool,
+    #[cfg(test)]
+    pub interrupt_at: Option<(u64, bool)>,
 }
 impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
@@ -33,9 +39,40 @@ impl<'a> Work<'a> {
             pairs: 0,
             budget: Rc::new(storage::Budget::new(limits.max_reserved_bytes)),
             nodes: 0,
+            exports: CountedVec::new(),
+            deadline_first: false,
+            #[cfg(test)]
+            interrupt_at: None,
         }
     }
+    /// Politica GOP-028 opt-in; i chiamanti preesistenti conservano la precedenza.
+    pub const fn with_deadline_precedence(mut self) -> Self {
+        self.deadline_first = true;
+        self
+    }
+    pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
+        Q::int_in(value, &self.budget)
+    }
+
     pub fn step(&mut self) -> Result<(), PredicateError> {
+        #[cfg(test)]
+        if let Some((at, deadline)) = self.interrupt_at {
+            if self.steps == at {
+                if deadline {
+                    self.limits.deadline = Some(std::time::Instant::now());
+                } else if let Some(flag) = self.cancelled {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+        if self.deadline_first
+            && self
+                .limits
+                .deadline
+                .is_some_and(|d| std::time::Instant::now() >= d)
+        {
+            return Err(PredicateError::DeadlineExceeded);
+        }
         if self
             .cancelled
             .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
@@ -88,7 +125,7 @@ impl<'a> Work<'a> {
 
 pub fn sorted<T>(
     values: &mut [T],
-    compare: impl Fn(&T, &T) -> Ordering,
+    compare: impl Fn(&T, &T) -> Result<Ordering, PredicateError>,
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
     // Insertion sort: ogni confronto e' interrompibile, nessuna allocazione.
@@ -96,7 +133,7 @@ pub fn sorted<T>(
         let mut j = i;
         while j > 0 {
             work.step()?;
-            if compare(&values[j - 1], &values[j]) != Ordering::Greater {
+            if compare(&values[j - 1], &values[j])? != Ordering::Greater {
                 break;
             }
             values.swap(j - 1, j);
@@ -105,147 +142,72 @@ pub fn sorted<T>(
     }
     Ok(())
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Q {
-    n: BigInt,
-    d: BigInt,
-}
+pub use exact::Q;
 
-impl Q {
-    pub fn new(mut n: BigInt, mut d: BigInt) -> Self {
-        if d.sign() == Sign::Minus {
-            n = -n;
-            d = -d;
-        }
-        let mut a = if n.sign() == Sign::Minus {
-            -&n
-        } else {
-            n.clone()
-        };
-        let mut b = d.clone();
-        while b != BigInt::from(0) {
-            let r = &a % &b;
-            a = b;
-            b = r;
-        }
-        Self {
-            n: n / &a,
-            d: d / a,
-        }
-    }
-    pub fn int(n: i32) -> Self {
-        Self {
-            n: BigInt::from(n),
-            d: BigInt::from(1),
-        }
-    }
-    pub fn float(x: f64) -> Self {
-        let bits = x.to_bits();
-        let exponent = ((bits >> 52) & 2047) as i32;
-        let fraction = bits & ((1_u64 << 52) - 1);
-        let mantissa = if exponent == 0 {
-            fraction
-        } else {
-            fraction | (1_u64 << 52)
-        };
-        let shift = if exponent == 0 {
-            -1074
-        } else {
-            exponent - 1075
-        };
-        let mut n = BigInt::from(mantissa);
-        if bits >> 63 != 0 {
-            n = -n;
-        }
-        if shift >= 0 {
-            Self::new(n << shift.unsigned_abs(), BigInt::from(1))
-        } else {
-            Self::new(n, BigInt::from(1) << shift.unsigned_abs())
-        }
-    }
-    pub fn add(&self, b: &Self) -> Self {
-        Self::new(&self.n * &b.d + &b.n * &self.d, &self.d * &b.d)
-    }
-    pub fn sub(&self, b: &Self) -> Self {
-        Self::new(&self.n * &b.d - &b.n * &self.d, &self.d * &b.d)
-    }
-    pub fn mul(&self, b: &Self) -> Self {
-        Self::new(&self.n * &b.n, &self.d * &b.d)
-    }
-    pub fn div(&self, b: &Self) -> Self {
-        Self::new(&self.n * &b.d, &self.d * &b.n)
-    }
-    pub fn sign(&self) -> Ordering {
-        self.n.cmp(&BigInt::from(0))
-    }
-    pub fn midpoint(&self, b: &Self) -> Self {
-        self.add(b).div(&Self::int(2))
-    }
-}
-impl Ord for Q {
-    fn cmp(&self, b: &Self) -> Ordering {
-        (&self.n * &b.d).cmp(&(&b.n * &self.d))
-    }
-}
-impl PartialOrd for Q {
-    fn partial_cmp(&self, b: &Self) -> Option<Ordering> {
-        Some(self.cmp(b))
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct P {
     pub x: Q,
     pub y: Q,
 }
 impl P {
-    pub fn of(p: Coord<f64>) -> Self {
-        Self {
-            x: Q::float(p.x),
-            y: Q::float(p.y),
-        }
+    pub fn of_in(p: Coord<f64>, work: &Work<'_>) -> Result<Self, PredicateError> {
+        Ok(Self {
+            x: Q::float_in(p.x, &work.budget)?,
+            y: Q::float_in(p.y, &work.budget)?,
+        })
     }
-    pub fn sub(&self, b: &Self) -> Self {
-        Self {
-            x: self.x.sub(&b.x),
-            y: self.y.sub(&b.y),
-        }
+    pub fn try_clone(&self) -> Result<Self, PredicateError> {
+        Ok(Self {
+            x: self.x.try_clone()?,
+            y: self.y.try_clone()?,
+        })
     }
-    pub fn add(&self, b: &Self) -> Self {
-        Self {
-            x: self.x.add(&b.x),
-            y: self.y.add(&b.y),
-        }
+    pub fn try_sub(&self, b: &Self) -> Result<Self, PredicateError> {
+        Ok(Self {
+            x: self.x.try_sub(&b.x)?,
+            y: self.y.try_sub(&b.y)?,
+        })
     }
-    pub fn cross(&self, b: &Self) -> Q {
-        self.x.mul(&b.y).sub(&self.y.mul(&b.x))
+    pub fn try_add(&self, b: &Self) -> Result<Self, PredicateError> {
+        Ok(Self {
+            x: self.x.try_add(&b.x)?,
+            y: self.y.try_add(&b.y)?,
+        })
+    }
+    pub fn try_cross(&self, b: &Self) -> Result<Q, PredicateError> {
+        self.x.try_mul(&b.y)?.try_sub(&self.y.try_mul(&b.x)?)
     }
 }
 
-#[derive(Clone)]
 pub struct Edge {
     pub a: P,
     pub b: P,
 }
 impl Edge {
-    pub fn at_x(&self, x: &Q) -> Q {
-        self.a.y.add(
+    pub fn at_x(&self, x: &Q) -> Result<Q, PredicateError> {
+        self.a.y.try_add(
             &self
                 .b
                 .y
-                .sub(&self.a.y)
-                .mul(&x.sub(&self.a.x))
-                .div(&self.b.x.sub(&self.a.x)),
+                .try_sub(&self.a.y)?
+                .try_mul(&x.try_sub(&self.a.x)?)?
+                .try_div(&self.b.x.try_sub(&self.a.x)?)?,
         )
     }
-    pub fn contains(&self, p: &P) -> bool {
-        between(&p.x, &self.a.x, &self.b.x)
-            && between(&p.y, &self.a.y, &self.b.y)
-            && self.b.sub(&self.a).cross(&p.sub(&self.a)).sign() == Ordering::Equal
+    pub fn contains(&self, p: &P) -> Result<bool, PredicateError> {
+        Ok(between(&p.x, &self.a.x, &self.b.x)?
+            && between(&p.y, &self.a.y, &self.b.y)?
+            && self
+                .b
+                .try_sub(&self.a)?
+                .try_cross(&p.try_sub(&self.a)?)?
+                .sign()
+                == Ordering::Equal)
     }
 }
-pub fn between(x: &Q, a: &Q, b: &Q) -> bool {
-    (a <= x && x <= b) || (b <= x && x <= a)
+pub fn between(x: &Q, a: &Q, b: &Q) -> Result<bool, PredicateError> {
+    Ok((!a.try_cmp(x)?.is_gt() && !x.try_cmp(b)?.is_gt())
+        || (!b.try_cmp(x)?.is_gt() && !x.try_cmp(a)?.is_gt()))
 }
 
 /// Intersezione parametrica esatta; gli overlap restituiscono i due estremi.
@@ -254,19 +216,21 @@ fn intersections(
     b: &Edge,
     work: &mut Work<'_>,
 ) -> Result<[Option<P>; 2], PredicateError> {
-    let r = a.b.sub(&a.a);
-    let s = b.b.sub(&b.a);
-    let denominator = r.cross(&s);
+    let r = a.b.try_sub(&a.a)?;
+    let s = b.b.try_sub(&b.a)?;
+    let denominator = r.try_cross(&s)?;
     if denominator.sign() != Ordering::Equal {
-        let offset = b.a.sub(&a.a);
-        let t = offset.cross(&s).div(&denominator);
-        let u = offset.cross(&r).div(&denominator);
-        if between(&t, &Q::int(0), &Q::int(1)) && between(&u, &Q::int(0), &Q::int(1)) {
+        let offset = b.a.try_sub(&a.a)?;
+        let t = offset.try_cross(&s)?.try_div(&denominator)?;
+        let u = offset.try_cross(&r)?.try_div(&denominator)?;
+        if between(&t, &work.integer(0)?, &work.integer(1)?)?
+            && between(&u, &work.integer(0)?, &work.integer(1)?)?
+        {
             work.nodes(2)?;
             return Ok([
                 Some(P {
-                    x: a.a.x.add(&r.x.mul(&t)),
-                    y: a.a.y.add(&r.y.mul(&t)),
+                    x: a.a.x.try_add(&r.x.try_mul(&t)?)?,
+                    y: a.a.y.try_add(&r.y.try_mul(&t)?)?,
                 }),
                 None,
             ]);
@@ -276,11 +240,17 @@ fn intersections(
     let mut first = None;
     let mut last = None;
     for p in [&a.a, &a.b, &b.a, &b.b] {
-        if a.contains(p) && b.contains(p) {
-            if first.is_none_or(|q: &P| point_cmp(p, q).is_lt()) {
+        if a.contains(p)? && b.contains(p)? {
+            if match first {
+                None => true,
+                Some(q) => point_cmp(p, q)?.is_lt(),
+            } {
                 first = Some(p);
             }
-            if last.is_none_or(|q: &P| point_cmp(p, q).is_gt()) {
+            if match last {
+                None => true,
+                Some(q) => point_cmp(p, q)?.is_gt(),
+            } {
                 last = Some(p);
             }
         }
@@ -289,36 +259,42 @@ fn intersections(
         last = None;
     }
     work.nodes(2 * (u64::from(first.is_some()) + u64::from(last.is_some())))?;
-    Ok([first.cloned(), last.cloned()])
+    Ok([
+        first.map(P::try_clone).transpose()?,
+        last.map(P::try_clone).transpose()?,
+    ])
 }
 
-fn point_cmp(a: &P, b: &P) -> Ordering {
-    a.x.cmp(&b.x).then_with(|| a.y.cmp(&b.y))
+fn point_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
+    let x = a.x.try_cmp(&b.x)?;
+    if x.is_eq() {
+        a.y.try_cmp(&b.y)
+    } else {
+        Ok(x)
+    }
 }
-
-fn index_cmp(a: usize, b: usize, edges: &[&Edge]) -> Ordering {
-    edges[a]
+fn index_cmp(a: usize, b: usize, edges: &[&Edge]) -> Result<Ordering, PredicateError> {
+    Ok(edges[a]
         .a
         .x
-        .min_ref(&edges[a].b.x)
-        .cmp(edges[b].a.x.min_ref(&edges[b].b.x))
-        .then_with(|| a.cmp(&b))
+        .min_ref(&edges[a].b.x)?
+        .try_cmp(edges[b].a.x.min_ref(&edges[b].b.x)?)?
+        .then_with(|| a.cmp(&b)))
 }
-
 impl Q {
-    fn min_ref<'a>(&'a self, other: &'a Self) -> &'a Self {
-        if self <= other {
+    fn min_ref<'a>(&'a self, other: &'a Self) -> Result<&'a Self, PredicateError> {
+        Ok(if self.try_cmp(other)?.is_le() {
             self
         } else {
             other
-        }
+        })
     }
-    fn max_ref<'a>(&'a self, other: &'a Self) -> &'a Self {
-        if self >= other {
+    fn max_ref<'a>(&'a self, other: &'a Self) -> Result<&'a Self, PredicateError> {
+        Ok(if self.try_cmp(other)?.is_ge() {
             self
         } else {
             other
-        }
+        })
     }
 }
 
@@ -332,10 +308,10 @@ fn sift(
     while root < index.len() / 2 {
         work.step()?;
         let mut child = root * 2 + 1;
-        if child + 1 < index.len() && index_cmp(index[child], index[child + 1], edges).is_lt() {
+        if child + 1 < index.len() && index_cmp(index[child], index[child + 1], edges)?.is_lt() {
             child += 1;
         }
-        if !index_cmp(index[root], index[child], edges).is_lt() {
+        if !index_cmp(index[root], index[child], edges)?.is_lt() {
             break;
         }
         index.swap(root, child);
@@ -353,7 +329,15 @@ pub fn visit(
 ) -> Result<(), PredicateError> {
     work.step()?;
     let mut index = CountedVec::new();
-    for i in 0..edges.len() {
+    for (i, edge) in edges.iter().enumerate() {
+        work.step()?;
+        for point in [&edge.a, &edge.b] {
+            if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {
+                return Err(PredicateError::CalcoloNonConcluso(
+                    "proprietario del budget",
+                ));
+            }
+        }
         work.push(&mut index, i)?;
     }
     for root in (0..index.len() / 2).rev() {
@@ -369,11 +353,24 @@ pub fn visit(
         for &j in &index[position + 1..] {
             work.step()?;
             let b = edges[j];
-            if b.a.x.min_ref(&b.b.x) > a.a.x.max_ref(&a.b.x) {
+            if b.a
+                .x
+                .min_ref(&b.b.x)?
+                .try_cmp(a.a.x.max_ref(&a.b.x)?)?
+                .is_gt()
+            {
                 break;
             }
-            if b.a.y.min_ref(&b.b.y) > a.a.y.max_ref(&a.b.y)
-                || b.a.y.max_ref(&b.b.y) < a.a.y.min_ref(&a.b.y)
+            if b.a
+                .y
+                .min_ref(&b.b.y)?
+                .try_cmp(a.a.y.max_ref(&a.b.y)?)?
+                .is_gt()
+                || b.a
+                    .y
+                    .max_ref(&b.b.y)?
+                    .try_cmp(a.a.y.min_ref(&a.b.y)?)?
+                    .is_lt()
             {
                 continue;
             }
@@ -387,8 +384,6 @@ pub fn visit(
 
 /// Vertici ordinati lungo ciascun segmento, duplicati rimossi esattamente.
 /// Gli id dei segmenti mantengono la provenienza anche per lati coincidenti.
-#[cfg(test)]
-#[deny(clippy::disallowed_methods)]
 pub fn node(
     edges: &[&Edge],
     work: &mut Work<'_>,
@@ -398,13 +393,13 @@ pub fn node(
     for edge in edges {
         let mut points = CountedVec::new();
         work.nodes(2)?;
-        work.push(&mut points, edge.a.clone())?;
-        work.push(&mut points, edge.b.clone())?;
+        work.push(&mut points, edge.a.try_clone()?)?;
+        work.push(&mut points, edge.b.try_clone()?)?;
         work.push(&mut result, points)?;
     }
     visit(edges, work, |i, j, hits, work| {
         for p in hits.into_iter().flatten() {
-            work.push(&mut result[i], p.clone())?;
+            work.push(&mut result[i], p.try_clone()?)?;
             work.push(&mut result[j], p)?;
         }
         Ok(())
@@ -423,7 +418,7 @@ pub fn node(
             work.step()?;
             points.pop();
         }
-        if point_cmp(&edge.a, &edge.b).is_gt() {
+        if point_cmp(&edge.a, &edge.b)?.is_gt() {
             for i in 0..points.len() / 2 {
                 work.step()?;
                 let other = points.len() - 1 - i;
@@ -441,11 +436,55 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
     use std::vec::Vec;
 
-    fn edge(a: (f64, f64), b: (f64, f64)) -> Edge {
-        Edge {
-            a: P::of(a.into()),
-            b: P::of(b.into()),
+    fn q(n: i32) -> Q {
+        Work::new(RelateLimits::default(), None)
+            .integer(n)
+            .expect("intero")
+    }
+
+    fn edge(a: (f64, f64), b: (f64, f64)) -> geo::Line<f64> {
+        geo::Line::new(a, b)
+    }
+
+    fn inputs(
+        edges: &[&geo::Line<f64>],
+        work: &mut Work<'_>,
+    ) -> Result<CountedVec<Edge>, PredicateError> {
+        let mut result = CountedVec::new();
+        for edge in edges {
+            let value = Edge {
+                a: P::of_in(edge.start, work)?,
+                b: P::of_in(edge.end, work)?,
+            };
+            work.push(&mut result, value)?;
         }
+        Ok(result)
+    }
+
+    fn node(
+        edges: &[&geo::Line<f64>],
+        work: &mut Work<'_>,
+    ) -> Result<CountedVec<CountedVec<P>>, PredicateError> {
+        let edges = inputs(edges, work)?;
+        super::node(&edges.iter().collect::<Vec<_>>(), work)
+    }
+
+    fn visit(
+        edges: &[&geo::Line<f64>],
+        work: &mut Work<'_>,
+        emit: impl FnMut(usize, usize, [Option<P>; 2], &mut Work<'_>) -> Result<(), PredicateError>,
+    ) -> Result<(), PredicateError> {
+        let edges = inputs(edges, work)?;
+        super::visit(&edges.iter().collect::<Vec<_>>(), work, emit)
+    }
+
+    fn intersections(
+        a: &geo::Line<f64>,
+        b: &geo::Line<f64>,
+        work: &mut Work<'_>,
+    ) -> Result<[Option<P>; 2], PredicateError> {
+        let edges = inputs(&[a, b], work)?;
+        super::intersections(&edges[0], &edges[1], work)
     }
 
     /// O-M1: y=x e y=1-2x hanno unico incrocio (1/3,1/3).
@@ -455,11 +494,15 @@ mod tests {
         let edges = [edge((0., 0.), (1., 1.)), edge((0., 1.), (1., -1.))];
         let mut work = Work::new(RelateLimits::default(), None);
         let nodes = node(&edges.iter().collect::<Vec<_>>(), &mut work).expect("noding");
-        let third = Q::int(1).div(&Q::int(3));
+        let third = work
+            .integer(1)
+            .expect("uno")
+            .try_div(&work.integer(3).expect("tre"))
+            .expect("terzo");
         assert_eq!(
             nodes[0][1],
             P {
-                x: third.clone(),
+                x: third.try_clone().expect("copia"),
                 y: third
             }
         );
@@ -468,12 +511,18 @@ mod tests {
         let edges = [edge((0., 0.), (3., 0.)), edge((2., 0.), (1., 0.))];
         let nodes = node(&edges.iter().collect::<Vec<_>>(), &mut work).expect("overlap");
         assert_eq!(
-            nodes[0].iter().map(|p| p.x.clone()).collect::<Vec<_>>(),
-            [0, 1, 2, 3].map(Q::int)
+            nodes[0]
+                .iter()
+                .map(|p| p.x.try_clone().expect("copia"))
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3].map(q)
         );
         assert_eq!(
-            nodes[1].iter().map(|p| p.x.clone()).collect::<Vec<_>>(),
-            [2, 1].map(Q::int)
+            nodes[1]
+                .iter()
+                .map(|p| p.x.try_clone().expect("copia"))
+                .collect::<Vec<_>>(),
+            [2, 1].map(q)
         );
     }
 
@@ -630,7 +679,7 @@ mod tests {
             node(&refs, &mut empty),
             Err(PredicateError::WorkLimit)
         ));
-        assert_eq!(empty.peak_bytes(), 0);
+        assert!(empty.peak_bytes() > 0);
     }
 
     /// GOP-028: anche l'ingresso vuoto controlla deadline e token. Nessun
@@ -650,6 +699,111 @@ mod tests {
         let flag = AtomicBool::new(true);
         let mut cancelled = Work::new(limits, Some(&flag));
         assert!(matches!(cancelled.step(), Err(PredicateError::Cancelled)));
+    }
+
+    /// GOP-026/027 e O-M1/M3: reticolo 3x3, pettine, strisce e segmenti
+    /// sparsi. Fonte: formule di incidenza documentate nelle prove sopra.
+    /// La soglia viene misurata sul percorso completo, inclusa l'aritmetica;
+    /// a soglia e soglia+1 passa, a soglia-1 fallisce senza ricevute residue.
+    #[test]
+    fn noding_live_arithmetic_and_exact_resource_thresholds() {
+        let grid: Vec<_> = (1..=3)
+            .flat_map(|i| {
+                let v = f64::from(i);
+                [edge((0., v), (4., v)), edge((v, 0.), (v, 4.))]
+            })
+            .collect();
+        let comb: Vec<_> = std::iter::once(edge((0., 0.), (5., 0.)))
+            .chain((1..=4).map(|i| edge((f64::from(i), 0.), (f64::from(i), 1.))))
+            .collect();
+        let stripes: Vec<_> = (0..8)
+            .map(|i| edge((0., f64::from(i)), (8., f64::from(i))))
+            .collect();
+        let sparse: Vec<_> = (0..64)
+            .map(|i| {
+                let v = 3. * f64::from(i);
+                edge((v, 0.), (v + 1., 1.))
+            })
+            .collect();
+        for edges in [grid, comb, stripes, sparse] {
+            let refs = edges.iter().collect::<Vec<_>>();
+            let mut measured = Work::new(RelateLimits::default(), None);
+            let result = node(&refs, &mut measured).expect("misura");
+            let peak = measured.peak_bytes();
+            let structural_output = std::mem::size_of::<CountedVec<P>>() * result.len()
+                + result
+                    .iter()
+                    .map(|points| std::mem::size_of::<P>() * points.len())
+                    .sum::<usize>();
+            assert!(measured.budget.live() > u64::try_from(structural_output).expect("dimensione"));
+            drop(result);
+            assert_eq!(measured.budget.live(), 0);
+            for bytes in [peak, peak + 1] {
+                let mut work = Work::new(
+                    RelateLimits {
+                        max_reserved_bytes: bytes,
+                        ..RelateLimits::default()
+                    },
+                    None,
+                );
+                drop(node(&refs, &mut work).expect("soglia"));
+                assert_eq!(work.peak_bytes(), peak);
+                assert_eq!(work.budget.live(), 0);
+            }
+            let mut short = Work::new(
+                RelateLimits {
+                    max_reserved_bytes: peak - 1,
+                    ..RelateLimits::default()
+                },
+                None,
+            );
+            assert!(matches!(
+                node(&refs, &mut short),
+                Err(PredicateError::ReservationLimit)
+            ));
+            assert_eq!(short.budget.live(), 0);
+            assert!(
+                short.budget.attempted_peak().saturating_sub(peak - 1) <= exact::MAX_VALUE_BYTES
+            );
+            for (steps, nodes, succeeds) in [
+                (measured.steps, measured.nodes, true),
+                (measured.steps - 1, measured.nodes, false),
+                (measured.steps, measured.nodes - 1, false),
+            ] {
+                let mut work = Work::new(
+                    RelateLimits {
+                        max_steps: steps,
+                        max_nodes: nodes,
+                        ..RelateLimits::default()
+                    },
+                    None,
+                );
+                let result = node(&refs, &mut work);
+                if succeeds {
+                    drop(result.expect("soglie esatte"));
+                } else {
+                    assert!(matches!(result, Err(PredicateError::WorkLimit)));
+                }
+                assert_eq!(work.budget.live(), 0);
+            }
+        }
+    }
+
+    /// GOP-027: un noder non puo' contabilizzare gli intermedi su un
+    /// bilancio diverso da quello che ne governa lavoro e contenitori.
+    #[test]
+    fn foreign_edge_budget_is_rejected() {
+        let owner = Work::new(RelateLimits::default(), None);
+        let edge = Edge {
+            a: P::of_in((0., 0.).into(), &owner).expect("a"),
+            b: P::of_in((1., 1.).into(), &owner).expect("b"),
+        };
+        let mut other = Work::new(RelateLimits::default(), None);
+        assert!(matches!(
+            super::visit(&[&edge], &mut other, |_, _, _, _| Ok(())),
+            Err(PredicateError::CalcoloNonConcluso(_))
+        ));
+        assert_eq!(other.budget.live(), 0);
     }
 
     /// AGENTS regola 3: l'indice contro l'enumerazione generica di tutte

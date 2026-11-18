@@ -8,6 +8,7 @@
 // coordinate esatta, non una misura approssimata.
 #![allow(clippy::many_single_char_names, clippy::float_cmp)]
 
+use super::interval_index::IntervalIndex;
 use super::{De9imMatrix, PredicateError};
 pub(super) use crate::noding::Work;
 use crate::noding::{between, sorted, CountedVec, Edge, P, Q};
@@ -23,6 +24,10 @@ fn invalid(side: &'static str) -> PredicateError {
 
 #[derive(Default)]
 struct Shape {
+    line_index: IntervalIndex,
+    end_index: IntervalIndex,
+    point_index: IntervalIndex,
+    ring_indices: CountedVec<CountedVec<IntervalIndex>>,
     points: CountedVec<P>,
     lines: CountedVec<Edge>,
     ends: CountedVec<P>,
@@ -33,7 +38,7 @@ struct Shape {
 
 fn point(coordinate: Coord<f64>, work: &mut Work<'_>) -> Result<P, PredicateError> {
     work.nodes(1)?;
-    Ok(P::of(coordinate))
+    P::of_in(coordinate, work)
 }
 
 fn push_point(
@@ -60,6 +65,38 @@ fn ring(line: &[Coord<f64>], work: &mut Work<'_>) -> Result<CountedVec<Edge>, Pr
     Ok(edges)
 }
 impl Shape {
+    fn build_indices(&mut self, work: &mut Work<'_>) -> Result<(), PredicateError> {
+        self.line_index = IntervalIndex::new(self.lines.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
+        self.end_index = IntervalIndex::new(self.ends.iter().map(|p| (&p.x, &p.x)), work)?;
+        self.point_index = IntervalIndex::new(self.points.iter().map(|p| (&p.x, &p.x)), work)?;
+        for rings in &self.polygons {
+            let mut indices = CountedVec::new();
+            for ring in rings {
+                let index = IntervalIndex::new(ring.iter().map(|e| (&e.a.y, &e.b.y)), work)?;
+                work.push(&mut indices, index)?;
+            }
+            work.push(&mut self.ring_indices, indices)?;
+        }
+        Ok(())
+    }
+
+    fn boundary_candidates(
+        &self,
+        p: &P,
+        work: &mut Work<'_>,
+    ) -> Result<CountedVec<&Edge>, PredicateError> {
+        let mut edges = CountedVec::new();
+        for (rings, indices) in self.polygons.iter().zip(&self.ring_indices) {
+            for (ring, index) in rings.iter().zip(indices) {
+                work.step()?;
+                for id in index.candidates(&p.y, work)? {
+                    work.push(&mut edges, &ring[id])?;
+                }
+            }
+        }
+        Ok(edges)
+    }
+
     fn validate_rings(
         &self,
         side: &'static str,
@@ -99,18 +136,18 @@ impl Shape {
         let mut polygon_positions = CountedVec::new();
         for (polygon_index, rings) in self.polygons.iter().enumerate() {
             let mut statuses = CountedVec::new();
-            for ring in rings {
+            for (ring, index) in rings.iter().zip(&self.ring_indices[polygon_index]) {
                 let mut boundary = false;
-                for edge in ring {
+                for id in index.candidates(&p.y, work)? {
                     work.step()?;
-                    if edge.contains(p) {
+                    if ring[id].contains(p)? {
                         boundary = true;
                         break;
                     }
                 }
                 let status = if boundary {
                     1
-                } else if ring_contains(ring, p, None, work)? {
+                } else if ring_contains(ring, index, p, None, work)? {
                     0
                 } else {
                     2
@@ -328,13 +365,13 @@ impl Shape {
         direction: Option<&P>,
         work: &mut Work<'_>,
     ) -> Result<bool, PredicateError> {
-        for rings in &self.polygons {
+        for (rings, indices) in self.polygons.iter().zip(&self.ring_indices) {
             work.step()?;
             if let Some(exterior) = rings.first() {
-                if ring_contains(exterior, p, direction, work)? {
+                if ring_contains(exterior, &indices[0], p, direction, work)? {
                     let mut hole = false;
-                    for r in rings.iter().skip(1) {
-                        if ring_contains(r, p, direction, work)? {
+                    for (r, index) in rings.iter().zip(indices).skip(1) {
+                        if ring_contains(r, index, p, direction, work)? {
                             hole = true;
                             break;
                         }
@@ -349,9 +386,10 @@ impl Shape {
     }
     fn position(&self, p: &P, work: &mut Work<'_>) -> Result<usize, PredicateError> {
         let mut boundary = false;
-        for e in self.polygons.iter().flatten().flatten() {
+        let candidates = self.boundary_candidates(p, work)?;
+        for e in &candidates {
             work.step()?;
-            if e.contains(p) {
+            if e.contains(p)? {
                 boundary = true;
                 break;
             }
@@ -365,26 +403,26 @@ impl Shape {
                 work.push(
                     &mut rays,
                     P {
-                        x: Q::int(x),
-                        y: Q::int(y),
+                        x: work.integer(x)?,
+                        y: work.integer(y)?,
                     },
                 )?;
             }
-            for edge in self.polygons.iter().flatten().flatten() {
+            for edge in &candidates {
                 work.step()?;
-                if !edge.contains(p) {
+                if !edge.contains(p)? {
                     continue;
                 }
                 for endpoint in [&edge.a, &edge.b] {
                     if endpoint != p {
-                        work.push(&mut rays, endpoint.sub(p))?;
+                        work.push(&mut rays, endpoint.try_sub(p)?)?;
                     }
                 }
             }
             sorted(&mut rays, angle_cmp, work)?;
-            rays.dedup_by(|a, b| angle_cmp(a, b) == Ordering::Equal, work)?;
+            rays.dedup_by(|a, b| Ok(angle_cmp(a, b)? == Ordering::Equal), work)?;
             for (a, b) in rays.iter().zip(rays.iter().cycle().skip(1)) {
-                if !self.area_contains(p, Some(&a.add(b)), work)? {
+                if !self.area_contains(p, Some(&a.try_add(b)?), work)? {
                     return Ok(1);
                 }
             }
@@ -393,11 +431,13 @@ impl Shape {
         if self.area_contains(p, None, work)? {
             return Ok(0);
         }
-        for e in &self.lines {
+        for id in self.line_index.candidates(&p.x, work)? {
+            let e = &self.lines[id];
             work.step()?;
-            if e.contains(p) {
+            if e.contains(p)? {
                 let mut odd = false;
-                for q in &self.ends {
+                for id in self.end_index.candidates(&p.x, work)? {
+                    let q = &self.ends[id];
                     work.step()?;
                     if q == p {
                         odd = !odd;
@@ -406,7 +446,8 @@ impl Shape {
                 return Ok(usize::from(odd));
             }
         }
-        for q in &self.points {
+        for id in self.point_index.candidates(&p.x, work)? {
+            let q = &self.points[id];
             work.step()?;
             if q == p {
                 return Ok(0);
@@ -415,14 +456,17 @@ impl Shape {
         Ok(2)
     }
 }
-fn angle_cmp(a: &P, b: &P) -> Ordering {
+fn angle_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     let half = |p: &P| {
         p.y.sign() == Ordering::Less
             || (p.y.sign() == Ordering::Equal && p.x.sign() == Ordering::Less)
     };
-    half(a)
-        .cmp(&half(b))
-        .then_with(|| a.cross(b).sign().reverse())
+    let halves = half(a).cmp(&half(b));
+    if halves.is_eq() {
+        Ok(a.try_cross(b)?.sign().reverse())
+    } else {
+        Ok(halves)
+    }
 }
 fn perturbed_sign(value: &Q, delta: &Q) -> Ordering {
     let sign = value.sign();
@@ -434,24 +478,28 @@ fn perturbed_sign(value: &Q, delta: &Q) -> Ordering {
 }
 fn ring_contains(
     ring: &[Edge],
+    index: &IntervalIndex,
     p: &P,
     direction: Option<&P>,
     work: &mut Work<'_>,
 ) -> Result<bool, PredicateError> {
     work.step()?;
     let zero = P {
-        x: Q::int(0),
-        y: Q::int(0),
+        x: work.integer(0)?,
+        y: work.integer(0)?,
     };
     let d = direction.unwrap_or(&zero);
     let mut inside = false;
-    for e in ring {
+    for id in index.candidates(&p.y, work)? {
+        let e = &ring[id];
         work.step()?;
-        let above = |y: &Q| perturbed_sign(&p.y.sub(y), &d.y) == Ordering::Less;
-        if above(&e.a.y) != above(&e.b.y) {
-            let edge = e.b.sub(&e.a);
-            let side = perturbed_sign(&edge.cross(&p.sub(&e.a)), &edge.cross(d));
-            if side == e.b.y.cmp(&e.a.y) {
+        let above = |y: &Q| -> Result<bool, PredicateError> {
+            Ok(perturbed_sign(&p.y.try_sub(y)?, &d.y) == Ordering::Less)
+        };
+        if above(&e.a.y)? != above(&e.b.y)? {
+            let edge = e.b.try_sub(&e.a)?;
+            let side = perturbed_sign(&edge.try_cross(&p.try_sub(&e.a)?)?, &edge.try_cross(d)?);
+            if side == e.b.y.try_cmp(&e.a.y)? {
                 inside = !inside;
             }
         }
@@ -574,8 +622,8 @@ fn validate_structure(
             }
             Geometry::Triangle(t)
                 if point(t.v2(), work)?
-                    .sub(&point(t.v1(), work)?)
-                    .cross(&point(t.v3(), work)?.sub(&point(t.v1(), work)?))
+                    .try_sub(&point(t.v1(), work)?)?
+                    .try_cross(&point(t.v3(), work)?.try_sub(&point(t.v1(), work)?)?)?
                     .sign()
                     == Ordering::Equal =>
             {
@@ -591,28 +639,28 @@ fn samples(
     mut values: CountedVec<Q>,
     work: &mut Work<'_>,
 ) -> Result<CountedVec<(Q, bool)>, PredicateError> {
-    sorted(&mut values, Ord::cmp, work)?;
-    values.dedup_by(PartialEq::eq, work)?;
+    sorted(&mut values, Q::try_cmp, work)?;
+    values.dedup_by(|a, b| Ok(a == b), work)?;
     let mut result = CountedVec::new();
     if let Some(first) = values.first() {
-        work.push(&mut result, (first.sub(&Q::int(1)), false))?;
+        work.push(&mut result, (first.try_sub(&work.integer(1)?)?, false))?;
     }
     for (i, value) in values.iter().enumerate() {
-        work.push(&mut result, (value.clone(), true))?;
+        work.push(&mut result, (value.try_clone()?, true))?;
         if let Some(next) = values.get(i + 1) {
-            work.push(&mut result, (value.midpoint(next), false))?;
+            work.push(&mut result, (value.try_midpoint(next)?, false))?;
         }
     }
     if let Some(last) = values.last() {
-        work.push(&mut result, (last.add(&Q::int(1)), false))?;
+        work.push(&mut result, (last.try_add(&work.integer(1)?)?, false))?;
     }
     if values.is_empty() {
-        work.push(&mut result, (Q::int(0), false))?;
+        work.push(&mut result, (work.integer(0)?, false))?;
     }
     Ok(result)
 }
 
-pub(super) fn relate(
+pub fn relate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     work: &mut Work<'_>,
@@ -644,6 +692,8 @@ fn relate_impl(
     }
     a.geometry(left, work)?;
     b.geometry(right, work)?;
+    a.build_indices(work)?;
+    b.build_indices(work)?;
     if check_input {
         a.validate_rings("left", work)?;
         b.validate_rings("right", work)?;
@@ -664,7 +714,7 @@ fn relate_impl(
         .flat_map(|e| [&e.a.x, &e.b.x])
         .chain(points.iter().map(|p| &p.x))
     {
-        work.push(&mut xs, x.clone())?;
+        work.push(&mut xs, x.try_clone()?)?;
     }
     crate::noding::visit(&edges, work, |_, _, hits, work| {
         for point in hits.into_iter().flatten() {
@@ -672,31 +722,38 @@ fn relate_impl(
         }
         Ok(())
     })?;
+    let edge_index = IntervalIndex::new(edges.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
+    let point_index = IntervalIndex::new(points.iter().map(|p| (&p.x, &p.x)), work)?;
     let mut cells = [b'F'; 9];
     cells[8] = b'2';
     for (x, critical_x) in samples(xs, work)? {
         work.step()?;
         let mut ys = CountedVec::new();
-        for e in &edges {
+        for id in edge_index.candidates(&x, work)? {
+            let e = edges[id];
             work.step()?;
-            if between(&x, &e.a.x, &e.b.x) {
+            if between(&x, &e.a.x, &e.b.x)? {
                 if e.a.x == e.b.x {
-                    work.push(&mut ys, e.a.y.clone())?;
-                    work.push(&mut ys, e.b.y.clone())?;
+                    work.push(&mut ys, e.a.y.try_clone()?)?;
+                    work.push(&mut ys, e.b.y.try_clone()?)?;
                 } else {
-                    work.push(&mut ys, e.at_x(&x))?;
+                    work.push(&mut ys, e.at_x(&x)?)?;
                 }
             }
         }
-        for p in &points {
+        for id in point_index.candidates(&x, work)? {
+            let p = points[id];
             work.step()?;
             if p.x == x {
-                work.push(&mut ys, p.y.clone())?;
+                work.push(&mut ys, p.y.try_clone()?)?;
             }
         }
         for (y, critical_y) in samples(ys, work)? {
             work.step()?;
-            let p = P { x: x.clone(), y };
+            let p = P {
+                x: x.try_clone()?,
+                y,
+            };
             let dimension = b'0' + u8::from(!critical_x) + u8::from(!critical_y);
             if check_input {
                 a.validate_cell(&p, dimension - b'0', "left", &mut a_connected, work)?;
@@ -726,8 +783,84 @@ mod tests {
     use std::vec::Vec;
     use wkt::TryFromWkt as _;
 
+    fn sparse(count: i32) -> Geometry<f64> {
+        Geometry::MultiLineString(geo::MultiLineString(
+            (0..count)
+                .map(|i| {
+                    let x = f64::from(i).mul_add(4.0, 16.0);
+                    line_string![(x:x, y:0.0), (x:x+1.0, y:1.0)]
+                })
+                .collect(),
+        ))
+    }
+
+    #[test]
+    fn sparse_work_and_exact_public_threshold() {
+        let left = geometry("LINESTRING(0 0,1 0)");
+        for count in [16, 64, 256, 4096] {
+            let right = sparse(count);
+            let mut work = Work::new(RelateLimits::default(), None);
+            work.step().expect("passo API");
+            let matrix = relate(&left, &right, &mut work).expect("limiti predefiniti");
+            assert_eq!(matrix.to_string(), "FF1FF0102");
+            let threshold = work.steps;
+            let public = super::super::relate_matrix_with_limits;
+            assert_eq!(
+                public(
+                    &left,
+                    &right,
+                    RelateLimits {
+                        max_steps: threshold,
+                        ..RelateLimits::default()
+                    },
+                    None
+                )
+                .expect("soglia"),
+                matrix
+            );
+            assert!(matches!(
+                public(
+                    &left,
+                    &right,
+                    RelateLimits {
+                        max_steps: threshold - 1,
+                        ..RelateLimits::default()
+                    },
+                    None
+                ),
+                Err(PredicateError::WorkLimit)
+            ));
+            if count <= 256 {
+                let mut before = Work::new(RelateLimits::default(), None);
+                before.step().expect("passo API");
+                let baseline =
+                    super::super::arrangement_exhaustive::relate(&left, &right, &mut before)
+                        .expect("esaustivo");
+                assert_eq!(matrix, baseline);
+                println!("sparso{count}: prima={}, dopo={threshold}", before.steps);
+                assert!(threshold < before.steps);
+            } else {
+                println!(
+                    "sparso{count}: dopo={threshold}, limite={}",
+                    RelateLimits::default().max_steps
+                );
+            }
+        }
+    }
+
     fn relate_matrix(a: &Geometry<f64>, b: &Geometry<f64>) -> Result<De9imMatrix, PredicateError> {
-        relate(a, b, &mut Work::new(RelateLimits::default(), None))
+        let result = relate(a, b, &mut Work::new(RelateLimits::default(), None));
+        let oracle = super::super::arrangement_exhaustive::relate(
+            a,
+            b,
+            &mut Work::new(RelateLimits::default(), None),
+        );
+        assert_eq!(
+            result.as_ref().map_err(ToString::to_string),
+            oracle.as_ref().map_err(ToString::to_string),
+            "classificazione esaustiva"
+        );
+        result
     }
 
     fn geometry(text: &str) -> Geometry<f64> {
@@ -1097,3 +1230,9 @@ mod tests {
         }
     }
 }
+
+/// Booleane planari con almeno un operando puntuale.
+pub mod point_boolean;
+
+pub mod line_boolean;
+pub mod polygon_boolean;

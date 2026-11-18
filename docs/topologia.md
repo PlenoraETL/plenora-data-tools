@@ -39,14 +39,36 @@ filtri inclusivi X/Y. I limiti sui nodi precedono la costruzione, includono
 copie e incidenze duplicate prima di dedup. La deadline monotona viene
 controllata accanto alla cancellazione e prima di pubblicare la matrice.
 
-Le prenotazioni dei vettori seguono ora le capacita' vive, anche durante
-l'iterazione che consuma il contenitore. Restano esclusi i buffer BigInt:
-la prova algebrica per oggetto (6299 bit di numeratore e 5273 bit di
-denominatore per una coordinata d'intersezione ridotta) e il corpus estremo
-sono in `noding/bounds.rs`, ma non sono ancora ricevute di prenotazione
-per tutti gli intermedi aritmetici. Non e' dichiarata conformita' GOP-027.
-Anche la possibile sovraprenotazione interna dell'allocatore resta fuori
-dal bilancio; una capacita' Vec diversa dalla richiesta e' un errore esplicito.
+Le prenotazioni dei vettori seguono le capacita' vive, anche durante
+l'iterazione che consuma il contenitore. Il noder e la matrice usano
+`noding/exact.rs`: `Q` contiene due `CountedInt`, ciascuno con ricevuta sullo
+stesso bilancio vivo di `CountedVec`. Numeratori, denominatori, prodotti
+incrociati dei confronti, intermedi del gcd e cloni sono addebitati subito
+dopo ogni creazione e rilasciati dopo la distruzione del valore. Non ci
+sono operatori o cloni infallibili; ogni operazione propaga l'errore tipizzato.
+Valori appartenenti a bilanci diversi vengono rifiutati prima del calcolo.
+
+Il backend fissato `num-bigint =0.5.1` non espone la capacita' delle cifre:
+`IntDigits::capacity` e `BigDigits` sono privati al crate. Si applica il
+fallback autorizzato: bit significativi arrotondati ai limb nativi
+(`usize::BITS`), piu' `size_of::<BigInt>()`. Non e' una prenotazione di un
+maggiorante dell'operazione. Il massimo matematico del DAG dimostrato in
+`noding/bounds.rs` e' **145173 bit per intero**, prima del gcd: il massimo
+sforamento **contabile** prima di `ReservationLimit` e' quindi
+`ceil(145173 / usize::BITS) * size_of::<usize>() + size_of::<BigInt>()`.
+Su target a 64 bit la parte cifre vale 18152 byte; si aggiunge l'header.
+Le prove misurano anche il tentativo rifiutato, non soltanto i valori ammessi.
+
+**Limite ancora aperto:** questa contabilita' non certifica GOP-027 per
+l'heap fisico. Capacita' inutilizzata e scratch privati del backend non sono
+overhead dell'allocatore e non vengono presentati come tale. L'header di un
+intero residente in un `CountedVec` e' incluso anche nella capacita' del
+contenitore: il conteggio e' conservativo per quella parte, non una misura
+fisica senza duplicazioni. Restano inoltre l'allocazione `Rc<Budget>`, la
+diagnostica allocata e il picco interno della riallocazione dei vettori.
+Una capacita' Vec diversa dalla richiesta e' un errore esplicito. Manca
+la prova con allocatore contante richiesta per certificare la differenza
+fra heap reale e contato; i test di ricevute non la sostituiscono.
 
 Mancano ancora i nuovi ingressi controllati `split_line` e `polygonize`,
 e la loro qualifica C1. Per O-M4, `evaluate` ed `evaluate_validated`
@@ -96,10 +118,10 @@ sbagliate e controlla anche simboli invalidi dopo celle non corrispondenti.
 
 **Limiti:** default di 10 milioni di coppie effettivamente esaminate,
 100 milioni di passi di visita/classificazione/ordinamento, 10 milioni di
-nodi e 256 MiB di richieste di capacita' strutturale ancora vive. Il drop
-rilascia il budget; pop e dedup mantengono la capacita'. Le richieste non
-includono i buffer aritmetici interni di `BigInt` ne' l'overhead allocatore:
-non costituiscono un tetto all'heap totale. `RelateLimits::deadline` e'
+nodi e 256 MiB di capacita' strutturale e interi contabilizzati ancora vivi.
+Il drop rilascia il budget; pop e dedup mantengono la capacita'. Il fallback
+aritmetico e le esclusioni fisiche sono specificati sopra: questo conteggio
+non costituisce un tetto all'heap totale. `RelateLimits::deadline` e'
 opzionale (default `None`) e produce `PredicateError::DeadlineExceeded`;
 se anche il token e' alzato prevale `Cancelled`.
 Nessun maggiorante anticipato decide il rifiuto. Validazione e calcolo
@@ -300,3 +322,53 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   simmetrica di GEOS.
 - **Fuori perimetro come per le altre operazioni**: diagnostica per riga,
   envelope e fusione dei segmenti vivevano nell'engine, che non è portato.
+
+## Booleane poligonali Rust con limiti
+
+`plenora_kernels_geo::polygon_boolean` espone `boolean_with_limits` e le
+scorciatoie `union_with_limits`, `intersection_with_limits`,
+`difference_with_limits`. Accetta due Polygon/MultiPolygon validi, XY planari
+finiti nello stesso CRS e ordine degli assi. Le parti di ciascun MultiPolygon
+sono disgiunte anche sul confine; contatti che richiedono normalizzazione,
+GeometryCollection in ingresso, array, molti-a-uno, clip e dissolve sono esclusi.
+Non modifica `topology::boolean_operation` e non introduce semantica Esri.
+
+Il filtro `output_dimension` di `boolean_with_limits` conserva soltanto le
+componenti richieste (0/1/2), senza estrarre confini. Intersezioni di soli lati
+o punti restano esplicite. Risultati omogenei multi; misti GeometryCollection
+con componenti in dimensione crescente. Vuoto generale GeometryCollection;
+vuoto filtrato multi tipizzato. Differenza con chiusura del residuo.
+
+Noding e appartenenza ai settori incidenti sono razionali esatti. L'enumeratore
+dei cicli e' condiviso con polygonize; i contatti ripetuti separano anelli
+semplici. Gusci antiorari e buchi orari, a partire dal minimo XY pubblicato;
+gusci e buchi ordinati per minimo e vertice successivo. Tratti collineari
+nodati conservati. Le componenti lineari sono segmenti atomici ordinati per
+estremi XY; i punti isolati sono unici e ordinati XY.
+
+GOP-015A: nodi costruiti al binary64 piu' vicino, meta' al pari, errore massimo
+1/2 ulp per ordinata nelle unita' delle coordinate. Nessuno snap metrico.
+Vertici originali conservati bit per bit; per siti coincidenti con zeri di
+segno diverso prevale il primo nell'ordine degli operandi. Un solo arrotondatore
+e un solo verificatore della pubblicazione: incidenze, assenza di nuovi
+incroci, orientamento, corrispondenza dei lati serializzati, semplicita' degli
+anelli, buchi nel guscio, interno connesso e interni disgiunti. Collassi e
+inversioni falliscono con `InvalidRoundedTopology`, senza risultato parziale.
+Le componenti escluse dal filtro non sono pubblicate o certificate.
+
+`PolygonBooleanLimits.work` adotta i contatori e le esclusioni di
+`RelateLimits`, inclusa l'aritmetica GOP-027 (massimo per intero 145173 bit
+arrotondati ai limb piu' header). `max_edges` conta le incidenze atomiche prima
+della deduplicazione; `max_faces` conta i cammini chiusi della frontiera
+selezionata, inclusi quelli esterni dei buchi; `max_rings` conta gli anelli
+semplici separati da questi cammini. Non sono stime n*m ne' un tetto RSS.
+Ogni crescita e' prenotata; l'aritmetica addebita il valore appena creato.
+Per decidere il verso non si accumulano aree con denominatori crescenti.
+
+Ogni ciclo controlla lavoro, deadline e cancellazione; una primitiva razionale
+ha dimensione massima finita indipendente dal numero di elementi. Nei confronti
+si elaborano al massimo due punti o raggi fra checkpoint. GOP-028: deadline
+scaduta prima del token; la politica delle API precedenti non cambia. Il limite
+non promette una latenza a tempo reale. Ricostruzione dei successori e verifica
+della corrispondenza dei lati possono richiedere lavoro quadratico, interrotto
+dai contatori reali; non viene promesso un algoritmo subquadratico.
