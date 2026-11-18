@@ -167,3 +167,77 @@ La deadline precede la cancellazione allo stesso checkpoint.
 Un errore distrugge il risultato parziale; nessun prefisso viene restituito.
 Le prove iniettano deterministicamente entrambi i segnali nella funzione
 di generazione di produzione, dopo 511 vertici, senza gare fra thread.
+
+## Maggiorante laterale per una linea: risultato matematico, non API
+
+Il campionamento dei corridoi e la loro unione non sono implementati.
+La seguente derivazione isola la componente di discretizzazione; non
+costituisce un certificato numerico o topologico di un buffer di linea.
+
+Sia gamma(s) una geodetica parametrizzata per lunghezza e sia n(s) la
+normale unitaria tangente all'ellissoide, trasportata parallelamente.
+Si consideri F(s,t)=exp_gamma(s)(t*n(s)). In coordinate di Fermi la
+metrica e' dt^2+j(s,t)^2 ds^2. La proposizione 5.1 di
+[Urs Lang, Differential Geometry I, pagine 29-30](https://people.math.ethz.ch/~lang/DG1_9Jan2025.pdf)
+da' j_tt=-K*j, j(s,0)=1 e j_t(s,0)=0. La costruzione e' locale;
+l'assenza di punti focali non implica da sola iniettivita' globale.
+
+Con R=5800000 metri e 0<K<=1/R^2, finche' j e' positivo vale
+j_tt<=0 e dunque j<=1. Inoltre
+j(t)=1-integrale_0^t (t-u)*K(u)*j(u) du >= 1-t^2/(2R^2).
+Un primo zero prima di 60000 metri contraddirebbe questa disuguaglianza.
+La stessa prova si applica all'altro verso della normale. Quindi il
+tratto laterale s -> F(s,+r), oppure F(s,-r), corrispondente a un
+intervallo di lunghezza h ha lunghezza al piu' h.
+
+Supponiamo ora che ciascun campione numerico abbia errore metrico <=e
+rispetto a F(s,+r). Ogni punto dell'arco esatto dista <=h/2+e da uno
+dei due campioni. La geodetica minima fra i campioni ha lunghezza
+<=h+2e; ogni suo punto dista <=h/2+e da un campione e <=h/2+2e
+dal corrispondente estremo esatto. Ne segue il bound simmetrico
+**d_H(arco laterale, corda geodetica) <= h/2+2e**.
+La prova usa soltanto lunghezze e disuguaglianza triangolare, e non
+una freccia sferica applicata all'ellissoide.
+
+Questo risultato lascia da verificare nell'implementazione:
+
+- e deve coprire inverse iniziale, posizione e azimut lungo la linea,
+  direct normale e arrotondamenti; non si puo' riusare automaticamente
+  il margine del disco, che richiede una sola direct;
+- il tubo normale deve rappresentare il vicinato metrico del segmento
+  nel dominio ammesso, con i dischi terminali e senza identificazioni
+  non verificate; i soli estremi entro 80 gradi non provano che l'intera
+  geodetica vi rimanga;
+- il bound sul confine deve essere esteso alle regioni piene e alla
+  pubblicazione, preservando la topologia dichiarata;
+- h, numero dei campioni e somme degli errori devono essere maggiorati
+  con arrotondamenti diretti e conteggi checked prima delle allocazioni.
+
+## Composizione con l'unione planare: garanzie distinte
+
+Per insiemi non vuoti A_i e B_i nello stesso spazio metrico, se
+d_H(A_i,B_i)<=e_i, allora d_H(unione A_i,unione B_i)<=max_i e_i.
+Infatti ogni punto di una delle unioni appartiene a un operando e ha
+un testimone nel corrispondente operando dell'altra unione. L'argomento
+si applica nei due versi. Per un'ulteriore approssimazione U dell'unione
+dei B_i con bound E, la disuguaglianza triangolare da' max_i e_i+E.
+
+L'API `polygon_boolean::union_with_limits` certifica un'unione nel
+piano delle coordinate. Il suo rounding dei nodi e' nearest-even,
+con al piu' mezza ulp per ordinata; la verifica della pubblicazione
+riguarda segmenti planari. Non dichiara un E per la sostituzione dei
+lati con geodetiche minime. Quella componente deve essere dimostrata
+e composta sia in ingresso sia in uscita dall'overlay. Convertire
+soltanto mezza ulp da gradi a metri non copre il cambio dei lati.
+
+Un limite di Hausdorff non certifica da solo i contatti. Gia' nel piano,
+due dischi esternamente tangenti possono essere approssimati con
+poligoni inscritti arbitrariamente accurati ma disgiunti, scegliendo
+campioni che non comprendono il punto di tangenza. L'unione esatta
+e' connessa; quella approssimata ha due componenti. Occorre quindi
+verificare separatamente la topologia promessa e dichiarare l'eventuale
+trattamento delle feature sotto la precisione del motore. La validita'
+OGC dell'unione planare non e' tale verifica per il modello geodetico.
+
+Queste lacune non dimostrano un'impossibilita' dell'estensione. Indicano
+le garanzie ancora necessarie prima di esporla come buffer GOP-006/008.
