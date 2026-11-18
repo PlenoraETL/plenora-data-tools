@@ -243,7 +243,7 @@ fn ambiguities_domains_and_controls() {
     );
     assert_eq!(
         geodesic_densify_with_limits(&parts, &crs, 1e6, expired, Some(&AtomicBool::new(true))),
-        Err(GeodesicDensifyError::Cancelled)
+        Err(GeodesicDensifyError::DeadlineExceeded)
     );
     let mut work = DensifyWork {
         limits: limits(),

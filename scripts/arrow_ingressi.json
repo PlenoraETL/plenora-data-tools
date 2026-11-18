@@ -8159,6 +8159,30 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits": {
+      "signature": "pub fn geodesic_densify_geometry_with_limits( geometry: &Geometry, crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicGeometryDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry, GeodesicDensifyError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Geometria Rust XY e limiti espliciti; nessun ingresso Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs::eq": {
+      "signature": "fn eq(&self, other: &Self) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto interno deterministico di candidati metrici; nessun ingresso Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs::partial_cmp": {
+      "signature": "fn partial_cmp(&self, other: &Self) -> Option<Ordering>",
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto interno deterministico di candidati metrici; nessun ingresso Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs::cmp": {
+      "signature": "fn cmp(&self, other: &Self) -> Ordering",
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto interno deterministico di candidati metrici; nessun ingresso Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {
