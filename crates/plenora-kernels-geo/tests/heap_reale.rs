@@ -223,8 +223,6 @@ fn real_heap_certification() {
             polygonize_with_limits(&linework, limits, None)
         });
     }
-    // Carico sparso maggiore per le API che non classificano tutte le celle
-    // DE-9IM: il corpus comune sopra resta identico per le tre operazioni.
     let source = segment((0.0, 0.0), (1.0, 0.0));
     let lines = (0..4096)
         .map(|i| {
@@ -233,6 +231,10 @@ fn real_heap_certification() {
         })
         .collect();
     let linework = Geometry::MultiLineString(MultiLineString(lines));
+    let operand = Geometry::LineString(source.clone());
+    certify("sparso4096", "relate", |limits| {
+        relate_matrix_with_limits(&operand, &linework, limits, None)
+    });
     certify("sparso4096", "split", |limits| {
         split_line_with_limits(&source, &linework, limits, None)
     });

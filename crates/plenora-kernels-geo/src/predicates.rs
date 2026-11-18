@@ -14,7 +14,11 @@ use thiserror::Error;
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod arrangement;
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod arrangement_exhaustive;
 pub(crate) mod arrangement_indexed;
+mod interval_index;
 
 /// Limiti della matrice sul noder comune (API 6.1.0 non rilasciata).
 /// Lavoro e nodi sono cumulativi; contenitori e aritmetica hanno ricevute vive.
@@ -636,6 +640,15 @@ mod tests {
             let left = Geometry::<f64>::try_from_wkt_str(left).expect("WKT analitico");
             let right = Geometry::<f64>::try_from_wkt_str(right).expect("WKT analitico");
             let matrix = relate_matrix(&left, &right).expect("matrice analitica");
+            assert_eq!(
+                matrix,
+                arrangement_exhaustive::relate(
+                    &left,
+                    &right,
+                    &mut arrangement_indexed::Work::new(RelateLimits::default(), None)
+                )
+                .expect("classificazione esaustiva")
+            );
             assert_eq!(matrix.to_string(), expected);
             assert!(matrix.matches(expected.parse().expect("pattern esatto")));
             let transpose = relate_matrix(&right, &left)
