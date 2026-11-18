@@ -554,7 +554,7 @@ fn execute(
         published.support = support.map(|id| sources[id]);
         work.push(&mut certificate, published)?;
     }
-    verify_publication(&certificate, &originals, work)?;
+    verify_publication(&certificate, &originals, false, work)?;
     canonicalize(&mut graph, &mut faces, &coords, work)?;
     let mut output = CountedVec::new();
     let empty = Geometry::MultiPoint(MultiPoint::new(Vec::new()));
