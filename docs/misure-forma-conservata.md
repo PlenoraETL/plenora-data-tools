@@ -174,7 +174,7 @@ fra cardinalita' decide l'ammissione. Un errore non restituisce un prefisso.
 
 Checkpoint all'ingresso, per parte, per coordinata e per primitiva, nei
 confronti topologici, e prima del ritorno. Deadline prima della cancellazione,
-poi budget, tramite `Work::with_deadline_precedence` come nelle altre API GOP-028. Le singole primitive core/GeographicLib sono
+poi budget, tramite `Work::new` (costruttore unico, deadline prima della cancellazione) come nelle altre API GOP-028. Le singole primitive core/GeographicLib sono
 sincrone; non si promette interruzione all'interno di una loro chiamata.
 
 Errori distinti: `InvalidTolerance`, `CrsDomain`, `CertifiedDomain`, `UnsupportedEllipsoid`,

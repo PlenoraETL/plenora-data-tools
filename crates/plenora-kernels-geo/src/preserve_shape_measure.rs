@@ -147,7 +147,7 @@ impl<'a> MeasureWork<'a> {
     fn new(limits: ShapeMeasureLimits, cancelled: Option<&'a AtomicBool>) -> Self {
         Self {
             limits,
-            interrupt: crate::noding::Work::with_deadline_precedence(
+            interrupt: crate::noding::Work::new(
                 crate::predicates::RelateLimits {
                     max_steps: 1_u64 << 50,
                     deadline: limits.deadline,

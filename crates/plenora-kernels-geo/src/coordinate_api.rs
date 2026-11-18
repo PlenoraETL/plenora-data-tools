@@ -534,7 +534,7 @@ fn control(
     limits: CoordinateLimits,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> crate::noding::Work<'_> {
-    crate::noding::Work::with_deadline_precedence(
+    crate::noding::Work::new(
         crate::predicates::RelateLimits {
             max_steps: (MAX_BATCH_ITEMS as u64) + 4,
             deadline: limits.deadline,
