@@ -15,12 +15,12 @@
 )]
 
 use crate::{
-    coordinate_utm::{bounds, to_utm},
+    coordinate_utm::{bounds, to_utm_on},
     grid_text::CellRepresentative,
 };
 use plenora_core::crs::riproiezione::{
     ups::project_ups_wgs84,
-    utm::{inverse_utm_cell_wgs84, project_utm_wgs84},
+    utm::{inverse_utm_cell, project_utm, GridEllipsoid},
 };
 
 const BANDS: &[u8] = b"CDEFGHJKLMNPQRSTUVWX";
@@ -125,6 +125,15 @@ fn metre(value: f64) -> Result<u32, MgrsError> {
 /// `InvalidConfiguration` per precisione, `DataMapping` per coordinate,
 /// `Execution` per proiezione non calcolabile.
 pub fn format_mgrs(longitude: f64, latitude: f64, digits: u8) -> Result<String, MgrsError> {
+    format_on(longitude, latitude, digits, GridEllipsoid::Wgs84)
+}
+
+pub(crate) fn format_on(
+    longitude: f64,
+    latitude: f64,
+    digits: u8,
+    ellipsoid: GridEllipsoid,
+) -> Result<String, MgrsError> {
     if digits > 5 {
         return Err(MgrsError::InvalidConfiguration);
     }
@@ -136,7 +145,7 @@ pub fn format_mgrs(longitude: f64, latitude: f64, digits: u8) -> Result<String, 
         return Err(MgrsError::DataMapping);
     }
     let (zone, band, x, y) = if (-80.0..=84.0).contains(&latitude) {
-        let utm = to_utm(longitude, latitude).map_err(|_| MgrsError::Execution)?;
+        let utm = to_utm_on(longitude, latitude, ellipsoid).map_err(|_| MgrsError::Execution)?;
         let band = BANDS
             .iter()
             .zip(0..20)
@@ -152,6 +161,9 @@ pub fn format_mgrs(longitude: f64, latitude: f64, digits: u8) -> Result<String, 
         };
         (utm.zone, band, easting, utm.northing)
     } else {
+        if ellipsoid != GridEllipsoid::Wgs84 {
+            return Err(MgrsError::InvalidConfiguration);
+        }
         let (mut x, mut y) = project_ups_wgs84(latitude > 0.0, false, longitude, latitude)
             .map_err(|_| MgrsError::Execution)?;
         // La somma del falso est/nord puo' perdere il lato degli assi.
@@ -229,11 +241,16 @@ fn encode(zone: u8, band: char, x: u32, y: u32, digits: u8) -> Result<String, Mg
     ))
 }
 
-fn inverse(cell: MgrsCell, x: f64, y: f64) -> Result<(f64, f64), MgrsError> {
+fn inverse(
+    cell: MgrsCell,
+    x: f64,
+    y: f64,
+    ellipsoid: GridEllipsoid,
+) -> Result<(f64, f64), MgrsError> {
     if cell.zone == 0 {
         project_ups_wgs84(cell.band >= 'Y', true, x, y)
     } else {
-        inverse_utm_cell_wgs84(cell.zone, cell.band >= 'N', x, y)
+        inverse_utm_cell(ellipsoid, cell.zone, cell.band >= 'N', x, y)
     }
     .map_err(|_| MgrsError::Execution)
 }
@@ -247,6 +264,14 @@ fn inverse(cell: MgrsCell, x: f64, y: f64) -> Result<(f64, f64), MgrsError> {
 pub fn parse_mgrs(
     text: &str,
     representative: CellRepresentative,
+) -> Result<DecodedMgrs, MgrsError> {
+    parse_on(text, representative, GridEllipsoid::Wgs84)
+}
+
+pub(crate) fn parse_on(
+    text: &str,
+    representative: CellRepresentative,
+    ellipsoid: GridEllipsoid,
 ) -> Result<DecodedMgrs, MgrsError> {
     if text.len() > 15 {
         return Err(MgrsError::ResourceLimit);
@@ -265,6 +290,9 @@ pub fn parse_mgrs(
     } else {
         (0, char::from(bytes[0]), 1)
     };
+    if zone == 0 && ellipsoid != GridEllipsoid::Wgs84 {
+        return Err(MgrsError::InvalidConfiguration);
+    }
     let tail = &text[offset + 2..];
     if tail.len() > 10 || !tail.len().is_multiple_of(2) || !tail.bytes().all(|b| b.is_ascii_digit())
     {
@@ -304,7 +332,7 @@ pub fn parse_mgrs(
     };
     cell.east = cell.west + side;
     cell.north = cell.south + side;
-    cell = resolve_cell(cell)?;
+    cell = resolve_cell(cell, ellipsoid)?;
     let offset = if representative == CellRepresentative::Center {
         f64::from(side) / 2.0
     } else {
@@ -314,6 +342,7 @@ pub fn parse_mgrs(
         cell,
         f64::from(cell.west) + offset,
         f64::from(cell.south) + offset,
+        ellipsoid,
     )?;
     Ok(DecodedMgrs {
         cell,
@@ -323,7 +352,7 @@ pub fn parse_mgrs(
     })
 }
 
-fn resolve_cell(mut cell: MgrsCell) -> Result<MgrsCell, MgrsError> {
+fn resolve_cell(mut cell: MgrsCell, ellipsoid: GridEllipsoid) -> Result<MgrsCell, MgrsError> {
     if cell.zone == 0 {
         let (_, edge) = project_ups_wgs84(
             cell.band >= 'Y',
@@ -344,7 +373,7 @@ fn resolve_cell(mut cell: MgrsCell) -> Result<MgrsCell, MgrsError> {
             let mut candidate = cell;
             candidate.south += cycle * 2_000_000;
             candidate.north += cycle * 2_000_000;
-            if intersects(candidate)? {
+            if intersects(candidate, ellipsoid)? {
                 if found.is_some() {
                     return Err(MgrsError::DataMapping);
                 }
@@ -366,11 +395,11 @@ fn inside(cell: MgrsCell, x: f64, y: f64) -> bool {
 // Il bordo del rettangolo geografico e' diviso al meridiano centrale:
 // ogni arco ha entrambe le componenti proiettate monotone. L'intersezione
 // degli intervalli parametrici verifica anche celle attraversate senza vertici interni.
-fn intersects(cell: MgrsCell) -> Result<bool, MgrsError> {
+fn intersects(cell: MgrsCell, ellipsoid: GridEllipsoid) -> Result<bool, MgrsError> {
     let (west, south, east, north) =
         bounds(cell.zone, cell.band).map_err(|_| MgrsError::DataMapping)?;
     let project = |lon, lat| {
-        project_utm_wgs84(cell.zone, cell.band >= 'N', false, lon, lat)
+        project_utm(ellipsoid, cell.zone, cell.band >= 'N', false, lon, lat)
             .map_err(|_| MgrsError::Execution)
     };
     let central = f64::from(cell.zone) * 6.0 - 183.0;
@@ -389,7 +418,7 @@ fn intersects(cell: MgrsCell) -> Result<bool, MgrsError> {
     }
     let cx = f64::from(cell.west) + f64::from(cell.east - cell.west) / 2.0;
     let cy = f64::from(cell.south) + f64::from(cell.north - cell.south) / 2.0;
-    if let Ok((lon, lat)) = inverse(cell, cx, cy) {
+    if let Ok((lon, lat)) = inverse(cell, cx, cy, ellipsoid) {
         let lon = central + (lon - central + 180.0).rem_euclid(360.0) - 180.0;
         if lon >= west && lon < east && lat >= south && lat < north {
             return Ok(true);

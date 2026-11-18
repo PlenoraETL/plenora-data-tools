@@ -14,6 +14,13 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API scalare `coordinate_usng`: `format_usng`, `parse_usng`, `UsngDatum`,
+  `DecodedUsng` e `UsngError`. NAD83/GRS80 o NAD27/Clarke 1866 espliciti,
+  senza trasformazioni; lettere e celle MGRS condivise. Grammatica ASCII
+  completa con spazi singoli e suffisso NAD27 obbligatorio; 0..5 cifre,
+  troncamento, rappresentante obbligatorio e massimo 27 byte. Dominio UTM,
+  regioni polari `unsupported`. TM parametrizzata sugli ellissoidi ammessi.
+
 - API scalare `coordinate_mgrs` WGS84: `format_mgrs`, `parse_mgrs`,
   `MgrsCell`, `DecodedMgrs` e `MgrsError`. Riferimenti completi UTM/UPS,
   precisione esplicita 0..5, troncamento, rappresentante obbligatorio

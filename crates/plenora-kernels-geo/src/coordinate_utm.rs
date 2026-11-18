@@ -20,7 +20,7 @@
     reason = "Formule della fonte; confronti esatti identificano poli e antimeridiano"
 )]
 
-use plenora_core::crs::riproiezione::utm::project_utm_wgs84;
+use plenora_core::crs::riproiezione::utm::{project_utm, project_utm_wgs84, GridEllipsoid};
 
 const BANDS: &[u8; 20] = b"CDEFGHJKLMNPQRSTUVWX";
 
@@ -68,6 +68,14 @@ pub enum UtmError {
 /// # Errors
 /// `Domain` per non finiti o fuori +/-180, -80..=84; `Projection` se il calcolo fallisce.
 pub fn to_utm(lon: f64, lat: f64) -> Result<UtmCoordinate, UtmError> {
+    to_utm_on(lon, lat, GridEllipsoid::Wgs84)
+}
+
+pub(crate) fn to_utm_on(
+    lon: f64,
+    lat: f64,
+    ellipsoid: GridEllipsoid,
+) -> Result<UtmCoordinate, UtmError> {
     if !lon.is_finite() || !lat.is_finite() || lon.abs() > 180.0 || lat.abs() > 90.0 {
         return Err(UtmError::Domain);
     }
@@ -92,7 +100,8 @@ pub fn to_utm(lon: f64, lat: f64) -> Result<UtmCoordinate, UtmError> {
         };
     }
     let hemisphere = if lat >= 0.0 { 'N' } else { 'S' };
-    let (easting, northing) = project(zone, lat >= 0.0, false, lon, lat)?;
+    let (easting, northing) = project_utm(ellipsoid, zone, lat >= 0.0, false, lon, lat)
+        .map_err(|_| UtmError::Projection)?;
     Ok(UtmCoordinate {
         zone,
         hemisphere,

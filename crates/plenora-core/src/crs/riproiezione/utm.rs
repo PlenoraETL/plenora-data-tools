@@ -1,4 +1,4 @@
-//! Proiezione WGS84 UTM per codec di griglia, senza trasformazioni di datum.
+//! Proiezione ellissoidale UTM per codec di griglia, senza trasformazioni di datum.
 //!
 //! Riusa Krueger/Karney del core. Il collare di 0.001 gradi serve alla
 //! quantizzazione testuale dei bordi; il codec verifica il proprio dominio.
@@ -6,6 +6,37 @@
 use super::proiezioni::Proiezione;
 use super::tabella::MetodoProiezione;
 use crate::crs::{CrsError, Ellipsoid};
+
+/// Ellissoidi ammessi dai codec di griglia; non esegue trasformazioni di datum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridEllipsoid {
+    /// WGS84 per MGRS e UTM.
+    Wgs84,
+    /// GRS80 per USNG NAD83.
+    Grs80,
+    /// Clarke 1866 per USNG NAD27 (FGDC annesso E).
+    Clarke1866,
+}
+
+impl GridEllipsoid {
+    // EPSG 7030, 7019, 7008; stessi parametri del registro CRS integrato.
+    const fn parameters(self) -> Ellipsoid {
+        match self {
+            Self::Wgs84 => Ellipsoid {
+                semi_major_axis_metre: 6_378_137.0,
+                inverse_flattening: 298.257_223_563,
+            },
+            Self::Grs80 => Ellipsoid {
+                semi_major_axis_metre: 6_378_137.0,
+                inverse_flattening: 298.257_222_101,
+            },
+            Self::Clarke1866 => Ellipsoid {
+                semi_major_axis_metre: 6_378_206.4,
+                inverse_flattening: 294.978_698_213_898_2,
+            },
+        }
+    }
+}
 
 /// Inversa delle celle MGRS WGS84, compresi gli angoli esterni al fuso.
 ///
@@ -16,6 +47,21 @@ use crate::crs::{CrsError, Ellipsoid};
 /// # Errors
 /// `ReprojectionNotConverged` per zona, coordinate o dominio non validi.
 pub fn inverse_utm_cell_wgs84(
+    zone: u8,
+    north: bool,
+    x: f64,
+    y: f64,
+) -> Result<(f64, f64), CrsError> {
+    inverse_utm_cell(GridEllipsoid::Wgs84, zone, north, x, y)
+}
+
+/// Variante sul solo ellissoide selezionato, senza cambio di datum.
+/// Stessi limiti e garanzia numerica della variante WGS84.
+///
+/// # Errors
+/// Rifiuta coordinate, zona o calcoli fuori dal dominio qualificato.
+pub fn inverse_utm_cell(
+    ellipsoid: GridEllipsoid,
     zone: u8,
     north: bool,
     x: f64,
@@ -39,10 +85,7 @@ pub fn inverse_utm_cell_wgs84(
             falsa_est: 500_000.0,
             falsa_nord: if north { 0.0 } else { 10_000_000.0 },
         },
-        Ellipsoid {
-            semi_major_axis_metre: 6_378_137.0,
-            inverse_flattening: 298.257_223_563,
-        },
+        ellipsoid.parameters(),
     )
     .map_err(|_| failure())?;
     let (lon, lat) = projection.indietro(x, y).map_err(|_| failure())?;
@@ -71,6 +114,22 @@ pub fn project_utm_wgs84(
     x: f64,
     y: f64,
 ) -> Result<(f64, f64), CrsError> {
+    project_utm(GridEllipsoid::Wgs84, zone, north, inverse, x, y)
+}
+
+/// Variante sul solo ellissoide selezionato, senza cambio di datum.
+/// Stessi limiti e garanzia numerica della variante WGS84.
+///
+/// # Errors
+/// Rifiuta coordinate, zona o calcoli fuori dal dominio qualificato.
+pub fn project_utm(
+    ellipsoid: GridEllipsoid,
+    zone: u8,
+    north: bool,
+    inverse: bool,
+    x: f64,
+    y: f64,
+) -> Result<(f64, f64), CrsError> {
     if !(1..=60).contains(&zone) {
         return Err(CrsError::ReprojectionConfig("invalid UTM zone"));
     }
@@ -87,10 +146,7 @@ pub fn project_utm_wgs84(
             falsa_est: 500_000.0,
             falsa_nord: if north { 0.0 } else { 10_000_000.0 },
         },
-        Ellipsoid {
-            semi_major_axis_metre: 6_378_137.0,
-            inverse_flattening: 298.257_223_563,
-        },
+        ellipsoid.parameters(),
     )
     .map_err(|_| failure())?;
     let (lon, lat) = if inverse {
