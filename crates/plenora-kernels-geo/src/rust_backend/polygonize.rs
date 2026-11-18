@@ -2784,3 +2784,14 @@ mod tests {
         assert!(con_facce * 2 >= casi, "{con_facce}");
     }
 }
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+pub(crate) mod baseline_600;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod compatibility_600;
+
+#[cfg(test)]
+use super::precision;
