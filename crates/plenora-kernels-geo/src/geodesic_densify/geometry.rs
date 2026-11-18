@@ -86,6 +86,12 @@ fn emit_polygon(
 /// Bordi non adiacenti entro 8 mm possono essere rifiutati; classificazione
 /// o area non certificabile fallisce. Usa palle metriche ellissoidiche e
 /// classificazione mediante la mappa normale, senza topologia planare lon/lat.
+/// Il modulo comune alla distanza rifiuta aree assolute non superiori a
+/// n coordinate m2 + perimetro per margine di posizione, chiusura inclusa.
+/// Sui lati oltre 1000 km richiede m12>=1024 m e propaga il margine
+/// di posizione dipendente da m12, inferiore a 0.25 mm.
+/// Bordi quasi paralleli distanti meno di un metro possono esaurire il
+/// budget di validazione: nessuna garanzia di successo per ogni budget finito.
 ///
 /// Certificato geometrico GOP-006: Hausdorff simmetrico assoluto 0.01 m,
 /// relativo zero, sul datum risolto, modello `shortest_geodesic`.

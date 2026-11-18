@@ -5,6 +5,8 @@
     reason = "Ordine esplicito delle operazioni nelle maggiorazioni numeriche"
 )]
 use super::*;
+use crate::geodesic_surface::metric::{ArcPiece, MetricBall};
+use geo::{Coord, LineString, Polygon};
 use geo::{MultiLineString, MultiPoint, MultiPolygon, Point};
 use plenora_core::crs::resolve_crs;
 
@@ -464,43 +466,7 @@ fn refinement_limits_and_interruptions() {
     ));
 }
 
-// G2 Python 2.1, reference.py: coordinate e bracket metrici generati
-// indipendentemente; winding locale solo per le fixture con anelli convessi.
-fn fixture_geometry(value: &serde_json::Value, reverse: bool) -> Geometry {
-    let parts: Vec<LineString> = value["parts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|part| {
-            let mut coords: Vec<Coord> = part
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|p| Coord {
-                    x: p[0].as_f64().unwrap(),
-                    y: p[1].as_f64().unwrap(),
-                })
-                .collect();
-            if reverse {
-                coords.reverse();
-            }
-            LineString::new(coords)
-        })
-        .collect();
-    match value["kind"].as_str().unwrap() {
-        "point" => Point(parts[0].0[0]).into(),
-        "line" => parts[0].clone().into(),
-        "polygon" => Polygon::new(parts[0].clone(), parts[1..].to_vec()).into(),
-        "multi_polygon" => MultiPolygon::new(
-            parts
-                .into_iter()
-                .map(|ring| Polygon::new(ring, vec![]))
-                .collect(),
-        )
-        .into(),
-        _ => unreachable!(),
-    }
-}
+use crate::geodesic_surface::fixtures::fixture_geometry;
 
 #[test]
 fn independent_surface_and_long_arc_fixtures() {

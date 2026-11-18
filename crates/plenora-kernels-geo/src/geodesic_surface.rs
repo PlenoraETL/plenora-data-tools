@@ -1,4 +1,8 @@
 //! Topologia degli anelli geodetici, indipendente dal piano lon/lat.
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "Visibilita esplicita del supporto condiviso interno al crate"
+)]
 //!
 //! Area non certificabile: si rifiutano anelli con area assoluta non
 //! superiore a n coordinate m2 + perimetro per margine di posizione,
@@ -6,25 +10,28 @@
 //! La somma d'area senza compensazione impone questo limite anche ad
 //! anelli OGC validi molto piccoli; non e' un controllo di semplicita'.
 
+#![allow(clippy::float_cmp, reason = "Identita geodetiche esatte")]
 #![allow(
     clippy::suboptimal_flops,
     reason = "Ordine esplicito delle operazioni nelle maggiorazioni numeriche"
 )]
-use super::{minimum, GeodesicDistanceError, GeometryIndex, MetricBall, Work, GAP_M};
+pub(crate) mod metric;
+use crate::geodesic_distance::GeodesicDistanceError;
 use geo::{Coord, LineString};
 use geographiclib_rs::{PolygonArea, Winding};
+use metric::{minimum, GeometryIndex, MetricBall, Work, GAP_M};
 
-pub(super) struct SurfaceRing {
-    pub begin: usize,
-    pub end: usize,
-    pub area: f64,
-    pub shell: usize,
+pub(crate) struct SurfaceRing {
+    pub(crate) begin: usize,
+    pub(crate) end: usize,
+    pub(crate) area: f64,
+    pub(crate) shell: usize,
 }
 
 // Pezzi in un intorno strettamente convesso: raggio molto inferiore al
 // raggio di convessita' degli ellissoidi terrestri qualificati. Due pezzi
 // adiacenti distinti non si incontrano nuovamente in questo intorno.
-pub(super) fn append_short_pieces(
+pub(crate) fn append_short_pieces(
     ball: MetricBall,
     nodes: &mut Vec<MetricBall>,
     work: &mut Work<'_>,
@@ -45,7 +52,7 @@ pub(super) fn append_short_pieces(
     append_short_pieces(right, nodes, work, depth + 1)
 }
 
-pub(super) fn ring_area(
+pub(crate) fn ring_area(
     ring: &LineString,
     work: &mut Work<'_>,
 ) -> Result<f64, GeodesicDistanceError> {
@@ -99,7 +106,7 @@ fn adjacent(
     Ok(())
 }
 
-pub(super) fn validate(
+pub(crate) fn validate(
     index: &GeometryIndex,
     work: &mut Work<'_>,
 ) -> Result<(), GeodesicDistanceError> {
@@ -307,7 +314,7 @@ fn in_polygon(
     Ok(true)
 }
 
-pub(super) fn contains_any(
+pub(crate) fn contains_any(
     surface: &GeometryIndex,
     other: &GeometryIndex,
     work: &mut Work<'_>,
@@ -324,4 +331,52 @@ pub(super) fn contains_any(
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+pub(crate) mod fixtures;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod tests {
+    use std::path::Path;
+
+    fn classification_definitions(source: &str, name: &str) -> usize {
+        source
+            .lines()
+            .filter(|line| {
+                let Some((_, definition)) = line.split_once("fn ") else {
+                    return false;
+                };
+                definition
+                    .split_once('(')
+                    .is_some_and(|(identifier, _)| identifier.trim() == name)
+            })
+            .count()
+    }
+
+    fn count_in_sources(path: &Path, name: &str) -> usize {
+        if path.is_dir() {
+            return std::fs::read_dir(path)
+                .unwrap()
+                .map(|entry| count_in_sources(&entry.unwrap().path(), name))
+                .sum();
+        }
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            classification_definitions(&std::fs::read_to_string(path).unwrap(), name)
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn ring_classification_has_one_implementation() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for name in ["in_ring", "in_polygon", "local_chord", "fan_piece"] {
+            assert_eq!(count_in_sources(&source, name), 1);
+        }
+        let duplicate = ["fn ", "in_ring", "() {}\n"].concat().repeat(2);
+        assert_eq!(classification_definitions(&duplicate, "in_ring"), 2);
+    }
 }

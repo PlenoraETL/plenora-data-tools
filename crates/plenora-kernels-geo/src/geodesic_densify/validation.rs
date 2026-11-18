@@ -1,423 +1,39 @@
-//! Validazione metrica delle superfici geodetiche GOP-005.
-#![allow(
-    clippy::suboptimal_flops,
-    reason = "Ordine delle maggiorazioni numeriche"
-)]
-#![allow(clippy::float_cmp, reason = "Identita geodetiche esatte")]
+//! Adattamento dei budget GOP-007 alla validazione comune GOP-005.
 use super::{GeodesicDensifyError, GeodesicGeometryDensifyLimits};
+use crate::geodesic_distance::{GeodesicDistanceError, GeodesicDistanceLimits};
+use crate::geodesic_surface::{
+    self as surface,
+    metric::{GeometryIndex, Work, ROUND_M},
+};
 use crate::geodetica::EllissoideGeodetico;
-use geo::{Coord, Geometry, LineString, Polygon};
-use geographiclib_rs::{DirectGeodesic, InverseGeodesic};
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use geo::Geometry;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
-mod surface;
-const GAP_M: f64 = 0.004;
-const ROUND_M: f64 = 1e-6;
-struct Work<'a> {
-    limits: GeodesicGeometryDensifyLimits,
-    cancel: Option<&'a AtomicBool>,
-    count: u64,
-    bytes: u64,
-    peak: u64,
-    ellipsoid: &'a EllissoideGeodetico,
-}
 
-impl Work<'_> {
-    fn checkpoint(&self) -> Result<(), GeodesicDensifyError> {
-        if self
-            .limits
-            .output
-            .deadline
-            .is_some_and(|end| Instant::now() >= end)
-        {
-            return Err(GeodesicDensifyError::DeadlineExceeded);
-        }
-        if self
-            .cancel
-            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
-        {
-            return Err(GeodesicDensifyError::Cancelled);
-        }
-        Ok(())
-    }
-
-    fn step(&mut self) -> Result<(), GeodesicDensifyError> {
-        self.checkpoint()?;
-        self.count = self
-            .count
-            .checked_add(1)
-            .ok_or(GeodesicDensifyError::WorkLimit)?;
-        if self.count > self.limits.max_validation_work {
-            return Err(GeodesicDensifyError::WorkLimit);
-        }
-        Ok(())
-    }
-
-    fn reserve(&mut self, bytes: usize) -> Result<(), GeodesicDensifyError> {
-        self.checkpoint()?;
-        let bytes = u64::try_from(bytes).map_err(|_| GeodesicDensifyError::MemoryLimit)?;
-        self.bytes = self
-            .bytes
-            .checked_add(bytes)
-            .ok_or(GeodesicDensifyError::MemoryLimit)?;
-        if self.bytes > self.limits.output.max_reserved_bytes {
-            return Err(GeodesicDensifyError::MemoryLimit);
-        }
-        self.peak = self.peak.max(self.bytes);
-        Ok(())
-    }
-
-    fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), GeodesicDensifyError> {
-        self.checkpoint()?;
-        if values.len() == values.capacity() {
-            let growth = values.capacity().max(1);
-            self.reserve(
-                growth
-                    .checked_mul(size_of::<T>())
-                    .ok_or(GeodesicDensifyError::MemoryLimit)?,
-            )?;
-            values
-                .try_reserve_exact(growth)
-                .map_err(|_| GeodesicDensifyError::Allocation)?;
-        }
-        values.push(value);
-        Ok(())
-    }
-
-    fn inverse(
-        &mut self,
-        a: Coord,
-        b: Coord,
-    ) -> Result<(f64, f64, f64, f64), GeodesicDensifyError> {
-        self.step()?;
-        let result: (f64, f64, f64, f64) = self.ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);
-        if !(result.0.is_finite()
-            && result.1.is_finite()
-            && result.2.is_finite()
-            && result.3.is_finite())
-        {
-            return Err(GeodesicDensifyError::AccuracyUnproven);
-        }
-        Ok(result)
-    }
-
-    fn at(&mut self, arc: ArcPiece, offset: f64) -> Result<Coord, GeodesicDensifyError> {
-        if offset == 0.0 {
-            return Ok(arc.origin);
-        }
-        self.step()?;
-        let (lat, lon): (f64, f64) =
-            self.ellipsoid
-                .geodetica()
-                .direct(arc.origin.y, arc.origin.x, arc.azimuth, offset);
-        coordinate(Coord { x: lon, y: lat })
+const fn metric_limits(limits: GeodesicGeometryDensifyLimits) -> GeodesicDistanceLimits {
+    GeodesicDistanceLimits {
+        max_work: limits.max_validation_work,
+        max_reserved_bytes: limits.output.max_reserved_bytes,
+        deadline: limits.output.deadline,
     }
 }
 
-fn coordinate(point: Coord) -> Result<Coord, GeodesicDensifyError> {
-    if !((-180.0..=180.0).contains(&point.x) && (-90.0..=90.0).contains(&point.y)) {
-        return Err(GeodesicDensifyError::InvalidGeometry);
+const fn densify_error(error: GeodesicDistanceError) -> GeodesicDensifyError {
+    match error {
+        GeodesicDistanceError::GeographicRequired => GeodesicDensifyError::GeographicRequired,
+        GeodesicDistanceError::UnsupportedEllipsoid => GeodesicDensifyError::UnsupportedEllipsoid,
+        GeodesicDistanceError::InvalidGeometry | GeodesicDistanceError::EmptyGeometry => {
+            GeodesicDensifyError::InvalidGeometry
+        }
+        GeodesicDistanceError::UnsupportedGeometry => GeodesicDensifyError::UnsupportedGeometry,
+        GeodesicDistanceError::AmbiguousGeodesic => GeodesicDensifyError::AmbiguousGeodesic,
+        GeodesicDistanceError::AccuracyUnproven => GeodesicDensifyError::AccuracyUnproven,
+        GeodesicDistanceError::UnsupportedSurface => GeodesicDensifyError::UnsupportedSurface,
+        GeodesicDistanceError::WorkLimit => GeodesicDensifyError::WorkLimit,
+        GeodesicDistanceError::MemoryLimit => GeodesicDensifyError::MemoryLimit,
+        GeodesicDistanceError::Allocation => GeodesicDensifyError::Allocation,
+        GeodesicDistanceError::Cancelled => GeodesicDensifyError::Cancelled,
+        GeodesicDistanceError::DeadlineExceeded => GeodesicDensifyError::DeadlineExceeded,
     }
-    Ok(point)
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ArcPiece {
-    origin: Coord,
-    azimuth: f64,
-    lo: f64,
-    hi: f64,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct MetricBall {
-    centre: Coord,
-    radius: f64,
-    arc: ArcPiece,
-    children: Option<(usize, usize)>,
-}
-
-impl MetricBall {
-    const fn point(point: Coord) -> Self {
-        Self {
-            centre: point,
-            radius: 0.0,
-            arc: ArcPiece {
-                origin: point,
-                azimuth: 0.0,
-                lo: 0.0,
-                hi: 0.0,
-            },
-            children: None,
-        }
-    }
-
-    fn piece(arc: ArcPiece, work: &mut Work<'_>) -> Result<Self, GeodesicDensifyError> {
-        work.step()?;
-        let middle = (arc.hi - arc.lo).mul_add(0.5, arc.lo);
-        let (lat, lon, tangent): (f64, f64, f64) =
-            work.ellipsoid
-                .geodetica()
-                .direct(arc.origin.y, arc.origin.x, arc.azimuth, middle);
-        if !tangent.is_finite() {
-            return Err(GeodesicDensifyError::AccuracyUnproven);
-        }
-        Ok(Self {
-            centre: coordinate(Coord { x: lon, y: lat })?,
-            radius: (arc.hi - arc.lo) * 0.5 + ROUND_M,
-            arc,
-            children: None,
-        })
-    }
-
-    fn split(
-        self,
-        nodes: &[Self],
-        work: &mut Work<'_>,
-    ) -> Result<(Self, Self), GeodesicDensifyError> {
-        work.step()?;
-        if let Some((left, right)) = self.children {
-            return Ok((nodes[left], nodes[right]));
-        }
-        let mid = self.arc.lo + (self.arc.hi - self.arc.lo) * 0.5;
-        if mid <= self.arc.lo || mid >= self.arc.hi {
-            return Err(GeodesicDensifyError::AccuracyUnproven);
-        }
-        Ok((
-            Self::piece(
-                ArcPiece {
-                    hi: mid,
-                    ..self.arc
-                },
-                work,
-            )?,
-            Self::piece(
-                ArcPiece {
-                    lo: mid,
-                    ..self.arc
-                },
-                work,
-            )?,
-        ))
-    }
-}
-
-fn edge(a: Coord, b: Coord, work: &mut Work<'_>) -> Result<MetricBall, GeodesicDensifyError> {
-    let (length, azimuth, final_azimuth, _) = work.inverse(a, b)?;
-    if length == 0.0 {
-        return Ok(MetricBall::point(a));
-    }
-    // G2 Multiple shortest geodesics, ellissoide oblato.
-    if a.y == -b.y && (a.y.abs() == 90.0 || azimuth != final_azimuth) {
-        return Err(GeodesicDensifyError::AmbiguousGeodesic);
-    }
-    let gap = (a.x - b.x).abs();
-    if gap.min(360.0 - gap) > 178.0
-        && (a.y + b.y).abs() < 1e-12
-        && a.y != -b.y
-        && azimuth != final_azimuth
-    {
-        return Err(GeodesicDensifyError::AccuracyUnproven);
-    }
-    MetricBall::piece(
-        ArcPiece {
-            origin: a,
-            azimuth,
-            lo: 0.0,
-            hi: length,
-        },
-        work,
-    )
-}
-
-struct GeometryIndex {
-    nodes: Vec<MetricBall>,
-    rings: Vec<surface::SurfaceRing>,
-}
-
-impl GeometryIndex {
-    fn line(
-        &mut self,
-        line: &LineString,
-        ring: bool,
-        work: &mut Work<'_>,
-    ) -> Result<(), GeodesicDensifyError> {
-        if line.0.len() < 2 {
-            return Err(GeodesicDensifyError::InvalidGeometry);
-        }
-        for &point in &line.0 {
-            work.step()?;
-            coordinate(point)?;
-        }
-        for pair in line.0.windows(2) {
-            let ball = edge(pair[0], pair[1], work)?;
-            if ring {
-                surface::append_short_pieces(ball, &mut self.nodes, work, 0)?;
-            } else {
-                work.push(&mut self.nodes, ball)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn polygon(
-        &mut self,
-        polygon: &Polygon,
-        work: &mut Work<'_>,
-    ) -> Result<(), GeodesicDensifyError> {
-        work.step()?;
-        if polygon.exterior().0.is_empty() {
-            return if polygon.interiors().is_empty() {
-                Ok(())
-            } else {
-                Err(GeodesicDensifyError::InvalidGeometry)
-            };
-        }
-        let shell = self.rings.len();
-        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
-            let begin = self.nodes.len();
-            self.line(ring, true, work)?;
-            let area = surface::ring_area(ring, work)?;
-            work.push(
-                &mut self.rings,
-                surface::SurfaceRing {
-                    begin,
-                    end: self.nodes.len(),
-                    area,
-                    shell,
-                },
-            )?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Candidate {
-    a: MetricBall,
-    b: MetricBall,
-    lower: f64,
-    serial: u64,
-}
-
-impl PartialEq for Candidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-impl Eq for Candidate {}
-impl PartialOrd for Candidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for Candidate {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .lower
-            .total_cmp(&self.lower)
-            .then_with(|| other.serial.cmp(&self.serial))
-    }
-}
-
-struct SearchQueue {
-    heap: BinaryHeap<Candidate>,
-    serial: u64,
-    best: f64,
-    separation_only: bool,
-}
-
-impl SearchQueue {
-    fn add(
-        &mut self,
-        a: MetricBall,
-        b: MetricBall,
-        work: &mut Work<'_>,
-    ) -> Result<(), GeodesicDensifyError> {
-        let (distance, _, _, _) = work.inverse(a.centre, b.centre)?;
-        self.best = self.best.min(distance + 4.0 * ROUND_M);
-        let lower = (distance - a.radius - b.radius - 4.0 * ROUND_M).max(0.0);
-        if if self.separation_only {
-            lower > GAP_M
-        } else {
-            lower >= self.best - GAP_M
-        } {
-            return Ok(());
-        }
-        if self.heap.len() == self.heap.capacity() {
-            let growth = self.heap.capacity().max(1);
-            work.reserve(
-                growth
-                    .checked_mul(size_of::<Candidate>())
-                    .ok_or(GeodesicDensifyError::MemoryLimit)?,
-            )?;
-            self.heap
-                .try_reserve_exact(growth)
-                .map_err(|_| GeodesicDensifyError::Allocation)?;
-        }
-        self.serial = self
-            .serial
-            .checked_add(1)
-            .ok_or(GeodesicDensifyError::WorkLimit)?;
-        self.heap.push(Candidate {
-            a,
-            b,
-            lower,
-            serial: self.serial,
-        });
-        Ok(())
-    }
-}
-
-fn minimum(
-    a: MetricBall,
-    b: MetricBall,
-    left: &[MetricBall],
-    right: &[MetricBall],
-    separation_only: bool,
-    work: &mut Work<'_>,
-) -> Result<f64, GeodesicDensifyError> {
-    let before = work.bytes;
-    let mut queue = SearchQueue {
-        heap: BinaryHeap::new(),
-        serial: 0,
-        best: f64::INFINITY,
-        separation_only,
-    };
-    queue.add(a, b, work)?;
-    while let Some(candidate) = queue.heap.pop() {
-        work.step()?;
-        if queue.best <= if separation_only { 2.0 * GAP_M } else { GAP_M } {
-            break;
-        }
-        if !separation_only && candidate.lower >= queue.best - GAP_M {
-            continue;
-        }
-        if separation_only && candidate.lower > GAP_M {
-            continue;
-        }
-        if candidate.a.radius >= candidate.b.radius {
-            let (one, two) = candidate.a.split(left, work)?;
-            queue.add(one, candidate.b, work)?;
-            queue.add(two, candidate.b, work)?;
-        } else {
-            let (one, two) = candidate.b.split(right, work)?;
-            queue.add(candidate.a, one, work)?;
-            queue.add(candidate.a, two, work)?;
-        }
-    }
-    let best = queue.best;
-    drop(queue);
-    work.bytes = before;
-    Ok(
-        if best <= if separation_only { 2.0 * GAP_M } else { GAP_M } {
-            0.0
-        } else {
-            best
-        },
-    )
 }
 
 pub(super) fn validate(
@@ -426,28 +42,54 @@ pub(super) fn validate(
     limits: GeodesicGeometryDensifyLimits,
     cancel: Option<&AtomicBool>,
 ) -> Result<u64, GeodesicDensifyError> {
+    validate_surface(geometry, ellipsoid, limits, cancel).map_err(densify_error)
+}
+
+fn validate_surface(
+    geometry: &Geometry,
+    ellipsoid: &EllissoideGeodetico,
+    limits: GeodesicGeometryDensifyLimits,
+    cancel: Option<&AtomicBool>,
+) -> Result<u64, GeodesicDistanceError> {
     let mut work = Work {
-        limits,
+        limits: metric_limits(limits),
         cancel,
         count: 0,
         bytes: 0,
         peak: 0,
-        ellipsoid,
+        ellipsoid: *ellipsoid,
+        taylor: true,
+        position_margin: ROUND_M,
     };
     let mut index = GeometryIndex {
         nodes: Vec::new(),
         rings: Vec::new(),
+        representatives: Vec::new(),
+        root: 0,
+    };
+    let mut polygon = |polygon: &geo::Polygon| {
+        work.step()?;
+        if polygon.exterior().0.is_empty() {
+            if polygon.interiors().is_empty() {
+                return Ok(());
+            }
+            return Err(GeodesicDistanceError::InvalidGeometry);
+        }
+        index.polygon(polygon, &mut work)
     };
     match geometry {
-        Geometry::Polygon(polygon) => index.polygon(polygon, &mut work)?,
-        Geometry::MultiPolygon(polygons) => {
-            for polygon in polygons {
-                index.polygon(polygon, &mut work)?;
+        Geometry::Polygon(value) => polygon(value)?,
+        Geometry::MultiPolygon(values) => {
+            for value in values {
+                polygon(value)?;
             }
         }
         _ => return Ok(0),
     }
-    surface::validate(&index, &mut work)?;
+    if !index.nodes.is_empty() {
+        index.root = index.branch(0, index.nodes.len(), &mut work)?;
+        surface::validate(&index, &mut work)?;
+    }
     work.checkpoint()?;
     Ok(work.count)
 }
@@ -457,6 +99,7 @@ pub(super) fn validate(
 mod tests {
     use super::*;
     use crate::geodesic_densify::{geodesic_densify_geometry_with_limits, GeodesicDensifyLimits};
+    use geo::{Coord, LineString, Polygon};
     use plenora_core::crs::resolve_crs;
 
     #[test]
@@ -482,18 +125,24 @@ mod tests {
             max_validation_work: 1_000_000,
         };
         let mut work = Work {
-            limits,
+            limits: metric_limits(limits),
             cancel: None,
             count: 0,
             bytes: 0,
             peak: 0,
-            ellipsoid: &ellipsoid,
+            ellipsoid,
+            taylor: true,
+            position_margin: ROUND_M,
         };
         let mut index = GeometryIndex {
             nodes: Vec::new(),
             rings: Vec::new(),
+            representatives: Vec::new(),
+            root: 0,
         };
+        work.step().unwrap();
         index.polygon(&polygon, &mut work).unwrap();
+        index.root = index.branch(0, index.nodes.len(), &mut work).unwrap();
         surface::validate(&index, &mut work).unwrap();
         // GOP-026/027: due validazioni identiche senza suddivisioni; al secondo
         // picco e' vivo anche l'output di cinque Coord, nessun Vec di buchi.
@@ -523,6 +172,175 @@ mod tests {
                 ..exact
             }),
             Err(GeodesicDensifyError::MemoryLimit)
+        );
+    }
+
+    fn generous_limits() -> GeodesicGeometryDensifyLimits {
+        GeodesicGeometryDensifyLimits {
+            output: GeodesicDensifyLimits {
+                max_points: 100_000,
+                max_reserved_bytes: 128_000_000,
+                deadline: None,
+            },
+            max_validation_work: 20_000_000,
+        }
+    }
+
+    #[test]
+    fn independent_surface_fixtures_after_densify() {
+        use crate::geodesic_distance::{geodesic_distance_with_limits, ABSOLUTE_ERROR_M};
+        use crate::geodesic_surface::fixtures::fixture_geometry;
+        let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("../geodesic_distance/reference_cases.json"))
+                .unwrap();
+        let budget = generous_limits();
+        let mut checked = 0;
+        for fixture in fixtures.as_array().unwrap() {
+            if !["a", "b"].iter().any(|side| {
+                matches!(
+                    fixture[side]["kind"].as_str(),
+                    Some("polygon" | "multi_polygon")
+                )
+            }) {
+                continue;
+            }
+            checked += 1;
+            for reverse in [false, true] {
+                let densify = |side| {
+                    let input = fixture_geometry(&fixture[side], reverse);
+                    if matches!(input, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
+                        let large = fixture["name"].as_str().unwrap().ends_with("_1.0");
+                        geodesic_densify_geometry_with_limits(
+                            &input,
+                            &crs,
+                            if large { 10_000.0 } else { 100.0 },
+                            budget,
+                            None,
+                        )
+                        .unwrap()
+                    } else {
+                        input
+                    }
+                };
+                let a = densify("a");
+                let b = densify("b");
+                let lower = fixture["bracket"][0].as_f64().unwrap();
+                let upper = fixture["bracket"][1].as_f64().unwrap();
+                for (left, right) in [(&a, &b), (&b, &a)] {
+                    let result = geodesic_distance_with_limits(
+                        left,
+                        right,
+                        &crs,
+                        metric_limits(budget),
+                        None,
+                    )
+                    .unwrap();
+                    assert!(
+                        result.metres >= lower - ABSOLUTE_ERROR_M
+                            && result.metres <= upper + ABSOLUTE_ERROR_M
+                    );
+                    if upper == 0.0 {
+                        assert_eq!(result.metres, 0.0);
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 25);
+    }
+
+    fn rectangle(x: f64, y: f64, width: f64) -> LineString {
+        LineString::from(vec![
+            (x, y),
+            (x + width, y),
+            (x + width, y + width),
+            (x, y + width),
+            (x, y),
+        ])
+    }
+
+    #[test]
+    fn small_holes_and_components_near_boundary() {
+        use geo::MultiPolygon;
+        let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+        for gap in [0.00001, 0.0001, 0.001] {
+            for reverse in [false, true] {
+                let oriented = |mut ring: LineString| {
+                    if reverse {
+                        ring.0.reverse();
+                    }
+                    ring
+                };
+                let shell = Polygon::new(
+                    oriented(rectangle(0.0, 0.0, 0.01)),
+                    vec![
+                        oriented(rectangle(gap, gap, 0.0001)),
+                        oriented(rectangle(0.005, gap, 0.0001)),
+                    ],
+                );
+                let other = Polygon::new(oriented(rectangle(0.01 + gap, 0.0, 0.0001)), vec![]);
+                let input = Geometry::MultiPolygon(MultiPolygon(vec![shell.clone(), other]));
+                let output = geodesic_densify_geometry_with_limits(
+                    &input,
+                    &crs,
+                    100.0,
+                    generous_limits(),
+                    None,
+                )
+                .unwrap();
+                let Geometry::MultiPolygon(parts) = output else {
+                    panic!("unexpected geometry type")
+                };
+                assert_eq!(parts.0.len(), 2);
+                assert_eq!(parts.0[0].interiors().len(), 2);
+                let outside_hole = Polygon::new(
+                    shell.exterior().clone(),
+                    vec![oriented(rectangle(-gap - 0.0001, 0.0, 0.0001))],
+                );
+                assert_eq!(
+                    geodesic_densify_geometry_with_limits(
+                        &outside_hole.into(),
+                        &crs,
+                        100.0,
+                        generous_limits(),
+                        None
+                    ),
+                    Err(GeodesicDensifyError::InvalidGeometry)
+                );
+                let overlap = Polygon::new(oriented(rectangle(gap, 0.005, 0.0001)), vec![]);
+                assert_eq!(
+                    geodesic_densify_geometry_with_limits(
+                        &MultiPolygon(vec![shell, overlap]).into(),
+                        &crs,
+                        100.0,
+                        generous_limits(),
+                        None
+                    ),
+                    Err(GeodesicDensifyError::UnsupportedSurface)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_vertices_and_ill_conditioned_long_edge() {
+        let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+        let mut ring = rectangle(0.0, 0.0, 0.01);
+        ring.0.insert(1, ring.0[0]);
+        let input: Geometry = Polygon::new(ring, vec![]).into();
+        assert_eq!(
+            geodesic_densify_geometry_with_limits(&input, &crs, 1e6, generous_limits(), None)
+                .unwrap(),
+            input
+        );
+        let input: Geometry = Polygon::new(
+            LineString::from(vec![(0.0, 0.0), (179.396, 0.0), (90.0, 10.0), (0.0, 0.0)]),
+            vec![],
+        )
+        .into();
+        assert_eq!(
+            geodesic_densify_geometry_with_limits(&input, &crs, 1e8, generous_limits(), None),
+            Err(GeodesicDensifyError::AccuracyUnproven)
         );
     }
 }
