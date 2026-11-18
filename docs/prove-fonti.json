@@ -101,6 +101,13 @@
     "crates/plenora-data-py/typing/sdk_contract.py": [],
     "crates/plenora-io/tests/riferimenti/scrittori/genera.py": [],
     "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/hotine.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/laea.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/lcc.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/mercator.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/reference.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/stereographic.py": [],
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/tm.py": [],
     "crates/plenora-pipeline/tests/comune/genera_config_md5.py": [],
     "crates/plenora-pipeline/tests/comune/genera_hash_attesi.py": [],
     "crates/plenora-pipeline/tests/comune_geo/genera_trasformazioni.py": [],
@@ -146,6 +153,7 @@
     "scripts/genera_wkt_integrati.py": [],
     "scripts/interop_pin.py": [],
     "scripts/licenze_artefatto.py": [],
+    "scripts/mgrs_oracle.py": [],
     "scripts/modello_costi.py": [],
     "scripts/rust_esito_tokens.py": [
       "test_ranges"
@@ -407,6 +415,7 @@
       "test_una_raccolta_fallita_dopo_gli_id_non_conta",
       "test_una_raccolta_riuscita_conta_gli_id"
     ],
+    "scripts/usng_oracle.py": [],
     "scripts/verifica_adozione.py": [],
     "scripts/verifica_cli_contratti.py": [],
     "scripts/verifica_interop_crs.py": [],
@@ -639,6 +648,9 @@
       "web_mercator_a_85_06_gradi",
       "i_messaggi_del_dominio_proiettato_non_riportano_la_coordinata",
       "il_passo_in_gradi_non_supera_un_centimetro_ovunque"
+    ],
+    "crates/plenora-core/src/crs/riproiezione/forma.rs": [
+      "every_invertible_method_has_an_explicit_certificate_entry"
     ],
     "crates/plenora-core/src/crs/riproiezione/oracolo.rs": [
       "oracolo_proiezioni_entro_un_millimetro_da_proj",
@@ -1386,6 +1398,12 @@
       "insufficient_points_are_omitted_like_manipola_groups",
       "rejects_wrong_geometry_type_and_self_intersection"
     ],
+    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs": [
+      "exact_square_and_digit_boundaries"
+    ],
+    "crates/plenora-kernels-geo/src/coordinate_utm.rs": [
+      "half_even_components"
+    ],
     "crates/plenora-kernels-geo/src/crs.rs": [
       "missing_backend_never_trusts_an_unverified_declaration",
       "geometry_domain_wrapper_matches_coordinate_level_contract"
@@ -1748,6 +1766,52 @@
       "grid_queries_have_analytic_work",
       "interval_candidates_match_exhaustive_including_reversed_bounds"
     ],
+    "crates/plenora-kernels-geo/src/preserve_shape_measure/certificate.rs": [
+      "interval_series_enclose_analytic_values",
+      "residual_rejects_an_inaccurate_inverse",
+      "near_domain_edge_rejects_unproven_numerical_precision"
+    ],
+    "crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/azimuthal.rs": [
+      "azimuthal_origin_residual_and_altered_angles"
+    ],
+    "crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/hotine.rs": [
+      "hotine_origin_residual_and_altered_angles"
+    ],
+    "crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/lambert.rs": [
+      "lambert_residual_rejects_altered_angles_and_handles_both_cones",
+      "lambert_exponential_encloses_identities_and_rejects_unsupported_range"
+    ],
+    "crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/stereographic.rs": [
+      "stereographic_origin_residual_and_altered_angles"
+    ],
+    "crates/plenora-kernels-geo/src/preserve_shape_measure/certificate/transverse.rs": [
+      "transverse_intervals_enclose_analytic_identities",
+      "transverse_residual_rejects_altered_angles_and_nonfinite_input"
+    ],
+    "crates/plenora-kernels-geo/src/preserve_shape_measure/tests.rs": [
+      "parallel_is_not_the_shortest_geodesic_and_converges",
+      "projected_straight_line_against_independent_dense_reference",
+      "rectangles_holes_orientation_and_area_convergence",
+      "datum_seam_empty_and_multipart",
+      "exact_work_thresholds_and_interruption",
+      "area_budget_includes_topology_and_all_refinements",
+      "typed_domain_and_topology_errors_without_data",
+      "relative_bound_is_against_true_value",
+      "numerical_underflow_is_not_a_zero_certificate",
+      "geographic_and_projected_area_against_analytic_surface_integral",
+      "mercator_a_line_and_polygon_against_independent_reference",
+      "projected_domain_edges_and_certified_empty_hotine",
+      "transverse_line_and_polygon_against_independent_reference",
+      "transverse_proof_domain_boundary_is_rejected",
+      "lambert_line_and_polygon_against_independent_reference",
+      "lambert_proof_domain_boundary_is_rejected",
+      "azimuthal_line_and_polygon_against_independent_reference",
+      "azimuthal_proof_domain_and_disk_boundary_are_rejected",
+      "stereographic_line_and_polygon_against_independent_reference",
+      "stereographic_proof_domain_boundary_is_rejected",
+      "hotine_line_and_polygon_against_independent_reference",
+      "hotine_proof_domain_boundary_is_rejected"
+    ],
     "crates/plenora-kernels-geo/src/reshape/tests.rs": [
       "directed_replacement_and_vertices",
       "excluded_intersections_and_inputs",
@@ -1991,6 +2055,40 @@
       "oracolo_razionale_enumerativo",
       "bordi_semplici_e_copertura_deterministici"
     ],
+    "crates/plenora-kernels-geo/tests/coordinate_api.rs": [
+      "normative_vectors_both_directions",
+      "enumeration_and_every_inapplicable_option",
+      "datums_profiles_and_option_values_are_closed",
+      "atomic_limits_and_private_errors",
+      "cell_extents_representatives_and_nad27",
+      "angular_pair_grammar_and_rounding",
+      "geographic_cells_and_batch_order"
+    ],
+    "crates/plenora-kernels-geo/tests/coordinate_mgrs.rs": [
+      "independent_numeric_oracle",
+      "source_worked_examples_and_representatives",
+      "zone_band_and_polar_boundaries",
+      "strict_errors_without_caller_data"
+    ],
+    "crates/plenora-kernels-geo/tests/coordinate_text.rs": [
+      "analytic_written_expectations",
+      "parsing_written_expectations",
+      "grammar_rejections",
+      "domain_and_precision_rejections",
+      "deterministic_round_trip_bound"
+    ],
+    "crates/plenora-kernels-geo/tests/coordinate_usng.rs": [
+      "independent_numeric_oracle",
+      "fgdc_worked_examples",
+      "boundaries_and_representatives",
+      "strict_grammar_datum_and_errors"
+    ],
+    "crates/plenora-kernels-geo/tests/coordinate_utm.rs": [
+      "published_and_analytic_references",
+      "zone_and_hemisphere_boundaries",
+      "invalid_text_is_enumerated_and_typed",
+      "round_trip_ground_bound"
+    ],
     "crates/plenora-kernels-geo/tests/crs_integrati_analisi.rs": [
       "operazioni_con_requisito_proiettato_girano_con_epsg_32632",
       "le_binarie_richiedono_dichiarazioni_identiche_anche_per_alias_crs",
@@ -2076,6 +2174,12 @@
       "distanze_azimut_e_sfera_contro_geographiclib",
       "aree_e_lunghezze_contro_geographiclib",
       "ed50_e_wgs84_non_danno_la_stessa_distanza"
+    ],
+    "crates/plenora-kernels-geo/tests/grid_text.rs": [
+      "standard_examples_and_edges",
+      "quadrant_keypad_and_exact_boundary_ownership",
+      "closed_grammar_and_typed_errors",
+      "cells_and_canonical_roundtrips"
     ],
     "crates/plenora-kernels-geo/tests/griglia_overlay.rs": [
       "booleane_alle_tre_scale",
@@ -3252,8 +3356,17 @@
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/aree.csv",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/distanze.csv",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/vertici.csv",
+    "crates/plenora-kernels-geo/tests/fixtures/mgrs-oracle.csv",
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/hotine.json",
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/laea.json",
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/lcc.json",
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/mercator.json",
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/reference.json",
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/stereographic.json",
+    "crates/plenora-kernels-geo/tests/fixtures/preserve_shape/tm.json",
     "crates/plenora-kernels-geo/tests/fixtures/reperto_a.wkb",
     "crates/plenora-kernels-geo/tests/fixtures/reperto_b.wkb",
+    "crates/plenora-kernels-geo/tests/fixtures/usng-oracle.csv",
     "crates/plenora-kernels-table/tests/fixtures/join-one-surviving-primary-canonical.json",
     "crates/plenora-kernels-table/tests/riferimenti/primary-composition-provenienza.json",
     "crates/plenora-kernels-table/tests/riferimenti/primary-composition-v1/append-different-ids-same-output.json",
