@@ -4,15 +4,16 @@ API additiva `geodesic_buffer::projected::geodesic_line_buffer_with_limits`.
 Accetta LineString, MultiLineString, Polygon e MultiPolygon in un CRS
 geografico risolto, con ellissoide e datum del chiamante. I punti conservano
 le API geodetiche di [buffer-punto](buffer-punto.md). Sono implementate
-dilatazioni e raggio zero; per l'erosione e' implementato soltanto il
-collasso certificato descritto sotto. Non e' un buffer superficiale completo.
+dilatazioni, raggio zero ed erosioni certificate mediante differenza dai
+corridoi del bordo e copertura continua di stabilita'.
 
 ## Scelta e dominio
 
 Si sceglie deterministicamente Transverse Mercator, scala centrale uno,
 origine equatoriale e false origini nulle; il meridiano centrale e' il
 punto medio dell'inviluppo longitudinale del gruppo. Per unione per
-distanza il gruppo comprende tutti gli ingressi. Questa scelta minimizza
+distanza il gruppo comprende tutti gli ingressi per raggi positivi o nulli;
+per raggi negativi si costruisce ciascuna erosione nel proprio gruppo. Questa scelta minimizza
 la massima distanza longitudinale dal meridiano fra i vertici, fra i
 centri rappresentabili in binary64. Non si
 dichiara ottimalita' fra le famiglie di proiezioni. LAEA e stereografica
@@ -113,8 +114,7 @@ planare esatto C_r dell'operando C vale
 Il limite di Hausdorff degli insiemi pieni e' quindi
 r*max(|1-b_min|,|b_max-1|). Questa prova non e' una garanzia della
 distanza fra confini o dell'identita' dei contatti. Le modifiche sotto
-il centimetro seguono la precisione geografica del motore. Nessuna
-estensione di questa prova all'erosione e' implicita.
+il centimetro seguono la precisione geografica del motore. L'erosione usa invece la verifica continua descritta sotto.
 
 ## Cambi di modello e archi
 
@@ -185,7 +185,8 @@ Ogni unione piana aggiunge 2e-9 metri al numerico: |XY|<7e6 implica
 mezzo ulp <=2^-31 per ordinata, e b_max<1.062. I contributi si sommano
 verso l'alto. Gli errori degli operandi si compongono con il massimo,
 come nel lemma dell'unione del disco. Il certificato finale somma
-distorsione, cambio in ingresso, archi, cambio in uscita e numerico;
+distorsione, cambio in ingresso, archi, cambio in uscita, numerico e
+`stability_m` (zero nelle dilatazioni);
 verifica di nuovo la tolleranza prima della pubblicazione. Il relativo
 e' il totale/r, arrotondato in alto e finito.
 
@@ -241,29 +242,120 @@ validati, senza roundtrip nelle coordinate pubblicate; certificato assoluto
 e relativo zero. `preserves_geodesic_operand=true` dichiara che i lati restano
 geodetici: la costante OUTPUT_MODEL descrive invece i lati costruiti per
 raggio positivo. Gli ingressi vuoti producono sempre Polygon vuoto GOP-008.
-A zero si uniscono componenti disgiunte e si eliminano duplicati identici.
-Intersezioni, contatti e inclusioni che richiedono ricostruzione geodetica
-restano rifiutati: non si sostituisce implicitamente un'unione planare a
-quella geodetica. Non e' quindi implementata l'unione a zero generale.
+A zero si validano separatamente le parti e si uniscono con le booleane
+poligonali, sempre con lo stesso Work. Le unioni intermedie si applicano
+tra Polygon: le componenti a contatto puntuale non vengono reinserite
+come un MultiPolygon che il profilo booleano rifiuterebbe. Nessun roundtrip
+proiettivo e nessun nuovo modello dei lati viene imposto all'operando.
+Per un singolo operando non ricomposto, coordinate e tipo restano identici.
 
-## Erosione: solo collasso dimostrato
+Il filtro di separazione ammette anche estremi comuni e sottoarchi esatti
+su meridiani o sull'equatore. Al contatto, i raggi incidenti distinti devono
+conservare l'ordine circolare fra vettori lon/lat e azimut geodetici.
+Gli azimut sono qualificati da residui direct/inverse e dal margine
+8 micrometri/lunghezza gia' usato per gli adiacenti. Il margine additivo
+1e-8 gradi copre atan2, conversioni e sottrazioni angolari binary64 nel
+dominio dei lati qualificati; non e' una prova formale di libm.
+Raggi coincidenti sono deduplicati solo per lo stesso altro estremo oppure
+per la stessa direzione su meridiano/equatore. Gli intervalli delle altre
+direzioni devono essere disgiunti. Questo conserva i settori al contatto;
+la convessita' forte esclude ulteriori incontri fra archi con estremo comune.
 
-Per r negativo si calcola D=b_max*diametro_L1(box)+input_model_m+0.0002,
-con arrotondamenti in alto. Il confine geodetico sta nella palla di raggio D
-centrata su un suo vertice: le corde proiettate stanno nel box, l'inversa
-ha fattore <=b_max e il cambio di modello copre gli archi originali.
-Se D<abs(r)<=60000, la palla e' fortemente convessa e contiene anche il
-pieno locale validato. Ogni punto dista meno di abs(r) da quel vertice del
-confine; l'erosione esatta e' vuota. Si restituisce Polygon vuoto tipizzato,
-con certificato zero. Il criterio e' sufficiente e molto conservativo.
+Ogni lato dell'unione deve coincidere con un lato originale (eventualmente
+invertito), o essere un suo sottoarco meridiano/equatoriale esatto. Sono
+quindi ammessi contatti puntuali, lati comuni, inclusioni, duplicati e
+contatti a T qualificati su tali assi. Nuove intersezioni o sottoarchi
+obliqui che richiedano una ricostruzione geodetica restano AccuracyUnproven:
+una booleana lon/lat non viene dichiarata esatta per archi geodetici diversi.
+Questi sono limiti del certificatore locale, non un'interpretazione diversa
+di GOP-008. Il certificato a zero resta zero e il modello geodetico originale
+resta dichiarato da `preserves_geodesic_operand`.
 
-Altrimenti si restituisce AccuracyUnproven. La differenza dai corridoi e
-l'erosione non vuota NON sono implementate. Non basta riusare il certificato
-della dilatazione: una componente quasi collassata e lontana dalle altre
-puo' sparire per una perturbazione arbitrariamente piccola, causando un
-Hausdorff grande. Servono involucri L subset erosione_esatta subset U e
-una prova continua U subset buffer(L,epsilon), oppure un altro certificato
-di stabilita'. Il campionamento denso non sostituisce questa prova.
+## Erosione e collasso certificati
+
+Per r negativo, con rho=abs(r), si sottrae dall'operando proiettato l'unione
+dei corridoi di tutti gli anelli, buchi compresi. La differenza e tutte le
+sue fasi usano le booleane con i limiti del chiamante e lo stesso Work.
+Si pubblica soltanto dopo la verifica di stabilita' descritta sotto.
+Per unione per distanza si erode ciascun ingresso separatamente, poi si
+uniscono i risultati: erosione e unione non commutano. Le componenti del
+certificato si combinano con il massimo, aggiungendo il rounding dell'unione.
+
+Resta disponibile la scorciatoia D=b_max*diametro_L1(box)+input_model_m+0.0002,
+con arrotondamenti in alto. Il confine geodetico e il pieno locale stanno
+nella palla fortemente convessa di raggio D centrata su un vertice. Se
+D<rho<=60000, ogni punto dista meno di rho da quel vertice del confine:
+l'erosione e' vuota, con certificato zero. Gli altri collassi passano
+attraverso la differenza e la copertura, come le erosioni non vuote.
+
+### Involucri mediante distanza firmata
+
+Sia P il pieno proiettato, R il risultato effettivo della differenza
+binary64 e s_P la distanza euclidea firmata dal bordo, positiva nel pieno.
+Le parti proiettate sono validate come MultiPolygon disgiunto prima della
+differenza: nessuna frontiera interna puo' sparire per fusione delle corde.
+Il bound delle frontiere segue quindi anello per anello.
+L'omotopia dei bordi conserva l'orientamento del pieno. Posto
+eta=input_model_m+numerical_m, lo scarto dei bordi in metri a terra e' <=eta.
+Quando i segni coincidono, le distanze dal bordo differiscono al piu' eta;
+quando differiscono, ogni distanza e' <=eta per la separazione dell'omotopia.
+Si usa dunque conservativamente e=2*eta, non il solo bound Hausdorff dei pieni.
+I fattori metrici continui e la barriera del box danno, con arrotondamenti
+verso l'esterno:
+
+```text
+lower = (rho-e)/b_max
+upper = (rho+e)/b_min
+{s_P > upper} subset F^-1(erosione_esatta) subset {s_P >= lower}.
+```
+
+Si richiede lower>0; altrimenti AccuracyUnproven. Ne segue che l'erosione
+esatta e' contenuta in P, quindi nel bbox radice della verifica. La radice
+comprende anche R. La distanza firmata e' 1-Lipschitz in coordinate piane.
+La soglia superiore stretta produce testimoni interni all'erosione esatta.
+Non si assume la stabilita' dell'erosione rispetto a perturbazioni arbitrarie.
+
+### Copertura continua e testimoni comuni
+
+`projected/erosion.rs` calcola intervalli diretti IEEE delle distanze ai
+segmenti. Prodotto scalare, parametro clamped, proiezione e radice quadrata
+sono arrotondati all'esterno. Il ray crossing usa intervalli del determinante;
+un segno incerto allarga l'intervallo firmato a entrambi i segni, mai sceglie
+un lato. Denominatori non positivi, reciproci non finiti e distanze non
+finite vengono rifiutati. Il vuoto ha distanza firmata meno infinito.
+
+Ogni cella rettangolare ha centro c e maggiorante euclideo h arrotondato in alto della distanza da c.
+Gli intervalli di s_P(c) e s_R(c), allargati di h, consentono tre prove:
+
+- entrambi gli insiemi sono assenti dalla cella (s_P+h<lower e s_R+h<0);
+- tutta la cella e' interna a entrambi (s_P-h>upper e s_R-h>0);
+- un testimone w, con s_P(w)>upper e s_R(w)>0, copre tutta la cella entro
+  stability_m/b_max. Si usa la distanza massima dai vertici della cella a w, con quadrati,
+  somma e radice arrotondati verso l'alto.
+
+Nel terzo caso ogni punto di ciascuno dei due insiemi e' vicino a un punto
+dell'altro. Il trasporto con b_max prova Hausdorff<=stability_m sui pieni.
+Le celle non decise si bisecano sull'asse maggiore; a scala
+stability_m/(128*b_max), o se non e' possibile bisecare in binary64, si
+rifiuta esplicitamente. La ricerca usa 256 direzioni distinte nel piano anche nei settori acuti.
+La normalizzazione dei candidati non e' un assunto numerico del certificato:
+si verifica la distanza effettiva del punto binary64 costruito.
+La ricerca finita di testimoni non e' la prova:
+la prova e' la disuguaglianza continua sull'intera cella. Il limite puo'
+rifiutare geometrie valide, specialmente vicino a un collasso critico.
+
+Lo stack e' CountedVec; confronti, lati, testimoni e suddivisioni hanno
+checkpoint sul medesimo Work. Se R e' vuoto, non esistono testimoni comuni:
+il successo richiede che ogni cella sia esclusa dall'erosione esatta. Cio'
+certifica anche il collasso totale. Lo stesso criterio impedisce che una
+componente remota sparisca senza controllo nel collasso parziale.
+
+Si assegna stability_m=3*tolleranza/4 e si limita il budget degli archi a
+tolleranza/32. Il certificato somma anche distorsione, cambio di modello,
+archi e numerico: alcuni termini sono gia' assorbiti dalla verifica, ma
+la somma e' conservativa. L'output viene poi pubblicato con il consueto
+bound di cambio di modello e rounding. La tolleranza totale si ricontrolla
+prima della restituzione atomica; nessun prefisso del batch viene pubblicato.
 
 ## Raggi grandi e latitudini escluse
 

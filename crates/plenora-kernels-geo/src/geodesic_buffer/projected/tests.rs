@@ -544,18 +544,6 @@ fn surface_hole_zero_multipart_and_certified_collapse() {
         assert_eq!(surface.geometry, Geometry::Polygon(Polygon::empty()));
         assert_eq!(surface.certificate.absolute_m, 0.0);
     }
-    assert!(matches!(
-        geodesic_line_buffer_with_limits(
-            std::slice::from_ref(&input),
-            &crs,
-            &[-0.1],
-            0.1,
-            false,
-            limits(),
-            None
-        ),
-        Err(UnionBufferError::Disk(BufferFailure::AccuracyUnproven))
-    ));
     let buffered =
         geodesic_line_buffer_with_limits(&[input, multi], &crs, &[0.1], 0.1, true, limits(), None)
             .unwrap();
@@ -767,4 +755,434 @@ fn surface_rejects_orphan_and_empty_holes() {
             ));
         }
     }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn erosion_square_and_hole_karney_width() {
+    // C1: GOP-006/008; Karney G1 inverse, docs/buffer-proiezione.md,
+    // copertura continua dell'erosione e distanza delle due frontiere opposte.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let ellipsoid = EllissoideGeodetico::da_crs(&crs).unwrap();
+    for latitude in [0.0, 45.0] {
+        for hole in [false, true] {
+            let source = square_with_hole(latitude);
+            let source = if hole {
+                source
+            } else {
+                Polygon::new(source.exterior().clone(), vec![])
+            };
+            let input = Geometry::Polygon(source.clone());
+            let surface = geodesic_line_buffer_with_limits(
+                &[input],
+                &crs,
+                &[-0.1],
+                0.01,
+                false,
+                limits(),
+                None,
+            )
+            .unwrap()
+            .surfaces
+            .remove(0);
+            assert!(surface.geometry.coords_iter().next().is_some());
+            for point in surface.geometry.coords_iter() {
+                let error = (distance_to_boundary(point, &source, &ellipsoid) - 0.1).abs();
+                assert!(error <= surface.certificate.absolute_m);
+            }
+            // Intersezione con il parallelo centrale: i testimoni sono sui
+            // segmenti lon/lat pubblicati; inverse misura la larghezza residua.
+            let mut crossings = Vec::new();
+            for ring in parts(&surface.geometry).unwrap() {
+                for pair in ring.0.windows(2) {
+                    if (pair[0].y > latitude) != (pair[1].y > latitude) {
+                        let fraction = (latitude - pair[0].y) / (pair[1].y - pair[0].y);
+                        crossings.push((pair[1].x - pair[0].x).mul_add(fraction, pair[0].x));
+                    }
+                }
+            }
+            crossings.sort_by(f64::total_cmp);
+            assert_eq!(crossings.len(), if hole { 4 } else { 2 });
+            let original_width: f64 = if hole {
+                ellipsoid
+                    .geodetica()
+                    .inverse(latitude, 9.0 - 0.00001, latitude, 9.0 - 0.000_003)
+            } else {
+                ellipsoid
+                    .geodetica()
+                    .inverse(latitude, 9.0 - 0.00001, latitude, 9.0 + 0.00001)
+            };
+            let width: f64 =
+                ellipsoid
+                    .geodetica()
+                    .inverse(latitude, crossings[0], latitude, crossings[1]);
+            let error = (width - (original_width - 0.2)).abs();
+            assert!(error <= 2.0 * surface.certificate.absolute_m);
+            eprintln!("erosion lat={latitude} hole={hole} width={width:e} error={error:e} certificate={:e}", surface.certificate.absolute_m);
+        }
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn erosion_partial_and_total_collapse() {
+    // C1: GOP-008, collasso e componenti residue; copertura continua in
+    // docs/buffer-proiezione.md, nessuna inferenza dal solo numero di vertici.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let large = Polygon::new(square_with_hole(0.0).exterior().clone(), vec![]);
+    let small = large.map_coords(|p| Coord {
+        x: 9.001 + (p.x - 9.0) / 20.0,
+        y: p.y / 20.0,
+    });
+    let input = Geometry::MultiPolygon(MultiPolygon(vec![large.clone(), small]));
+    let partial =
+        geodesic_line_buffer_with_limits(&[input], &crs, &[-0.1], 0.01, false, limits(), None)
+            .unwrap();
+    assert_eq!(polygons(&partial.surfaces[0].geometry).len(), 1);
+    for radius in [1.2, 100.0] {
+        let total = geodesic_line_buffer_with_limits(
+            &[Geometry::Polygon(large.clone())],
+            &crs,
+            &[-radius],
+            0.01,
+            false,
+            limits(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            total.surfaces[0].geometry,
+            Geometry::Polygon(Polygon::empty())
+        );
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn erosion_hole_reaches_shell() {
+    // C1: GOP-008, differenza dei corridoi; quattro residui dopo il
+    // contatto buco/guscio e collasso totale, docs/buffer-proiezione.md.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let input = Geometry::Polygon(square_with_hole(0.0));
+    let split = geodesic_line_buffer_with_limits(
+        std::slice::from_ref(&input),
+        &crs,
+        &[-0.4],
+        0.01,
+        false,
+        limits(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(polygons(&split.surfaces[0].geometry).len(), 4);
+    let total =
+        geodesic_line_buffer_with_limits(&[input], &crs, &[-0.6], 0.01, false, limits(), None)
+            .unwrap();
+    assert_eq!(
+        total.surfaces[0].geometry,
+        Geometry::Polygon(Polygon::empty())
+    );
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn zero_union_touching_surfaces() {
+    // C1: GOP-008; unione booleana di parti con lato o vertice comune.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let a = Polygon::new(
+        LineString::from(vec![
+            (9.0, 0.0),
+            (9.00001, 0.0),
+            (9.00001, 0.00001),
+            (9.0, 0.00001),
+            (9.0, 0.0),
+        ]),
+        vec![],
+    );
+    for offset in [0.0, 0.00001] {
+        let b = Polygon::new(
+            LineString::from(vec![
+                (9.00001, offset),
+                (9.00002, offset),
+                (9.00002, offset + 0.00001),
+                (9.00001, offset + 0.00001),
+                (9.00001, offset),
+            ]),
+            vec![],
+        );
+        let inputs = [Geometry::Polygon(a.clone()), Geometry::Polygon(b.clone())];
+        let expected = polygon_boolean::boolean_with_limits(
+            &inputs[0],
+            &inputs[1],
+            PolygonBooleanOp::Union,
+            Some(2),
+            limits().overlay,
+            None,
+        )
+        .unwrap();
+        for (inputs, union) in [
+            (
+                vec![Geometry::MultiPolygon(MultiPolygon(vec![a.clone(), b]))],
+                false,
+            ),
+            (inputs.to_vec(), true),
+        ] {
+            let result = geodesic_line_buffer_with_limits(
+                &inputs,
+                &crs,
+                &[0.0],
+                0.01,
+                union,
+                limits(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(polygons(&result.surfaces[0].geometry), polygons(&expected));
+            assert_eq!(result.surfaces[0].certificate.absolute_m, 0.0);
+            assert!(result.surfaces[0].preserves_geodesic_operand);
+        }
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+#[allow(clippy::too_many_lines)]
+fn erosion_difference_thresholds_and_interruptions() {
+    // C1: GOP-027/028; soglie e iniezioni nel Work della differenza e della
+    // copertura continua, docs/buffer-proiezione.md. Rettangoli analitici.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let ring = |low, high| {
+        LineString::from(vec![
+            (low, low),
+            (high, low),
+            (high, high),
+            (low, high),
+            (low, low),
+        ])
+    };
+    let operand = Geometry::Polygon(Polygon::new(ring(0.0, 2.0), vec![]));
+    let corridors = Geometry::Polygon(Polygon::new(ring(-0.1, 2.1), vec![ring(0.1, 1.9)]));
+    let mut certificate = empty_certificate(&crs);
+    certificate.numerical_m = 0.0002;
+    certificate.stability_m = 0.005;
+    let mut work = Work::new(limits().overlay.work, None).with_deadline_precedence();
+    polygon_boolean::execute(
+        &operand,
+        &corridors,
+        PolygonBooleanOp::Difference,
+        Some(2),
+        limits().overlay,
+        &mut work,
+    )
+    .unwrap();
+    let overlay_steps = work.steps;
+    let mut work = Work::new(limits().overlay.work, None).with_deadline_precedence();
+    difference(
+        &operand,
+        &corridors,
+        0.1,
+        &mut { certificate },
+        limits(),
+        &mut work,
+    )
+    .unwrap();
+    let total = work.steps;
+    for budget in [total - 1, total] {
+        let mut bound = limits();
+        bound.overlay.work.max_steps = budget;
+        let mut work = Work::new(bound.overlay.work, None).with_deadline_precedence();
+        let outcome = difference(
+            &operand,
+            &corridors,
+            0.1,
+            &mut { certificate },
+            bound,
+            &mut work,
+        );
+        if budget == total {
+            outcome.unwrap();
+        } else {
+            assert!(matches!(
+                outcome,
+                Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+                    PredicateError::WorkLimit
+                )))
+            ));
+        }
+    }
+    for at in [
+        0,
+        overlay_steps / 2,
+        overlay_steps - 1,
+        overlay_steps + 1,
+        total / 2,
+        total - 1,
+    ] {
+        for deadline in [false, true] {
+            let flag = AtomicBool::new(false);
+            let mut work = Work::new(limits().overlay.work, Some(&flag)).with_deadline_precedence();
+            work.interrupt_at = Some((at, deadline));
+            let outcome = difference(
+                &operand,
+                &corridors,
+                0.1,
+                &mut { certificate },
+                limits(),
+                &mut work,
+            );
+            if deadline {
+                assert!(matches!(
+                    outcome,
+                    Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+                        PredicateError::DeadlineExceeded
+                    )))
+                ));
+            } else {
+                assert!(matches!(
+                    outcome,
+                    Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+                        PredicateError::Cancelled
+                    )))
+                ));
+            }
+        }
+    }
+    for resource in 0..4 {
+        let mut bound = limits();
+        match resource {
+            0 => bound.overlay.work.max_reserved_bytes = 0,
+            1 => bound.overlay.work.max_nodes = 0,
+            2 => bound.overlay.max_edges = 0,
+            _ => bound.overlay.max_rings = 0,
+        }
+        let mut work = Work::new(bound.overlay.work, None).with_deadline_precedence();
+        let outcome = difference(
+            &operand,
+            &corridors,
+            0.1,
+            &mut { certificate },
+            bound,
+            &mut work,
+        );
+        if resource == 0 {
+            assert!(matches!(
+                outcome,
+                Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+                    PredicateError::ReservationLimit
+                )))
+            ));
+        } else {
+            assert!(matches!(
+                outcome,
+                Err(UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+                    PredicateError::WorkLimit
+                )))
+            ));
+        }
+    }
+    let mut work = Work::new(limits().overlay.work, None).with_deadline_precedence();
+    assert!(matches!(
+        erosion::certify(
+            &operand,
+            &Geometry::Polygon(Polygon::empty()),
+            0.1,
+            &certificate,
+            &mut work
+        ),
+        Err(UnionBufferError::Disk(BufferFailure::AccuracyUnproven))
+    ));
+    let mut work = Work::new(limits().overlay.work, None).with_deadline_precedence();
+    assert!(matches!(
+        erosion::certify(&operand, &operand, 0.9999, &certificate, &mut work),
+        Err(UnionBufferError::Disk(BufferFailure::AccuracyUnproven))
+    ));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn erosion_union_is_union_of_individual_erosions() {
+    // C1: GOP-008, erosion e unione non commutano: due quadrati sovrapposti,
+    // oracolo compositivo delle differenze certificate di ciascun ingresso.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let a = Polygon::new(square_with_hole(0.0).exterior().clone(), vec![]);
+    let b = a.map_coords(|p| Coord {
+        x: p.x + 0.00001,
+        y: p.y,
+    });
+    let inputs = [Geometry::Polygon(a), Geometry::Polygon(b)];
+    let individual =
+        geodesic_line_buffer_with_limits(&inputs, &crs, &[-0.1], 0.01, false, limits(), None)
+            .unwrap();
+    let united =
+        geodesic_line_buffer_with_limits(&inputs, &crs, &[-0.1], 0.01, true, limits(), None)
+            .unwrap();
+    let expected = polygon_boolean::boolean_with_limits(
+        &individual.surfaces[0].geometry,
+        &individual.surfaces[1].geometry,
+        PolygonBooleanOp::Union,
+        Some(2),
+        limits().overlay,
+        None,
+    )
+    .unwrap();
+    assert_eq!(united.surfaces[0].geometry, expected);
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn zero_union_meridian_t_contact_and_multiple_point_contacts() {
+    // C1: GOP-008; il meridiano e' una geodetica, quindi i nodi del
+    // contatto T conservano esattamente i sottoarchi originali.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let rectangle = |west, east, south, north| {
+        Polygon::new(
+            LineString::from(vec![
+                (west, south),
+                (east, south),
+                (east, north),
+                (west, north),
+                (west, south),
+            ]),
+            vec![],
+        )
+    };
+    let a = rectangle(9.0, 9.00001, 0.0, 0.00002);
+    let b = rectangle(9.00001, 9.00002, 0.000_005, 0.000_015);
+    let expected = polygon_boolean::boolean_with_limits(
+        &Geometry::Polygon(a.clone()),
+        &Geometry::Polygon(b.clone()),
+        PolygonBooleanOp::Union,
+        Some(2),
+        limits().overlay,
+        None,
+    )
+    .unwrap();
+    let result = geodesic_line_buffer_with_limits(
+        &[Geometry::MultiPolygon(MultiPolygon(vec![a, b]))],
+        &crs,
+        &[0.0],
+        0.01,
+        false,
+        limits(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(polygons(&result.surfaces[0].geometry), polygons(&expected));
+    let parts = vec![
+        rectangle(9.0, 9.00001, 0.0, 0.00001),
+        rectangle(9.00001, 9.00002, 0.00001, 0.00002),
+        rectangle(9.00002, 9.00003, 0.00002, 0.00003),
+    ];
+    let result = geodesic_line_buffer_with_limits(
+        &[Geometry::MultiPolygon(MultiPolygon(parts))],
+        &crs,
+        &[0.0],
+        0.01,
+        false,
+        limits(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(polygons(&result.surfaces[0].geometry).len(), 3);
+    assert_eq!(result.surfaces[0].certificate.absolute_m, 0.0);
 }

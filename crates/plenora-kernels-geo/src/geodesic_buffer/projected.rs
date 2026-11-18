@@ -17,6 +17,7 @@ use plenora_core::crs::riproiezione::LocalTransverseMercator;
 use plenora_core::crs::ResolvedCrs;
 use std::sync::atomic::AtomicBool;
 
+mod erosion;
 mod surface;
 
 /// GOP-006 nella metrica dell'ellissoide del chiamante.
@@ -38,6 +39,8 @@ pub struct ProjectedBufferCertificate<'a> {
     pub output_model_m: f64,
     /// Conversioni, costruzioni e overlay cumulativi.
     pub numerical_m: f64,
+    /// Copertura continua comune del risultato e dell'erosione esatta.
+    pub stability_m: f64,
     /// Somma arrotondata in alto.
     pub absolute_m: f64,
     /// Errore assoluto diviso per il raggio, zero per il vuoto esatto.
@@ -135,7 +138,7 @@ fn polygons(input: &Geometry) -> &[Polygon] {
 ///
 /// Usa TM con meridiano centrale a meta' dell'inviluppo longitudinale.
 /// Poli e seam sono esclusi. Il dominio metrico e' piu' stretto di quello
-/// della riproiezione ordinaria; raggi 0..60000 metri. A zero conserva le superfici.
+/// della riproiezione ordinaria; |r|<=60000 metri. A zero conserva le superfici.
 /// Un unico Work governa tutte le fasi e tutte le distanze.
 /// # Errors
 /// Errori del buffer e della 1c-c; nessun risultato fuori certificato.
@@ -228,6 +231,7 @@ const fn empty_certificate(crs: &ResolvedCrs) -> ProjectedBufferCertificate<'_> 
         arcs_m: 0.0,
         output_model_m: 0.0,
         numerical_m: 0.0,
+        stability_m: 0.0,
         absolute_m: 0.0,
         relative: 0.0,
     }
@@ -392,7 +396,13 @@ fn build<'a>(
     vertices: &mut u64,
     work: &mut Work<'_>,
 ) -> Result<ProjectedBufferSurface<'a>, UnionBufferError> {
+    if radius < 0.0 && inputs.len() > 1 {
+        return erosion_union(inputs, crs, radius, tolerance, limits, vertices, work);
+    }
     let local = context(inputs, crs, work)?;
+    if radius == 0.0 {
+        return zero_surface(inputs, crs, &local.ellipsoid, limits, vertices, work);
+    }
     for input in inputs {
         if matches!(input, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
             surface::validate(input, &local.ellipsoid, work)?;
@@ -431,9 +441,6 @@ fn build<'a>(
             work.push(&mut lines, projected)?;
         }
     }
-    if radius == 0.0 {
-        return zero_surface(inputs, crs, &local.ellipsoid, limits, vertices, work);
-    }
     if certificate.input_model_m >= 0.01 {
         return Err(BufferFailure::AccuracyUnproven.into());
     }
@@ -470,25 +477,33 @@ fn build<'a>(
         let span = ((upper.x - lower.x).next_up() + (upper.y - lower.y).next_up()).next_up();
         let diameter =
             (((maximum * span).next_up() + certificate.input_model_m).next_up() + 0.0002).next_up();
-        if radius <= diameter {
-            return Err(BufferFailure::AccuracyUnproven.into());
+        if radius > diameter {
+            return Ok(ProjectedBufferSurface {
+                geometry: Geometry::Polygon(Polygon::empty()),
+                certificate: empty_certificate(crs),
+                preserves_geodesic_operand: false,
+            });
         }
-        return Ok(ProjectedBufferSurface {
-            geometry: Geometry::Polygon(Polygon::empty()),
-            certificate: empty_certificate(crs),
-            preserves_geodesic_operand: false,
-        });
     }
     certificate.distortion_m =
         (radius * (1.0 - minimum).next_up().max((maximum - 1.0).next_up())).next_up();
     certificate.numerical_m = 0.0002;
     certificate.output_model_m = tolerance / 16.0;
+    if erosion {
+        certificate.stability_m = 0.75 * tolerance;
+    }
     let arc_budget = 0.75
         * (tolerance
             - certificate.distortion_m
             - certificate.input_model_m
             - certificate.output_model_m
-            - certificate.numerical_m);
+            - certificate.numerical_m
+            - certificate.stability_m);
+    let arc_budget = if erosion {
+        arc_budget.min(tolerance / 32.0)
+    } else {
+        arc_budget
+    };
     if arc_budget <= 0.0 {
         return Err(BufferFailure::AccuracyUnproven.into());
     }
@@ -528,6 +543,7 @@ fn build<'a>(
             )?;
         }
     }
+    let mut operands = CountedVec::new();
     let mut index = 0;
     for input in inputs {
         if polygons(input).is_empty() {
@@ -541,18 +557,40 @@ fn build<'a>(
                 work.push(&mut rings, ring)?;
                 index += 1;
             }
-            let operand = Geometry::Polygon(rings_polygon(rings, work)?);
-            unite(
-                &mut accumulated,
-                operand,
-                limits,
-                &mut certificate.numerical_m,
-                work,
-            )?;
+            let operand = rings_polygon(rings, work)?;
+            if erosion {
+                work.push(&mut operands, operand)?;
+            } else {
+                unite(
+                    &mut accumulated,
+                    Geometry::Polygon(operand),
+                    limits,
+                    &mut certificate.numerical_m,
+                    work,
+                )?;
+            }
         }
     }
+    let planar = accumulated.ok_or(BufferFailure::AccuracyUnproven)?;
+    let planar = if erosion {
+        let operand = Geometry::MultiPolygon(MultiPolygon(operands.export(work)?));
+        // Le corde delle parti devono restare disgiunte: un'unione che
+        // cancellasse frontiere non conserva il bound della distanza firmata.
+        let operand = polygon_boolean::execute(
+            &operand,
+            &Geometry::Polygon(Polygon::empty()),
+            PolygonBooleanOp::Union,
+            Some(2),
+            limits.overlay,
+            work,
+        )?;
+        certificate.numerical_m = (certificate.numerical_m + 2e-9).next_up();
+        difference(&operand, &planar, radius, &mut certificate, limits, work)?
+    } else {
+        planar
+    };
     let geometry = publish(
-        accumulated.ok_or(BufferFailure::AccuracyUnproven)?,
+        planar,
         &local,
         certificate.output_model_m,
         limits,
@@ -561,6 +599,82 @@ fn build<'a>(
     )?;
     certify_total(&mut certificate, radius, tolerance)?;
     work.step()?;
+    Ok(ProjectedBufferSurface {
+        geometry,
+        certificate,
+        preserves_geodesic_operand: false,
+    })
+}
+
+fn difference(
+    operand: &Geometry,
+    corridors: &Geometry,
+    radius: f64,
+    certificate: &mut ProjectedBufferCertificate<'_>,
+    limits: UnionBufferLimits,
+    work: &mut Work<'_>,
+) -> Result<Geometry, UnionBufferError> {
+    let result = polygon_boolean::execute(
+        operand,
+        corridors,
+        PolygonBooleanOp::Difference,
+        Some(2),
+        limits.overlay,
+        work,
+    )?;
+    certificate.numerical_m = (certificate.numerical_m + 2e-9).next_up();
+    erosion::certify(operand, &result, radius, certificate, work)?;
+    Ok(result)
+}
+
+fn erosion_union<'a>(
+    inputs: &[Geometry],
+    crs: &'a ResolvedCrs,
+    radius: f64,
+    tolerance: f64,
+    limits: UnionBufferLimits,
+    vertices: &mut u64,
+    work: &mut Work<'_>,
+) -> Result<ProjectedBufferSurface<'a>, UnionBufferError> {
+    let mut accumulated = None;
+    let mut certificate = empty_certificate(crs);
+    let mut rounding = 0.0;
+    for input in inputs {
+        work.step()?;
+        let surface = build(
+            std::slice::from_ref(input),
+            crs,
+            radius,
+            tolerance,
+            limits,
+            vertices,
+            work,
+        )?;
+        let c = surface.certificate;
+        certificate.inverse_scale_min = certificate.inverse_scale_min.min(c.inverse_scale_min);
+        certificate.inverse_scale_max = certificate.inverse_scale_max.max(c.inverse_scale_max);
+        certificate.distortion_m = certificate.distortion_m.max(c.distortion_m);
+        certificate.input_model_m = certificate.input_model_m.max(c.input_model_m);
+        certificate.arcs_m = certificate.arcs_m.max(c.arcs_m);
+        certificate.output_model_m = certificate.output_model_m.max(c.output_model_m);
+        certificate.numerical_m = certificate.numerical_m.max(c.numerical_m);
+        certificate.stability_m = certificate.stability_m.max(c.stability_m);
+        unite(
+            &mut accumulated,
+            surface.geometry,
+            limits,
+            &mut rounding,
+            work,
+        )?;
+    }
+    // Overlay in gradi: 4 nm per operazione nel dominio lon/lat qualificato.
+    certificate.numerical_m = (certificate.numerical_m + (2.0 * rounding).next_up()).next_up();
+    certify_total(&mut certificate, radius.abs(), tolerance)?;
+    let geometry = accumulated.ok_or(BufferFailure::AccuracyUnproven)?;
+    let geometry = match geometry {
+        Geometry::MultiPolygon(multi) if multi.0.is_empty() => Geometry::Polygon(Polygon::empty()),
+        geometry => geometry,
+    };
     Ok(ProjectedBufferSurface {
         geometry,
         certificate,
@@ -614,6 +728,21 @@ fn zero_surface<'a>(
         }
         for polygon in polygons(input) {
             work.step()?;
+            let mut rings = CountedVec::new();
+            for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+                let ring = copy_ring(ring, limits, vertices, work)?;
+                work.push(&mut rings, ring)?;
+            }
+            let validated = Geometry::Polygon(rings_polygon(rings, work)?);
+            surface::validate(&validated, ellipsoid, work)?;
+            polygon_boolean::execute(
+                &validated,
+                &Geometry::Polygon(Polygon::empty()),
+                PolygonBooleanOp::Union,
+                Some(2),
+                limits.overlay,
+                work,
+            )?;
             if polygon.exterior().0.is_empty() {
                 continue;
             }
@@ -643,24 +772,98 @@ fn zero_surface<'a>(
         }
         _ => Geometry::MultiPolygon(MultiPolygon(result.export(work)?)),
     };
-    if surface_inputs > 1 {
-        surface::validate(&geometry, ellipsoid, work)?;
-        // Senza intersezioni fra componenti, l'unione conserva i lati originali.
-        // Intersezioni e contatti che richiedono nodi geodetici restano rifiutati.
-        polygon_boolean::execute(
-            &geometry,
-            &Geometry::Polygon(Polygon::empty()),
-            PolygonBooleanOp::Union,
-            Some(2),
-            limits.overlay,
-            work,
-        )?;
-    }
+    surface::validate_contacts(&geometry, ellipsoid, work)?;
+    let normalized = zero_union(&geometry, limits, vertices, work)?;
+    let geometry = if polygons(&geometry).len() <= 1 {
+        geometry
+    } else {
+        normalized
+    };
     Ok(ProjectedBufferSurface {
         geometry,
         certificate: empty_certificate(crs),
         preserves_geodesic_operand: surface_inputs != 0,
     })
+}
+
+fn zero_union(
+    geometry: &Geometry,
+    limits: UnionBufferLimits,
+    vertices: &mut u64,
+    work: &mut Work<'_>,
+) -> Result<Geometry, UnionBufferError> {
+    let mut components = CountedVec::new();
+    for polygon in polygons(geometry) {
+        let mut rings = CountedVec::new();
+        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            let ring = copy_ring(ring, limits, vertices, work)?;
+            work.push(&mut rings, ring)?;
+        }
+        let operand = Geometry::Polygon(rings_polygon(rings, work)?);
+        let mut candidate = operand;
+        for previous in &mut components[..] {
+            work.step()?;
+            if let Some(value) = previous {
+                let combined = polygon_boolean::execute(
+                    value,
+                    &candidate,
+                    PolygonBooleanOp::Union,
+                    Some(2),
+                    limits.overlay,
+                    work,
+                )?;
+                if polygons(&combined).len() == 1 {
+                    candidate = combined;
+                    *previous = None;
+                }
+            }
+        }
+        work.push(&mut components, Some(candidate))?;
+    }
+    let mut normalized_parts = CountedVec::new();
+    for component in components.export(work)?.into_iter().flatten() {
+        match component {
+            Geometry::Polygon(polygon) => work.push(&mut normalized_parts, polygon)?,
+            Geometry::MultiPolygon(multi) => {
+                for polygon in multi.0 {
+                    work.push(&mut normalized_parts, polygon)?;
+                }
+            }
+            _ => return Err(BufferFailure::AccuracyUnproven.into()),
+        }
+    }
+    let normalized = match normalized_parts.len() {
+        0 => Geometry::Polygon(Polygon::empty()),
+        1 => Geometry::Polygon(
+            normalized_parts
+                .pop()
+                .ok_or(BufferFailure::AccuracyUnproven)?,
+        ),
+        _ => Geometry::MultiPolygon(MultiPolygon(normalized_parts.export(work)?)),
+    };
+    // Una booleana a zero puo' eliminare lati, non sostituire geodetiche
+    // con sottoarchi lon/lat: ogni lato pubblicato deve avere provenienza.
+    for ring in parts(&normalized)? {
+        for edge in ring.0.windows(2) {
+            let mut found = false;
+            for original in parts(geometry)? {
+                for source in original.0.windows(2) {
+                    work.step()?;
+                    if (edge[0] == source[0] && edge[1] == source[1])
+                        || (edge[1] == source[0] && edge[0] == source[1])
+                        || (surface::axis_contains(source[0], source[1], edge[0])
+                            && surface::axis_contains(source[0], source[1], edge[1]))
+                    {
+                        found = true;
+                    }
+                }
+            }
+            if !found {
+                return Err(BufferFailure::AccuracyUnproven.into());
+            }
+        }
+    }
+    Ok(normalized)
 }
 
 fn same_polygon(a: &Polygon, b: &Polygon, work: &mut Work<'_>) -> Result<bool, UnionBufferError> {
@@ -697,6 +900,7 @@ fn certify_total(
         c.arcs_m,
         c.output_model_m,
         c.numerical_m,
+        c.stability_m,
     ]
     .into_iter()
     .fold(0.0_f64, |sum, term| (sum + term).next_up());
@@ -867,10 +1071,14 @@ fn publish(
         let interiors = holes.export(work)?;
         work.push(&mut polygons, Polygon::new(shell, interiors))?;
     }
-    let geometry = if polygons.len() == 1 {
-        Geometry::Polygon(polygons.pop().ok_or(BufferFailure::AccuracyUnproven)?)
-    } else {
-        Geometry::MultiPolygon(MultiPolygon(polygons.export(work)?))
+    if polygons.is_empty() {
+        work.step()?;
+        return Ok(Geometry::Polygon(Polygon::empty()));
+    }
+    let geometry = match polygons.len() {
+        0 => Geometry::Polygon(Polygon::empty()),
+        1 => Geometry::Polygon(polygons.pop().ok_or(BufferFailure::AccuracyUnproven)?),
+        _ => Geometry::MultiPolygon(MultiPolygon(polygons.export(work)?)),
     };
     // Valida la superficie pubblicata con lo stesso Work e il modello lon/lat.
     Ok(polygon_boolean::execute(
