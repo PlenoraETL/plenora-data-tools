@@ -214,7 +214,10 @@ impl ErroreKernel for ConstructionError {
 impl ErroreKernel for PredicateError {
     fn classe(&self) -> Classe {
         match self {
-            Self::WorkLimit | Self::ReservationLimit | Self::AllocationFailed => Classe::Limite,
+            Self::WorkLimit
+            | Self::ReservationLimit
+            | Self::AllocationFailed
+            | Self::DeadlineExceeded => Classe::Limite,
             Self::Cancelled => Classe::Annullata,
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             Self::NonFiniteCoordinate { .. } | Self::InvalidGeometry { .. } => Classe::Piano,
@@ -236,6 +239,7 @@ mod tests {
             PredicateError::WorkLimit,
             PredicateError::ReservationLimit,
             PredicateError::AllocationFailed,
+            PredicateError::DeadlineExceeded,
         ] {
             assert_eq!(
                 del_kernel("op", &error).category(),

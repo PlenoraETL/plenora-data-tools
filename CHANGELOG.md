@@ -14,13 +14,25 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- Migrazione DE-9IM al noder razionale comune: eventi senza grafo,
+  sweep con filtri inclusivi X/Y e oracolo esaustivo della 1a nei test.
+  La 6.1.0 non e' rilasciata: `RelateLimits` conta ora i test esatti dopo
+  entrambi i filtri, le capacita' strutturali vive e aggiunge `max_nodes`
+  (duplicati intermedi inclusi, default 10 milioni) e `deadline` (default
+  nessuna). Errore distinto `DeadlineExceeded`, categoria ResourceLimit
+  nella pipeline. La semantica precedente dei limiti 1a non e' mantenuta.
+  La tranche 1b resta incompleta: buffer BigInt ancora fuori dal bilancio,
+  nuovi ingressi controllati split_line/polygonize mancanti.
+  Le API pubblicate `evaluate`/`evaluate_validated` conservano backend,
+  risultati e default 6.0.0; differenziale con snapshot del tag locale.
 - API Rust `predicates::relate_matrix`, `De9imMatrix` e `De9imPattern`:
   accesso alle nove celle, confronto di pattern OGC `TF*012` validati per
   intero e valutazione dei predicati nominati sulla stessa matrice.
   Matrice razionale esatta anche per unioni di collezioni, con precedenza
   dimensionale dichiarata e confine lineare Mod-2. Variante con limiti
   effettivi, prenotazioni strutturali e cancellazione cooperativa.
-  Tutti i predicati condividono la matrice corretta, anche sui subnormali.
+  I predicati su `De9imMatrix` leggono la matrice esatta anche sui subnormali;
+  le due API nominate della 6.0.0 conservano il comportamento pubblicato.
   Nessuna modifica alle booleane o alle operazioni del piano.
 
 ## [6.0.0] - 2026-11-15
