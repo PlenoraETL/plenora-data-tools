@@ -4099,6 +4099,36 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn geodesic_densify_with_limits( parts: &[LineString<f64>], crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError>"
     },
+    "crates/plenora-kernels-geo/src/geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits": {
+      "signature": "pub fn geodesic_densify_geometry_with_limits( geometry: &Geometry, crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicGeometryDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry, GeodesicDensifyError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_distance.rs::geodesic_distance_with_limits": {
+      "signature": "pub fn geodesic_distance_with_limits( a: &Geometry, b: &Geometry, crs: &ResolvedCrs, limits: GeodesicDistanceLimits, cancelled: Option<&AtomicBool>, ) -> Result<GeodesicDistanceResult, GeodesicDistanceError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_surface/metric.rs::cmp": {
+      "signature": "fn cmp(&self, other: &Self) -> Ordering",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_surface/metric.rs::eq": {
+      "signature": "fn eq(&self, other: &Self) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/geodesic_surface/metric.rs::partial_cmp": {
+      "signature": "fn partial_cmp(&self, other: &Self) -> Option<Ordering>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
     "crates/plenora-kernels-geo/src/geodetica.rs::da_crs": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
