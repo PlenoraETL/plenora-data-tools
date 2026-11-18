@@ -1527,6 +1527,15 @@
       "shared_paths_rejects_non_polygonal_inputs_and_encodes_rows",
       "coppie_candidate_a_capacita_esatta"
     ],
+    "crates/plenora-kernels-geo/src/geodesic_densify/tests.rs": [
+      "equator_analytic_and_exact_budget",
+      "meridian_and_pole_from_metric_integral",
+      "published_long_oblique_and_unique_near_antipodes",
+      "ambiguities_domains_and_controls",
+      "multipart_empty_closure_seam_and_duplicates",
+      "rounding_cannot_choose_an_antipodal_branch_or_hide_a_short_edge",
+      "exact_seam_identity_and_numeric_length_threshold"
+    ],
     "crates/plenora-kernels-geo/src/geodetica.rs": [
       "i_parametri_fuori_dominio_non_danno_un_ellissoide",
       "un_crs_senza_ellissoide_si_rifiuta",

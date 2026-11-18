@@ -8154,6 +8154,12 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
+    "crates/plenora-kernels-geo/src/geodesic_densify.rs::geodesic_densify_with_limits": {
+      "signature": "pub fn geodesic_densify_with_limits( parts: &[LineString<f64>], crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
     "crates/plenora-core/src/crs/riproiezione/utm.rs::project_utm_wgs84": {
       "signature": "pub fn project_utm_wgs84( zone: u8, north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
       "classification": "non riceve dati esterni",
