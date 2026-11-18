@@ -1408,3 +1408,11 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod baseline_600;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod compatibility_600;

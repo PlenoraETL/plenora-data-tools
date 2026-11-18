@@ -33,7 +33,7 @@ struct Shape {
 
 fn point(coordinate: Coord<f64>, work: &mut Work<'_>) -> Result<P, PredicateError> {
     work.nodes(1)?;
-    Ok(P::of(coordinate))
+    P::of_in(coordinate, work)
 }
 
 fn push_point(
@@ -103,7 +103,7 @@ impl Shape {
                 let mut boundary = false;
                 for edge in ring {
                     work.step()?;
-                    if edge.contains(p) {
+                    if edge.contains(p)? {
                         boundary = true;
                         break;
                     }
@@ -351,7 +351,7 @@ impl Shape {
         let mut boundary = false;
         for e in self.polygons.iter().flatten().flatten() {
             work.step()?;
-            if e.contains(p) {
+            if e.contains(p)? {
                 boundary = true;
                 break;
             }
@@ -365,26 +365,26 @@ impl Shape {
                 work.push(
                     &mut rays,
                     P {
-                        x: Q::int(x),
-                        y: Q::int(y),
+                        x: work.integer(x)?,
+                        y: work.integer(y)?,
                     },
                 )?;
             }
             for edge in self.polygons.iter().flatten().flatten() {
                 work.step()?;
-                if !edge.contains(p) {
+                if !edge.contains(p)? {
                     continue;
                 }
                 for endpoint in [&edge.a, &edge.b] {
                     if endpoint != p {
-                        work.push(&mut rays, endpoint.sub(p))?;
+                        work.push(&mut rays, endpoint.try_sub(p)?)?;
                     }
                 }
             }
             sorted(&mut rays, angle_cmp, work)?;
-            rays.dedup_by(|a, b| angle_cmp(a, b) == Ordering::Equal, work)?;
+            rays.dedup_by(|a, b| Ok(angle_cmp(a, b)? == Ordering::Equal), work)?;
             for (a, b) in rays.iter().zip(rays.iter().cycle().skip(1)) {
-                if !self.area_contains(p, Some(&a.add(b)), work)? {
+                if !self.area_contains(p, Some(&a.try_add(b)?), work)? {
                     return Ok(1);
                 }
             }
@@ -395,7 +395,7 @@ impl Shape {
         }
         for e in &self.lines {
             work.step()?;
-            if e.contains(p) {
+            if e.contains(p)? {
                 let mut odd = false;
                 for q in &self.ends {
                     work.step()?;
@@ -415,14 +415,17 @@ impl Shape {
         Ok(2)
     }
 }
-fn angle_cmp(a: &P, b: &P) -> Ordering {
+fn angle_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     let half = |p: &P| {
         p.y.sign() == Ordering::Less
             || (p.y.sign() == Ordering::Equal && p.x.sign() == Ordering::Less)
     };
-    half(a)
-        .cmp(&half(b))
-        .then_with(|| a.cross(b).sign().reverse())
+    let halves = half(a).cmp(&half(b));
+    if halves.is_eq() {
+        Ok(a.try_cross(b)?.sign().reverse())
+    } else {
+        Ok(halves)
+    }
 }
 fn perturbed_sign(value: &Q, delta: &Q) -> Ordering {
     let sign = value.sign();
@@ -440,18 +443,20 @@ fn ring_contains(
 ) -> Result<bool, PredicateError> {
     work.step()?;
     let zero = P {
-        x: Q::int(0),
-        y: Q::int(0),
+        x: work.integer(0)?,
+        y: work.integer(0)?,
     };
     let d = direction.unwrap_or(&zero);
     let mut inside = false;
     for e in ring {
         work.step()?;
-        let above = |y: &Q| perturbed_sign(&p.y.sub(y), &d.y) == Ordering::Less;
-        if above(&e.a.y) != above(&e.b.y) {
-            let edge = e.b.sub(&e.a);
-            let side = perturbed_sign(&edge.cross(&p.sub(&e.a)), &edge.cross(d));
-            if side == e.b.y.cmp(&e.a.y) {
+        let above = |y: &Q| -> Result<bool, PredicateError> {
+            Ok(perturbed_sign(&p.y.try_sub(y)?, &d.y) == Ordering::Less)
+        };
+        if above(&e.a.y)? != above(&e.b.y)? {
+            let edge = e.b.try_sub(&e.a)?;
+            let side = perturbed_sign(&edge.try_cross(&p.try_sub(&e.a)?)?, &edge.try_cross(d)?);
+            if side == e.b.y.try_cmp(&e.a.y)? {
                 inside = !inside;
             }
         }
@@ -574,8 +579,8 @@ fn validate_structure(
             }
             Geometry::Triangle(t)
                 if point(t.v2(), work)?
-                    .sub(&point(t.v1(), work)?)
-                    .cross(&point(t.v3(), work)?.sub(&point(t.v1(), work)?))
+                    .try_sub(&point(t.v1(), work)?)?
+                    .try_cross(&point(t.v3(), work)?.try_sub(&point(t.v1(), work)?)?)?
                     .sign()
                     == Ordering::Equal =>
             {
@@ -591,28 +596,28 @@ fn samples(
     mut values: CountedVec<Q>,
     work: &mut Work<'_>,
 ) -> Result<CountedVec<(Q, bool)>, PredicateError> {
-    sorted(&mut values, Ord::cmp, work)?;
-    values.dedup_by(PartialEq::eq, work)?;
+    sorted(&mut values, Q::try_cmp, work)?;
+    values.dedup_by(|a, b| Ok(a == b), work)?;
     let mut result = CountedVec::new();
     if let Some(first) = values.first() {
-        work.push(&mut result, (first.sub(&Q::int(1)), false))?;
+        work.push(&mut result, (first.try_sub(&work.integer(1)?)?, false))?;
     }
     for (i, value) in values.iter().enumerate() {
-        work.push(&mut result, (value.clone(), true))?;
+        work.push(&mut result, (value.try_clone()?, true))?;
         if let Some(next) = values.get(i + 1) {
-            work.push(&mut result, (value.midpoint(next), false))?;
+            work.push(&mut result, (value.try_midpoint(next)?, false))?;
         }
     }
     if let Some(last) = values.last() {
-        work.push(&mut result, (last.add(&Q::int(1)), false))?;
+        work.push(&mut result, (last.try_add(&work.integer(1)?)?, false))?;
     }
     if values.is_empty() {
-        work.push(&mut result, (Q::int(0), false))?;
+        work.push(&mut result, (work.integer(0)?, false))?;
     }
     Ok(result)
 }
 
-pub(super) fn relate(
+pub fn relate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     work: &mut Work<'_>,
@@ -664,7 +669,7 @@ fn relate_impl(
         .flat_map(|e| [&e.a.x, &e.b.x])
         .chain(points.iter().map(|p| &p.x))
     {
-        work.push(&mut xs, x.clone())?;
+        work.push(&mut xs, x.try_clone()?)?;
     }
     crate::noding::visit(&edges, work, |_, _, hits, work| {
         for point in hits.into_iter().flatten() {
@@ -679,24 +684,27 @@ fn relate_impl(
         let mut ys = CountedVec::new();
         for e in &edges {
             work.step()?;
-            if between(&x, &e.a.x, &e.b.x) {
+            if between(&x, &e.a.x, &e.b.x)? {
                 if e.a.x == e.b.x {
-                    work.push(&mut ys, e.a.y.clone())?;
-                    work.push(&mut ys, e.b.y.clone())?;
+                    work.push(&mut ys, e.a.y.try_clone()?)?;
+                    work.push(&mut ys, e.b.y.try_clone()?)?;
                 } else {
-                    work.push(&mut ys, e.at_x(&x))?;
+                    work.push(&mut ys, e.at_x(&x)?)?;
                 }
             }
         }
         for p in &points {
             work.step()?;
             if p.x == x {
-                work.push(&mut ys, p.y.clone())?;
+                work.push(&mut ys, p.y.try_clone()?)?;
             }
         }
         for (y, critical_y) in samples(ys, work)? {
             work.step()?;
-            let p = P { x: x.clone(), y };
+            let p = P {
+                x: x.try_clone()?,
+                y,
+            };
             let dimension = b'0' + u8::from(!critical_x) + u8::from(!critical_y);
             if check_input {
                 a.validate_cell(&p, dimension - b'0', "left", &mut a_connected, work)?;
