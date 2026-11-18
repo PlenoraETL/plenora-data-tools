@@ -14,10 +14,14 @@ use thiserror::Error;
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod arrangement;
-mod arrangement_indexed;
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod arrangement_exhaustive;
+pub(crate) mod arrangement_indexed;
+mod interval_index;
 
 /// Limiti della matrice sul noder comune (API 6.1.0 non rilasciata).
-/// Lavoro e nodi sono cumulativi; le prenotazioni strutturali sono vive.
+/// Lavoro e nodi sono cumulativi; contenitori e aritmetica hanno ricevute vive.
 #[derive(Clone, Copy, Debug)]
 pub struct RelateLimits {
     /// Test esatti dopo entrambi i filtri inclusivi X/Y, anche ripetuti
@@ -27,8 +31,26 @@ pub struct RelateLimits {
     pub max_steps: u64,
     /// Byte richiesti per le capacita' dei vettori strutturali ancora vivi;
     /// pop/dedup non rilasciano capacita', il drop la rilascia (anche dopo
-    /// conversione in iteratore). Esclude tuttora i buffer `BigInt` e
-    /// l'overhead dell'allocatore: non certifica GOP-027 o l'heap totale.
+    /// conversione in iteratore). Durante una crescita si prenota anche
+    /// la vecchia capacita', per la coesistenza dei due buffer di realloc.
+    /// Ogni intero aritmetico, inclusi temporanei
+    /// e cloni, addebita bit arrotondati ai limb nativi piu' header, subito
+    /// dopo la creazione; il drop rilascia la ricevuta. La capacita' privata
+    /// e gli scratch di `num-bigint` non sono misurabili con questa API:
+    /// questo conteggio non certifica l'heap totale (vedi docs/topologia.md).
+    /// Lo sforamento contabile prima del rifiuto e' al massimo un intero
+    /// di 145173 bit arrotondati ai limb piu' l'header `BigInt`.
+    ///
+    /// Il test d'integrazione `heap_reale` certifica separatamente il corpus
+    /// reticolo/pettine/sparso/estremi al confine di `GlobalAlloc`: misura
+    /// il picco di byte richiesti vivi, compresi gli scratch e i due buffer
+    /// durante realloc. L'ingresso preso in prestito precede la misura
+    /// (esclusione incrementale zero); l'esclusione del tracker e' il picco
+    /// della somma viva `wrapped_size - object_size`, cioe' header e padding
+    /// effettivamente osservati, senza tolleranze empiriche. Il limite al
+    /// rifiuto usa [`Self::MAX_VALUE_BYTES`]. Metadati privati di `System`,
+    /// pagine OS e RSS non sono osservabili da `GlobalAlloc`: il test non
+    /// certifica questi costi, ne' prova tutti i possibili ingressi `f64`.
     pub max_reserved_bytes: u64,
     /// Punti d'ingresso costruiti (copie incluse) e incidenze degli eventi:
     /// due per incrocio, quattro per overlap non puntuale. Ripetizioni
@@ -36,6 +58,13 @@ pub struct RelateLimits {
     pub max_nodes: u64,
     /// Scadenza monotona, verificata insieme all'annullamento.
     pub deadline: Option<std::time::Instant>,
+}
+
+impl RelateLimits {
+    /// Massimo addebito di un singolo intero dopo la sua costruzione.
+    /// Deriva dal limite algebrico di `noding/bounds.rs`; non include gli
+    /// scratch privati del backend ne' l'overhead dell'allocatore.
+    pub const MAX_VALUE_BYTES: u64 = crate::noding::bounds::MAX_VALUE_BYTES;
 }
 
 impl Default for RelateLimits {
@@ -611,6 +640,15 @@ mod tests {
             let left = Geometry::<f64>::try_from_wkt_str(left).expect("WKT analitico");
             let right = Geometry::<f64>::try_from_wkt_str(right).expect("WKT analitico");
             let matrix = relate_matrix(&left, &right).expect("matrice analitica");
+            assert_eq!(
+                matrix,
+                arrangement_exhaustive::relate(
+                    &left,
+                    &right,
+                    &mut arrangement_indexed::Work::new(RelateLimits::default(), None)
+                )
+                .expect("classificazione esaustiva")
+            );
             assert_eq!(matrix.to_string(), expected);
             assert!(matrix.matches(expected.parse().expect("pattern esatto")));
             let transpose = relate_matrix(&right, &left)

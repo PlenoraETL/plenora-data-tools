@@ -24,8 +24,8 @@ env:
 
 jobs:
   # Guardie statiche in Python, senza toolchain Rust: documenti, commenti,
-  # documento generato e le prove delle guardie stesse. Solo libreria
-  # standard, quindi nessun requisito da installare. Una guardia offline
+  # documento generato e le prove delle guardie stesse. PyYAML serve al
+  # piano CI e alle sue controprove. Una guardia offline
   # nuova entra in questo job.
   guardie:
     name: guardie statiche (${{ matrix.os }})
@@ -42,6 +42,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version-file: '.python-version'
+      - name: parser dei workflow per i self-test
+        run: python -m pip install -r requirements-ci-locale.txt
       - name: tutte le guardie e i self-test
         run: python scripts/esegui_guardie.py
 
