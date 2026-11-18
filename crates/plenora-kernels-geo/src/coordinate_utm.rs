@@ -106,7 +106,7 @@ fn project(zone: u8, north: bool, inverse: bool, x: f64, y: f64) -> Result<(f64,
 }
 
 // Limiti geografici della designazione, non dell'intero CRS proiettato.
-fn bounds(zone: u8, band: char) -> Result<(f64, f64, f64, f64), UtmError> {
+pub(crate) fn bounds(zone: u8, band: char) -> Result<(f64, f64, f64, f64), UtmError> {
     if zone == 0 || zone > 60 {
         return Err(UtmError::Zone);
     }

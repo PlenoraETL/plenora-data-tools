@@ -30,6 +30,7 @@ mod ntv2;
 mod percorsi;
 mod proiezioni;
 pub(super) mod tabella;
+pub mod ups;
 pub mod utm;
 
 use std::collections::{BTreeMap, BTreeSet};

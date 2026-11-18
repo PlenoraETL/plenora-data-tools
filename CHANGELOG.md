@@ -14,6 +14,14 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API scalare `coordinate_mgrs` WGS84: `format_mgrs`, `parse_mgrs`,
+  `MgrsCell`, `DecodedMgrs` e `MgrsError`. Riferimenti completi UTM/UPS,
+  precisione esplicita 0..5, troncamento, rappresentante obbligatorio
+  `grid_text::CellRepresentative` e limiti interi della cella sorgente.
+  UPS ellissoidale nel core; selezione UTM e TM riusate. Grammatica ASCII
+  maiuscola senza spazi, zona UTM a due cifre, limite 15 byte.
+  USNG e trasformazioni di datum non sono esposti da questa API.
+
 - API scalare `coordinate_utm` WGS84 conforme a GOP-023: `to_utm`,
   `from_utm`, `format_utm`, `parse_utm`, `UtmCoordinate` e `UtmError`.
   Testo canonico `zone hemisphere easting northing`, emisfero N/S,

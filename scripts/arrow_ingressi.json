@@ -8051,6 +8051,30 @@
       "classification": "non riceve dati esterni",
       "reason": "Coordinate numeriche scalari WGS84 e testo ASCII; nessun ingresso Arrow.",
       "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/ups.rs::project_ups_wgs84": {
+      "signature": "pub fn project_ups_wgs84( north: bool, inverse: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-core/src/crs/riproiezione/utm.rs::inverse_utm_cell_wgs84": {
+      "signature": "pub fn inverse_utm_cell_wgs84( zone: u8, north: bool, x: f64, y: f64, ) -> Result<(f64, f64), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs::format_mgrs": {
+      "signature": "pub fn format_mgrs(longitude: f64, latitude: f64, digits: u8) -> Result<String, MgrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_mgrs.rs::parse_mgrs": {
+      "signature": "pub fn parse_mgrs( text: &str, representative: CellRepresentative, ) -> Result<DecodedMgrs, MgrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari WGS84 e testo ASCII limitato; nessun ingresso Arrow.",
+      "arrow_arguments": []
     }
   },
   "python": {
