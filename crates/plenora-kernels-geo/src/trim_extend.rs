@@ -394,7 +394,7 @@ pub(crate) fn publish_paths(
         let certificate = PublishedEdge::new(edge, [pair[0], pair[1]], work)?;
         work.push(&mut certificates, certificate)?;
     }
-    verify_publication(&certificates, &originals, false, work)?;
+    verify_publication(&certificates, &originals, false, None, work)?;
     let result = LineString(coords.export(work)?);
     work.step()?;
     Ok(result)

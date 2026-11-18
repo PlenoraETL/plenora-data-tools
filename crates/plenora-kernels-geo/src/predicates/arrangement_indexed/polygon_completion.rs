@@ -1,5 +1,7 @@
 //! Completamento GOP-020, profilo planare XY e pubblicazione GOP-015A.
-use super::line_boolean::{verify_publication, LineBooleanError, Originals, PublishedEdge};
+use super::line_boolean::{
+    coordinate_cmp as coord_cmp, verify_publication, LineBooleanError, Originals, PublishedEdge,
+};
 use super::{point_boolean::copy_line, Shape};
 use crate::noding::faces::{FaceGraph, FaceRing};
 use crate::noding::{CountedVec, Edge, Work, P, Q};
@@ -282,13 +284,6 @@ fn select(
     Ok(result)
 }
 
-fn coord_cmp(a: geo::Coord<f64>, b: geo::Coord<f64>) -> Ordering {
-    // Tutte le coordinate sono finite; gli zeri con segno sono lo stesso XY.
-    a.x.partial_cmp(&b.x)
-        .unwrap_or(Ordering::Equal)
-        .then_with(|| a.y.partial_cmp(&b.y).unwrap_or(Ordering::Equal))
-}
-
 fn ring_cmp(
     a: usize,
     b: usize,
@@ -458,18 +453,6 @@ fn execute(
         _ => return Err(PolygonCompletionError::UnsupportedLinework),
     }
     let originals = Originals::from_coords(input_coords.iter().copied(), work)?;
-    let mut used = CountedVec::new();
-    for _ in &graph.atoms {
-        work.push(&mut used, false)?;
-    }
-    for face in &faces {
-        for ring in std::iter::once(&face.shell).chain(&face.holes) {
-            for &atom in &graph.rings[*ring].atoms {
-                work.step()?;
-                used[atom] = true;
-            }
-        }
-    }
     let mut coords = CountedVec::new();
     for p in &graph.points {
         work.nodes(1)?;
@@ -477,39 +460,42 @@ fn execute(
         work.push(&mut coords, c)?;
     }
     let mut exact = CountedVec::new();
-    let mut ids = CountedVec::new();
-    for (id, atom) in graph.atoms.iter().enumerate() {
-        work.step()?;
-        if used[id] {
-            work.nodes(2)?;
-            work.push(
-                &mut exact,
-                Edge {
-                    a: graph.points[atom.from].try_clone()?,
-                    b: graph.points[atom.to].try_clone()?,
-                },
-            )?;
-            work.push(&mut ids, id)?;
-        }
-    }
     let mut supports = CountedVec::new();
     let mut published_coords = CountedVec::new();
     let mut selected_points = CountedVec::new();
     for _ in &graph.points {
         work.push(&mut selected_points, false)?;
     }
-    for &id in &ids {
-        work.step()?;
-        let atom = &graph.atoms[id];
-        selected_points[atom.from] = true;
-        selected_points[atom.to] = true;
-        work.nodes(2)?;
-        work.push(&mut published_coords, [coords[atom.from], coords[atom.to]])?;
-        work.push(
-            &mut supports,
-            roles[atom.sources[0]].map(|_| atom.sources[0]),
-        )?;
+    // Una ricevuta orientata per ogni lato serializzato, anche se due facce
+    // condividono lo stesso atomo in versi opposti.
+    for face in &faces {
+        for &ring_id in std::iter::once(&face.shell).chain(&face.holes) {
+            let ring = &graph.rings[ring_id];
+            for (i, &atom_id) in ring.atoms.iter().enumerate() {
+                work.step()?;
+                let atom = &graph.atoms[atom_id];
+                let from = ring.vertices[i];
+                let to = ring.vertices[(i + 1) % ring.vertices.len()];
+                selected_points[from] = true;
+                selected_points[to] = true;
+                work.nodes(2)?;
+                work.push(
+                    &mut exact,
+                    Edge {
+                        a: graph.points[from].try_clone()?,
+                        b: graph.points[to].try_clone()?,
+                    },
+                )?;
+                work.nodes(2)?;
+                work.push(&mut published_coords, [coords[from], coords[to]])?;
+                work.push(
+                    &mut supports,
+                    roles[atom.sources[0]].map(|_| atom.sources[0]),
+                )?;
+            }
+        }
     }
+    let surface_count = exact.len();
     // I confini occupati sono suddivisi soltanto nei siti dell'output.
     // Un nodo escluso non impone un arrotondamento estraneo al risultato.
     for (source, path) in nodes.iter().enumerate() {
@@ -549,15 +535,19 @@ fn execute(
         }
     }
     let mut certificate = CountedVec::new();
-    for ((edge, &coords), &support) in exact.iter().zip(&published_coords).zip(&supports) {
+    for (id, ((edge, &coords), &support)) in exact
+        .iter()
+        .zip(&published_coords)
+        .zip(&supports)
+        .enumerate()
+    {
         let mut published = PublishedEdge::new(edge, coords, work)?;
         published.support = support.map(|id| sources[id]);
+        published.surface = id < surface_count;
         work.push(&mut certificate, published)?;
     }
-    verify_publication(&certificate, &originals, false, work)?;
     canonicalize(&mut graph, &mut faces, &coords, work)?;
     let mut output = CountedVec::new();
-    let empty = Geometry::MultiPoint(MultiPoint::new(Vec::new()));
     for face in faces {
         let shell = output_ring(&graph.rings[face.shell], &coords, work)?;
         let mut holes = CountedVec::new();
@@ -566,29 +556,22 @@ fn execute(
             work.push(&mut holes, ring)?;
         }
         let geometry = Geometry::Polygon(Polygon::new(shell, holes.export(work)?));
-        match super::relate(&geometry, &empty, work) {
-            Err(PredicateError::InvalidGeometry { .. }) => {
-                return Err(PolygonCompletionError::InvalidRoundedTopology)
-            }
-            other => {
-                other?;
-            }
-        }
+        work.push(&mut output, geometry)?;
+    }
+    let publication = Geometry::GeometryCollection(geo::GeometryCollection(output.export(work)?));
+    verify_publication(&certificate, &originals, false, Some(&publication), work)?;
+    let Geometry::GeometryCollection(output) = publication else {
+        return Err(PolygonCompletionError::InvalidRoundedTopology);
+    };
+    let mut polygons = CountedVec::new();
+    for geometry in output.0 {
         // Verifica la disgiunzione dall'area originale, che non viene arrotondata.
         for original in &copies {
             if super::relate(&geometry, original, work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::InvalidRoundedTopology);
             }
         }
-        for previous in &output {
-            if super::relate(&geometry, previous, work)?.cells()[0] == b'2' {
-                return Err(PolygonCompletionError::InvalidRoundedTopology);
-            }
-        }
-        work.push(&mut output, geometry)?;
-    }
-    let mut polygons = CountedVec::new();
-    for geometry in output {
+
         let Geometry::Polygon(polygon) = geometry else {
             return Err(PolygonCompletionError::InvalidRoundedTopology);
         };

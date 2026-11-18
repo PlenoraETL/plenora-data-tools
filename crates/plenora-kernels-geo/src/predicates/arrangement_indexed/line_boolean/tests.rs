@@ -528,7 +528,7 @@ fn publication_rejects_manually_altered_graphs() {
         b: P::of_in((1., 1.).into(), &work).unwrap(),
     };
     let valid = PublishedEdge::new(&edge, [(0., 0.).into(), (1., 1.).into()], &mut work).unwrap();
-    verify_publication(&[valid], &originals, false, &mut work).unwrap();
+    verify_publication(&[valid], &originals, false, None, &mut work).unwrap();
     for coords in [
         [(0., 0.), (2., 1.)],
         [(0., 0.), (0., 0.)],
@@ -536,7 +536,7 @@ fn publication_rejects_manually_altered_graphs() {
     ] {
         let altered = PublishedEdge::new(&edge, coords.map(Into::into), &mut work).unwrap();
         assert!(matches!(
-            verify_publication(&[altered], &originals, false, &mut work),
+            verify_publication(&[altered], &originals, false, None, &mut work),
             Err(LineBooleanError::InvalidRoundedTopology)
         ));
     }
@@ -571,7 +571,7 @@ fn rounded_new_contact_and_unpublished_boundary_nodes() {
     ];
     // GOP-015A: rounding corretto, ma crea un contatto nell'interno di a.
     assert!(matches!(
-        verify_publication(&publications, &originals, false, &mut work),
+        verify_publication(&publications, &originals, false, None, &mut work),
         Err(LineBooleanError::InvalidRoundedTopology)
     ));
     let polygon = g("POLYGON((0 1,1 -1,1 1,0 1))");
@@ -640,7 +640,53 @@ fn published_order_matches_generic_sort_and_signed_zero_mutation_fails() {
     let p = P::of_in((-0., 0.).into(), &work).unwrap();
     let altered = PublishedEdge::point(&p, (0., 0.).into(), &mut work).unwrap();
     assert!(matches!(
-        verify_publication(&[altered], &originals, false, &mut work),
+        verify_publication(&[altered], &originals, false, None, &mut work),
+        Err(LineBooleanError::InvalidRoundedTopology)
+    ));
+}
+
+/// GOP-015A / GOP-020: facce adiacenti certificate in versi opposti sul lato
+/// comune; mutazioni dell'output e duplicati con interni sovrapposti rifiutati.
+#[test]
+fn constructed_faces_share_edges_but_not_interiors() {
+    let left = Geometry::Polygon(geo::Rect::new((0., 0.), (1., 1.)).to_polygon());
+    let right = Geometry::Polygon(geo::Rect::new((1., 0.), (2., 1.)).to_polygon());
+    let input = Geometry::GeometryCollection(geo::GeometryCollection(vec![left.clone(), right]));
+    let mut work = Work::new(RelateLimits::default(), None);
+    let originals = Originals::new(&input, &input, &mut work).unwrap();
+    let mut shape = Shape::default();
+    shape.geometry(&input, &mut work).unwrap();
+    let mut published = CountedVec::new();
+    for edge in shape.edges() {
+        let coords = [
+            originals.coordinate(&edge.a, &mut work).unwrap(),
+            originals.coordinate(&edge.b, &mut work).unwrap(),
+        ];
+        let mut value = PublishedEdge::new(edge, coords, &mut work).unwrap();
+        value.surface = true;
+        work.push(&mut published, value).unwrap();
+    }
+    verify_publication(&published, &originals, false, Some(&input), &mut work).unwrap();
+    let missing = Geometry::GeometryCollection(geo::GeometryCollection(vec![left.clone()]));
+    assert!(matches!(
+        verify_publication(&published, &originals, false, Some(&missing), &mut work),
+        Err(LineBooleanError::InvalidRoundedTopology)
+    ));
+    let overlap = Geometry::GeometryCollection(geo::GeometryCollection(vec![left.clone(), left]));
+    let mut shape = Shape::default();
+    shape.geometry(&overlap, &mut work).unwrap();
+    let mut duplicates = CountedVec::new();
+    for edge in shape.edges() {
+        let coords = [
+            originals.coordinate(&edge.a, &mut work).unwrap(),
+            originals.coordinate(&edge.b, &mut work).unwrap(),
+        ];
+        let mut value = PublishedEdge::new(edge, coords, &mut work).unwrap();
+        value.surface = true;
+        work.push(&mut duplicates, value).unwrap();
+    }
+    assert!(matches!(
+        verify_publication(&duplicates, &originals, false, Some(&overlap), &mut work),
         Err(LineBooleanError::InvalidRoundedTopology)
     ));
 }

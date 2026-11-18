@@ -61,6 +61,11 @@ la cui versione non ha qui una voce datata.
   nuova/esistente, noding comune e pubblicazione nearest-even verificata.
   Errori tipizzati, ordine canonico e deadline prioritaria opt-in; dominio
   e limiti di qualifica in [completamento](docs/polygon-completion.md).
+- API Rust `polygon_boolean`: union, intersection e difference binarie XY
+  per Polygon e MultiPolygon con parti disgiunte, con noder ed enumeratore
+  dei cicli comuni, budget di lati/facce/anelli e memoria viva. GOP-015A
+  con verifica degli anelli costruiti; deadline prima della cancellazione
+  secondo GOP-028. Il percorso `topology` esistente resta invariato.
 
 - API Rust `line_boolean` per booleane XY punto/linea e linea/poligono:
   noding razionale e pubblicazione GOP-015A al binary64 piu' vicino,

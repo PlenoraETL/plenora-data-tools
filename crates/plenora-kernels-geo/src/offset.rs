@@ -687,7 +687,7 @@ fn publish(
         let certificate = PublishedEdge::new(edge, [pair[0], pair[1]], work)?;
         work.push(&mut certificates, certificate)?;
     }
-    verify_publication(&certificates, &originals, true, work)?;
+    verify_publication(&certificates, &originals, true, None, work)?;
     let mut rounding_bound = ordinate(&error, work)?;
     if rational(rounding_bound, work)?.try_cmp(&error)?.is_lt() {
         rounding_bound = rounding_bound.next_up();

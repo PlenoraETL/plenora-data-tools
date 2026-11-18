@@ -90,11 +90,11 @@ fn compare(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     }
 }
 
-struct ArcSide {
+pub struct ArcSide {
     pub from: usize,
     pub to: usize,
-    next: usize,
-    seen: bool,
+    pub next: usize,
+    pub seen: bool,
     pub atom: usize,
 }
 pub struct FaceRing {
@@ -209,8 +209,49 @@ fn rings(
     work: &mut Work<'_>,
 ) -> Result<CountedVec<FaceRing>, PredicateError> {
     let mut result = CountedVec::new();
+    walk(
+        arcs,
+        points.len(),
+        work,
+        |_| Ok(()),
+        |path, arcs, work| {
+            let mut vertices = CountedVec::new();
+            let mut atoms = CountedVec::new();
+            let mut area = work.integer(0)?;
+            for &id in path {
+                work.step()?;
+                let arc = &arcs[id];
+                area = area.try_add(&points[arc.from].try_cross(&points[arc.to])?)?;
+                work.push(&mut vertices, arc.from)?;
+                work.push(&mut atoms, arc.atom)?;
+            }
+            if !area.sign().is_eq() {
+                work.push(
+                    &mut result,
+                    FaceRing {
+                        vertices,
+                        area,
+                        atoms,
+                    },
+                )?;
+            }
+            Ok(())
+        },
+    )?;
+    Ok(result)
+}
+
+/// Separa i cammini ai vertici ripetuti, senza sommare aree razionali.
+/// I callback addebitano facce/anelli prima di materializzarli.
+pub fn walk(
+    arcs: &mut [ArcSide],
+    vertex_count: usize,
+    work: &mut Work<'_>,
+    mut face: impl FnMut(&mut Work<'_>) -> Result<(), PredicateError>,
+    mut ring: impl FnMut(&[usize], &[ArcSide], &mut Work<'_>) -> Result<(), PredicateError>,
+) -> Result<(), PredicateError> {
     let mut positions = CountedVec::new();
-    for _ in points {
+    for _ in 0..vertex_count {
         work.push(&mut positions, None)?;
     }
     for start in 0..arcs.len() {
@@ -218,48 +259,26 @@ fn rings(
         if arcs[start].seen {
             continue;
         }
+        face(work)?;
         let mut path = CountedVec::new();
-        let mut path_atoms = CountedVec::new();
         let mut current = start;
         loop {
             work.step()?;
             let v = arcs[current].from;
             if let Some(pos) = positions[v] {
-                let mut vertices = CountedVec::new();
-                let mut atoms = CountedVec::new();
-                let mut area = work.integer(0)?;
-                for i in pos..path.len() {
-                    work.step()?;
-                    let a = path[i];
-                    let b = if i + 1 == path.len() { v } else { path[i + 1] };
-                    area = area.try_add(&points[a].try_cross(&points[b])?)?;
-                    work.push(&mut vertices, a)?;
-                    work.push(&mut atoms, path_atoms[i])?;
-                }
+                ring(&path[pos..], arcs, work)?;
                 while path.len() > pos {
                     work.step()?;
-                    path_atoms.pop();
                     if let Some(a) = path.pop() {
-                        positions[a] = None;
+                        positions[arcs[a].from] = None;
                     }
-                }
-                if !area.sign().is_eq() {
-                    work.push(
-                        &mut result,
-                        FaceRing {
-                            vertices,
-                            area,
-                            atoms,
-                        },
-                    )?;
                 }
             }
             if arcs[current].seen {
                 break;
             }
             positions[v] = Some(path.len());
-            work.push(&mut path, v)?;
-            work.push(&mut path_atoms, arcs[current].atom)?;
+            work.push(&mut path, current)?;
             arcs[current].seen = true;
             current = arcs[current].next;
         }
@@ -267,7 +286,7 @@ fn rings(
             return Err(PredicateError::CalcoloNonConcluso("cammino non chiuso"));
         }
     }
-    Ok(result)
+    Ok(())
 }
 
 // Parita' del raggio orizzontale; un punto sul bordo non e' interno.

@@ -379,7 +379,7 @@ fn triple_node_created_by_rounding_is_rejected() {
     // Fonte C1: GOP-015A. I tre incroci (0,0),(-eps,0),(0,eps)
     // non possono diventare un nodo triplo, pur conservando i segni pairwise.
     assert!(matches!(
-        verify_publication(&publications, &originals, true, &mut work),
+        verify_publication(&publications, &originals, true, None, &mut work),
         Err(LineBooleanError::InvalidRoundedTopology)
     ));
 }

@@ -27,6 +27,8 @@ pub struct Work<'a> {
     budget: Rc<storage::Budget>,
     pub nodes: u64,
     exports: CountedVec<storage::Lease>,
+    #[cfg(test)]
+    pub interrupt_at: Option<(u64, bool)>,
 }
 impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
@@ -39,6 +41,8 @@ impl<'a> Work<'a> {
             budget: Rc::new(storage::Budget::new(limits.max_reserved_bytes)),
             nodes: 0,
             exports: CountedVec::new(),
+            #[cfg(test)]
+            interrupt_at: None,
         }
     }
     pub(crate) fn with_deadline_precedence(
@@ -54,6 +58,16 @@ impl<'a> Work<'a> {
     }
 
     pub fn step(&mut self) -> Result<(), PredicateError> {
+        #[cfg(test)]
+        if let Some((at, deadline)) = self.interrupt_at {
+            if self.steps == at {
+                if deadline {
+                    self.limits.deadline = Some(std::time::Instant::now());
+                } else if let Some(flag) = self.cancelled {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
         if self.deadline_first
             && self
                 .limits

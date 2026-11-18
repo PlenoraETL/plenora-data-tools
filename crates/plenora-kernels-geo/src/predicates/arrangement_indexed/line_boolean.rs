@@ -100,7 +100,7 @@ const fn selected(op: LineBooleanOp, left: bool, right: bool) -> bool {
     }
 }
 
-fn point_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
+pub(super) fn point_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     let x = a.x.try_cmp(&b.x)?;
     if x.is_eq() {
         a.y.try_cmp(&b.y)
@@ -109,7 +109,7 @@ fn point_cmp(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     }
 }
 
-fn edge_cmp(a: &Edge, b: &Edge) -> Result<Ordering, PredicateError> {
+pub(super) fn edge_cmp(a: &Edge, b: &Edge) -> Result<Ordering, PredicateError> {
     let first = point_cmp(&a.a, &b.a)?;
     if first.is_eq() {
         point_cmp(&a.b, &b.b)
@@ -118,7 +118,7 @@ fn edge_cmp(a: &Edge, b: &Edge) -> Result<Ordering, PredicateError> {
     }
 }
 
-fn ordered_ids<T>(
+pub(super) fn ordered_ids<T>(
     values: &[T],
     cmp: impl Fn(&T, &T) -> Result<Ordering, PredicateError>,
     work: &mut Work<'_>,
@@ -368,11 +368,11 @@ fn execute(
         publication.support = Some(support);
         work.push(&mut published, publication)?;
     }
-    verify_publication(&published, &originals, false, work)?;
+    verify_publication(&published, &originals, false, None, work)?;
     finish(components, filter, work)
 }
 
-fn finish(
+pub(super) fn finish(
     mut components: CountedVec<Geometry<f64>>,
     filter: Option<u8>,
     work: &mut Work<'_>,
@@ -471,14 +471,14 @@ fn coordinate(p: &P, work: &mut Work<'_>) -> Result<Coord<f64>, LineBooleanError
 }
 
 // Ordine numerico finito; i due zeri rappresentano lo stesso sito.
-fn coordinate_cmp(a: Coord<f64>, b: Coord<f64>) -> Ordering {
+pub(super) fn coordinate_cmp(a: Coord<f64>, b: Coord<f64>) -> Ordering {
     let canonical = |v: f64| if v.to_bits() << 1 == 0 { 0.0 } else { v };
     canonical(a.x)
         .total_cmp(&canonical(b.x))
         .then_with(|| canonical(a.y).total_cmp(&canonical(b.y)))
 }
 
-fn sort_output<T>(
+pub(super) fn sort_output<T>(
     values: &mut [T],
     cmp: impl Fn(&T, &T) -> Ordering,
     work: &mut Work<'_>,
@@ -521,17 +521,54 @@ impl Originals {
         b: &Geometry<f64>,
         work: &mut Work<'_>,
     ) -> Result<Self, PredicateError> {
-        Self::from_coords(a.coords_iter().chain(b.coords_iter()), work)
+        Self::many([a, b], work)
+    }
+    pub(super) fn many<'g>(
+        geometries: impl IntoIterator<Item = &'g Geometry<f64>>,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
+        let mut values = CountedVec::new();
+        let mut pending = CountedVec::new();
+        for geometry in geometries {
+            work.push(&mut pending, geometry)?;
+            while let Some(geometry) = pending.pop() {
+                work.step()?;
+                if let Geometry::GeometryCollection(gs) = geometry {
+                    for child in gs.0.iter().rev() {
+                        work.push(&mut pending, child)?;
+                    }
+                } else {
+                    match geometry {
+                        Geometry::MultiLineString(ls) => {
+                            for line in &ls.0 {
+                                Self::collect(line.coords_iter(), &mut values, work)?;
+                            }
+                        }
+                        Geometry::Polygon(p) => Self::collect_polygon(p, &mut values, work)?,
+                        Geometry::MultiPolygon(ps) => {
+                            for polygon in &ps.0 {
+                                Self::collect_polygon(polygon, &mut values, work)?;
+                            }
+                        }
+                        _ => Self::collect(geometry.coords_iter(), &mut values, work)?,
+                    }
+                }
+            }
+        }
+        Self::from_values(values, work)
     }
     pub(crate) fn from_coords(
         coords: impl Iterator<Item = Coord<f64>>,
         work: &mut Work<'_>,
     ) -> Result<Self, PredicateError> {
         let mut values = CountedVec::new();
-        for c in coords {
-            work.nodes(1)?;
-            work.push(&mut values, (P::of_in(c, work)?, c))?;
-        }
+        Self::collect(coords, &mut values, work)?;
+        Self::from_values(values, work)
+    }
+    fn from_values(
+        values: CountedVec<(P, Coord<f64>)>,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
         let mut ids = CountedVec::new();
         for id in 0..values.len() {
             work.push(&mut ids, id)?;
@@ -543,6 +580,29 @@ impl Originals {
         )?;
         ids.dedup_by(|a, b| Ok(values[*a].0 == values[*b].0), work)?;
         Ok(Self { values, ids })
+    }
+    fn collect(
+        coords: impl Iterator<Item = Coord<f64>>,
+        values: &mut CountedVec<(P, Coord<f64>)>,
+        work: &mut Work<'_>,
+    ) -> Result<(), PredicateError> {
+        work.step()?;
+        for c in coords {
+            work.nodes(1)?;
+            work.push(values, (P::of_in(c, work)?, c))?;
+        }
+        Ok(())
+    }
+    fn collect_polygon(
+        p: &geo::Polygon<f64>,
+        values: &mut CountedVec<(P, Coord<f64>)>,
+        work: &mut Work<'_>,
+    ) -> Result<(), PredicateError> {
+        work.step()?;
+        for ring in std::iter::once(p.exterior()).chain(p.interiors()) {
+            Self::collect(ring.coords_iter(), values, work)?;
+        }
+        Ok(())
     }
     pub(crate) fn coordinate(
         &self,
@@ -573,6 +633,7 @@ pub(crate) struct PublishedEdge<'a> {
     coords: [Coord<f64>; 2],
     // Lato immutato cui il segmento pubblicato deve restare aderente.
     pub(crate) support: Option<&'a Edge>,
+    pub(crate) surface: bool,
 }
 impl<'a> PublishedEdge<'a> {
     pub(crate) fn new(
@@ -584,6 +645,7 @@ impl<'a> PublishedEdge<'a> {
         Ok(Self {
             exact: [&edge.a, &edge.b],
             support: None,
+            surface: false,
             coords,
             rounded: Edge {
                 a: P::of_in(coords[0], work)?,
@@ -600,6 +662,7 @@ impl<'a> PublishedEdge<'a> {
         Ok(Self {
             exact: [p, p],
             support: None,
+            surface: false,
             coords: [coord, coord],
             rounded: Edge {
                 a: P::of_in(coord, work)?,
@@ -609,18 +672,133 @@ impl<'a> PublishedEdge<'a> {
     }
 }
 
+// Le facce del completamento possono condividere lati: restano una collezione
+// di Polygon validi con interni disgiunti, non un MultiPolygon OGC.
+fn surface_polygons<'a>(
+    geometry: &'a Geometry<f64>,
+    work: &mut Work<'_>,
+) -> Result<CountedVec<&'a geo::Polygon<f64>>, LineBooleanError> {
+    let mut polygons = CountedVec::new();
+    match geometry {
+        Geometry::MultiPolygon(ps) => {
+            for polygon in &ps.0 {
+                work.push(&mut polygons, polygon)?;
+            }
+        }
+        Geometry::GeometryCollection(gs) => {
+            for geometry in &gs.0 {
+                work.step()?;
+                let Geometry::Polygon(polygon) = geometry else {
+                    return Err(LineBooleanError::InvalidRoundedTopology);
+                };
+                work.push(&mut polygons, polygon)?;
+            }
+        }
+        _ => return Err(LineBooleanError::InvalidRoundedTopology),
+    }
+    Ok(polygons)
+}
+
+// Ogni lato serializzato deve consumare esattamente un lato del certificato
+// superficiale, nello stesso verso e con gli stessi bit delle coordinate.
+fn verify_surface_edges(
+    polygons: &[&geo::Polygon<f64>],
+    edges: &[PublishedEdge<'_>],
+    work: &mut Work<'_>,
+) -> Result<(), LineBooleanError> {
+    let mut consumed = CountedVec::new();
+    for edge in edges {
+        work.push(&mut consumed, !edge.surface)?;
+    }
+    for polygon in polygons {
+        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            work.step()?;
+            for pair in ring.0.windows(2) {
+                work.step()?;
+                let mut found = false;
+                for (id, edge) in edges.iter().enumerate() {
+                    work.step()?;
+                    if consumed[id] {
+                        continue;
+                    }
+                    if pair.iter().zip(edge.coords).all(|(a, b)| {
+                        a.x.to_bits() == b.x.to_bits() && a.y.to_bits() == b.y.to_bits()
+                    }) {
+                        consumed[id] = true;
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(LineBooleanError::InvalidRoundedTopology);
+                }
+            }
+        }
+    }
+    for used in consumed {
+        work.step()?;
+        if !used {
+            return Err(LineBooleanError::InvalidRoundedTopology);
+        }
+    }
+    Ok(())
+}
+
+fn verify_rings(
+    polygons: &[&geo::Polygon<f64>],
+    work: &mut Work<'_>,
+) -> Result<(), LineBooleanError> {
+    for polygon in polygons {
+        for (ring_id, ring) in std::iter::once(polygon.exterior())
+            .chain(polygon.interiors())
+            .enumerate()
+        {
+            work.step()?;
+            if ring.0.len() < 4 || ring.0.first() != ring.0.last() {
+                return Err(LineBooleanError::InvalidRoundedTopology);
+            }
+            let mut minimum = 0;
+            for (i, c) in ring.0[..ring.0.len() - 1].iter().enumerate() {
+                work.step()?;
+                if coordinate_cmp(*c, ring.0[minimum]).is_lt() {
+                    minimum = i;
+                }
+            }
+            let n = ring.0.len() - 1;
+            work.nodes(3)?;
+            let p = P::of_in(ring.0[minimum], work)?;
+            let prev = P::of_in(ring.0[(minimum + n - 1) % n], work)?;
+            let next = P::of_in(ring.0[(minimum + 1) % n], work)?;
+            let sign = p.try_sub(&prev)?.try_cross(&next.try_sub(&p)?)?.sign();
+            if sign
+                != if ring_id == 0 {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            {
+                return Err(LineBooleanError::InvalidRoundedTopology);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Verifica unica della pubblicazione di un grafo atomico: conversione corretta,
 /// iniettivita' dei siti, assenza di nuovi contatti/overlap e ordine dei raggi.
 /// Gli anelli semplici del grafo non possono collassare o invertirsi: nessuna
 /// fusione, nessun nuovo incrocio e nessun cambio di verso dei settori non nulli.
-/// I poligoni di questa API sono inoltre copie bit per bit, gia' validate.
+/// Gli anelli costruiti consumano i lati superficiali orientati del certificato,
+/// conservano il verso e superano la validazione OGC prima della pubblicazione.
 /// In modalita' atomica non rinoda razionali costruiti. Con `directed_path`
 /// conserva anche gli incroci interni: noda testimone e uscita, confronta
 /// ordine lungo i lati e identita' dei siti, senza pubblicare i nodi ausiliari.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn verify_publication(
     edges: &[PublishedEdge<'_>],
     originals: &Originals,
     directed_path: bool,
+    polygons: Option<&Geometry<f64>>,
     work: &mut Work<'_>,
 ) -> Result<(), LineBooleanError> {
     let mut vertices = CountedVec::new();
@@ -668,44 +846,67 @@ pub(crate) fn verify_publication(
     }
     if directed_path {
         verify_path_pairs(edges, work)?;
-        return Ok(());
-    }
-    let mut invalid = false;
-    let scan = crate::noding::visit(&refs, work, |i, j, hits, work| {
-        let (a, b) = (&edges[i], &edges[j]);
-        for hit in hits.into_iter().flatten() {
-            work.step()?;
-            let mut shared = false;
-            for (ai, ap) in [&a.rounded.a, &a.rounded.b].into_iter().enumerate() {
-                for (bi, bp) in [&b.rounded.a, &b.rounded.b].into_iter().enumerate() {
-                    work.step()?;
-                    if ap == &hit && bp == &hit && a.exact[ai] == b.exact[bi] {
-                        shared = true;
-                        let before = a.exact[1 - ai]
-                            .try_sub(a.exact[ai])?
-                            .try_cross(&b.exact[1 - bi].try_sub(b.exact[bi])?)?
-                            .sign();
-                        let after = [&a.rounded.a, &a.rounded.b][1 - ai]
-                            .try_sub(ap)?
-                            .try_cross(&[&b.rounded.a, &b.rounded.b][1 - bi].try_sub(bp)?)?
-                            .sign();
-                        if !before.is_eq() && before != after {
-                            invalid = true;
+    } else {
+        let mut invalid = false;
+        let scan = crate::noding::visit(&refs, work, |i, j, hits, work| {
+            let (a, b) = (&edges[i], &edges[j]);
+            for hit in hits.into_iter().flatten() {
+                work.step()?;
+                let mut shared = false;
+                for (ai, ap) in [&a.rounded.a, &a.rounded.b].into_iter().enumerate() {
+                    for (bi, bp) in [&b.rounded.a, &b.rounded.b].into_iter().enumerate() {
+                        work.step()?;
+                        if ap == &hit && bp == &hit && a.exact[ai] == b.exact[bi] {
+                            shared = true;
+                            let before = a.exact[1 - ai]
+                                .try_sub(a.exact[ai])?
+                                .try_cross(&b.exact[1 - bi].try_sub(b.exact[bi])?)?
+                                .sign();
+                            let after = [&a.rounded.a, &a.rounded.b][1 - ai]
+                                .try_sub(ap)?
+                                .try_cross(&[&b.rounded.a, &b.rounded.b][1 - bi].try_sub(bp)?)?
+                                .sign();
+                            if !before.is_eq() && before != after {
+                                invalid = true;
+                            }
                         }
                     }
                 }
+                if !shared {
+                    invalid = true;
+                }
             }
-            if !shared {
-                invalid = true;
+            Ok(())
+        });
+        if invalid {
+            return Err(LineBooleanError::InvalidRoundedTopology);
+        }
+        scan?;
+    }
+    work.step()?;
+    if let Some(polygons) = polygons {
+        let components = surface_polygons(polygons, work)?;
+        verify_surface_edges(&components, edges, work)?;
+        verify_rings(&components, work)?;
+        let empty = Geometry::MultiPoint(MultiPoint::new(Vec::new()));
+        match super::relate(polygons, &empty, work) {
+            Err(PredicateError::InvalidGeometry { .. }) => {
+                return Err(LineBooleanError::InvalidRoundedTopology);
+            }
+            result => {
+                result?;
             }
         }
-        Ok(())
-    });
-    if invalid {
-        return Err(LineBooleanError::InvalidRoundedTopology);
+        if let Geometry::GeometryCollection(gs) = polygons {
+            for (i, a) in gs.0.iter().enumerate() {
+                for b in &gs.0[..i] {
+                    if super::relate(a, b, work)?.cells()[0] == b'2' {
+                        return Err(LineBooleanError::InvalidRoundedTopology);
+                    }
+                }
+            }
+        }
     }
-    scan?;
-    work.step()?;
     Ok(())
 }
 
