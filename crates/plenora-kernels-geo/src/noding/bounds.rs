@@ -66,7 +66,11 @@
 //! <= P: usare un dominio uniforme allarga, non restringe, il limite.
 //! Le direzioni vengono SOMMATE A COPPIE, mai accumulate nel ciclo;
 //! i campioni vengono costruiti dai valori critici, mai da altri campioni.
-//! Edge contiene sempre estremi binary64, mai nodi reinseriti come estremi.
+//! Il noder riceve sempre estremi binary64, mai nodi reinseriti come estremi.
+//! Le booleane lineari usano anche Edge con estremi C per contains, senza
+//! rinodarli: sub(C,C)=(11573,10546), cross(sub(C,C),sub(C,C))=(44239,42184).
+//! Questi intermedi sono inclusi nel massimo globale; i loro punti medi
+//! sono nel dominio X, incluso nel dominio uniforme P della classificazione.
 //! Questa proprieta' e' indispensabile: rinodare segmenti con estremi
 //! razionali richiederebbe un'altra derivazione, non la stessa costante.
 //!
@@ -155,6 +159,7 @@ mod tests {
             (r.mul(t), Envelope(19201, 19251)),
             (f.add(r.mul(t)), Envelope(20277, 20326)),
             (c.add(c), Envelope(11573, 10546)),
+            (c.add(c).cross(c.add(c)), Envelope(44239, 42184)),
             (x, Envelope(11574, 10548)),
             (offset, Envelope(12650, 11623)),
             (scaled, Envelope(14750, 13773)),

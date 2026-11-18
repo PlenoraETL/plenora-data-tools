@@ -1429,6 +1429,12 @@
     "[[\"token\",\"if\"],[\"token\",\"testo\"],[\"token\",\".\"],[\"token\",\"contains\"],[\"token\",\"(\"],[\"string\",\"self-intersection\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"Self\"],[\"token\",\":\"],[\"token\",\":\"]]",
     "[[\"token\",\"let\"],[\"token\",\"hull\"],[\"token\",\"=\"],[\"token\",\"trasformazione_protetta\"],[\"token\",\"(\"],[\"string\",\"convex_hull\"],[\"token\",\",\"],[\"token\",\"|\"],[\"token\",\"|\"],[\"token\",\"normalized\"],[\"token\",\".\"]]"
   ],
+  "crates/plenora-kernels-geo/src/offset.rs": [
+    "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]",
+    "[[\"token\",\"0\"],[\"token\",\"|\"],[\"token\",\"|\"],[\"token\",\"matches\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Mitered\"],[\"token\",\"{\"],[\"token\",\"limit\"],[\"token\",\"}\"]]",
+    "[[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"if\"],[\"token\",\"matches\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\",\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Rounded\"],[\"token\",\")\"],[\"token\",\"{\"],[\"token\",\"let\"]]",
+    "[[\"token\",\"bevel\"],[\"token\",\"=\"],[\"token\",\"if\"],[\"token\",\"outer\"],[\"token\",\"{\"],[\"token\",\"match\"],[\"token\",\"options\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\"{\"],[\"token\",\"OffsetJoin\"],[\"token\",\":\"],[\"token\",\":\"],[\"token\",\"Mitered\"],[\"token\",\"{\"],[\"token\",\"limit\"],[\"token\",\"}\"]]"
+  ],
   "crates/plenora-kernels-geo/src/operations.rs": [
     "[[\"token\",\":\"],[\"token\",\"InvalidParameter\"],[\"token\",\"{\"],[\"token\",\"name\"],[\"token\",\":\"],[\"string\",\"distance\"],[\"token\",\",\"],[\"token\",\"reason\"],[\"token\",\":\"],[\"string\",\"deve essere finita\"],[\"token\",\",\"]]",
     "[[\"token\",\":\"],[\"token\",\"InvalidParameter\"],[\"token\",\"{\"],[\"token\",\"name\"],[\"token\",\":\"],[\"string\",\"geometry\"],[\"token\",\",\"],[\"token\",\"reason\"],[\"token\",\":\"],[\"string\",\"numero di coordinate oltre il dominio degli indici della semplificazione\"],[\"token\",\",\"]]",
@@ -1467,6 +1473,23 @@
     "[[\"token\",\"dimension\"],[\"token\",\"-\"],[\"token\",\"b\"],[\"char\",\"'0'\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"b_connected\"],[\"token\",\",\"]]",
     "[[\"token\",\"{\"],[\"token\",\"a\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\"{\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean.rs": [
+    "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"}\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean/tests.rs": [
+    "[[\"token\",\":\"],[\"token\",\"InvalidGeometry\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\".\"],[\"token\",\".\"],[\"token\",\"}\"],[\"token\",\")\"]]",
+    "[[\"token\",\":\"],[\"token\",\"InvalidGeometry\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\".\"],[\"token\",\".\"],[\"token\",\"}\"],[\"token\",\")\"]]",
+    "[[\"token\",\":\"],[\"token\",\"NonFiniteCoordinate\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"right\"],[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"Cancelled\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"worker\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"]]",
+    "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"linee\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]",
+    "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"poligono\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"let\"]]",
+    "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"punti\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs": [
+    "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"}\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
   ],
   "crates/plenora-kernels-geo/src/predicates/baseline_600.rs": [
     "[[\"token\",\";\"],[\"token\",\"validate\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"],[\"token\",\"evaluate_unchecked\"],[\"token\",\"(\"]]",

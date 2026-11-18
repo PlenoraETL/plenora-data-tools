@@ -119,6 +119,42 @@ mod tests {
         assert_eq!(budget.live(), 0);
     }
 
+    #[test]
+    #[deny(clippy::disallowed_methods)]
+    fn square_roots_and_preallocation_bit_ceiling() {
+        let budget = Rc::new(Budget::new(u64::MAX));
+        // Fonte C1: GOP-015A, radice razionale iff numeratore e denominatore
+        // canonici sono quadrati; nessuna normalizzazione floating point.
+        for value in [0.0, 1.0, 3.0, f64::from_bits(1), f64::MAX] {
+            let q = Q::float_in(value, &budget).unwrap();
+            let square = q.try_mul(&q).unwrap();
+            assert_eq!(square.try_sqrt_exact().unwrap().unwrap(), q);
+        }
+        assert!(Q::int_in(2, &budget)
+            .unwrap()
+            .try_sqrt_exact()
+            .unwrap()
+            .is_none());
+        // Fonte C1: GOP-027; rifiuto prima di allocare un intero oltre
+        // MAX_BITS, anche quando il DAG degli editor supera quello del noder.
+        let large = CountedInt::created(BigInt::from(1) << (MAX_BITS - 1), &budget).unwrap();
+        let two = CountedInt::int(2, &budget).unwrap();
+        let live = budget.live();
+        assert!(matches!(
+            large.mul(&two),
+            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+        ));
+        assert!(matches!(
+            large.add(&large),
+            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+        ));
+        assert!(matches!(
+            large.shift(1),
+            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+        ));
+        assert_eq!(budget.live(), live);
+    }
+
     fn same(actual: &Q, expected: &oracle::Q) {
         assert_eq!(actual.n.value, expected.n);
         assert_eq!(actual.d.value, expected.d);
@@ -177,6 +213,15 @@ impl PartialEq for CountedInt {
 impl Eq for CountedInt {}
 
 impl CountedInt {
+    // Il DAG degli editor puo' essere piu' profondo del noder. Controllare
+    // prima dell'operatore mantiene il massimo per valore anche in quel caso.
+    const fn admit_bits(bits: u64) -> Result<(), PredicateError> {
+        if bits > MAX_BITS {
+            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+        } else {
+            Ok(())
+        }
+    }
     fn same_budget(&self, b: &Self) -> Result<(), PredicateError> {
         if Rc::ptr_eq(self.lease.budget(), b.lease.budget()) {
             Ok(())
@@ -211,16 +256,19 @@ impl CountedInt {
 
     fn add(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::admit_bits(self.value.bits().max(b.value.bits()) + 1)?;
         Self::created(&self.value + &b.value, self.lease.budget())
     }
 
     fn sub(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::admit_bits(self.value.bits().max(b.value.bits()) + 1)?;
         Self::created(&self.value - &b.value, self.lease.budget())
     }
 
     fn mul(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::admit_bits(self.value.bits() + b.value.bits())?;
         Self::created(&self.value * &b.value, self.lease.budget())
     }
 
@@ -241,6 +289,7 @@ impl CountedInt {
     }
 
     fn shift(&self, bits: u32) -> Result<Self, PredicateError> {
+        Self::admit_bits(self.value.bits() + u64::from(bits))?;
         Self::created(&self.value << bits, self.lease.budget())
     }
 }
@@ -254,6 +303,20 @@ pub struct Q {
 }
 
 impl Q {
+    /// Radice razionale esatta, oppure assenza se il valore e' irrazionale.
+    pub fn try_sqrt_exact(&self) -> Result<Option<Self>, PredicateError> {
+        if self.sign().is_lt() {
+            return Err(PredicateError::CalcoloNonConcluso("radicando negativo"));
+        }
+        let n = CountedInt::created(self.n.value.sqrt(), self.n.lease.budget())?;
+        let d = CountedInt::created(self.d.value.sqrt(), self.d.lease.budget())?;
+        if n.mul(&n)? == self.n && d.mul(&d)? == self.d {
+            Ok(Some(Self::new(n, d)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub(super) fn belongs_to(&self, budget: &Rc<Budget>) -> bool {
         Rc::ptr_eq(self.n.lease.budget(), budget) && Rc::ptr_eq(self.d.lease.budget(), budget)
     }
