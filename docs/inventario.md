@@ -121,6 +121,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 | `scripts/test_check_docs.py` | 14 |
 | `scripts/test_check_esito_unico.py` | 23 |
 | `scripts/test_check_tempo.py` | 5 |
+| `scripts/test_ci_locale.py` | 16 |
 | `scripts/test_clippy_esito.py` | 1 |
 | `scripts/test_fuzz_crs.py` | 4 |
 | `scripts/test_genera_inventario.py` | 6 |
