@@ -1693,6 +1693,7 @@
       "nested_members_and_permutations_preserve_cells"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs": [
+      "sparse_work_and_exact_public_threshold",
       "unreleased_limits_may_change_without_changing_the_matrix",
       "rational_intersection_and_full_finite_exponent_range",
       "actual_work_and_reservation_thresholds",
@@ -1702,6 +1703,11 @@
       "invalid_polygon_topology_is_not_silently_classified",
       "every_named_predicate_on_the_cartesian_corpus",
       "nested_members_and_permutations_preserve_cells"
+    ],
+    "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
+      "sparse_queries_have_analytic_work",
+      "grid_queries_have_analytic_work",
+      "interval_candidates_match_exhaustive_including_reversed_bounds"
     ],
     "crates/plenora-kernels-geo/src/riproiezione/tests.rs": [
       "tipi_e_struttura_si_conservano",

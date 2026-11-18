@@ -8148,6 +8148,12 @@
       "reason": "Copia letterale delle API pubblicate nella 6.0.0, usata come riferimento: nessun dato Arrow ricevuto.",
       "arrow_arguments": []
     },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_exhaustive.rs::relate": {
+      "signature": "pub fn relate( left: &Geometry<f64>, right: &Geometry<f64>, work: &mut Work<'_>, ) -> Result<De9imMatrix, PredicateError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
     "crates/plenora-kernels-geo/src/geodesic_densify.rs::geodesic_densify_with_limits": {
       "signature": "pub fn geodesic_densify_with_limits( parts: &[LineString<f64>], crs: &ResolvedCrs, maximum_m: f64, limits: GeodesicDensifyLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError>",
       "classification": "non riceve dati esterni",

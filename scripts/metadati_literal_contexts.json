@@ -2357,5 +2357,13 @@
     "[[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"reticolo\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"assert_eq\"],[\"token\",\"!\"],[\"token\",\"(\"]]",
     "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{baseline:?}\"],[\"token\",\")\"]]",
     "[[\"token\",\"format\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"{current:?}\"],[\"token\",\")\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_exhaustive.rs": [
+    "[[\"token\",\";\"],[\"token\",\"b\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"dimension\"],[\"token\",\"-\"],[\"token\",\"b\"],[\"char\",\"'0'\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"a_connected\"],[\"token\",\",\"]]",
+    "[[\"token\",\"dimension\"],[\"token\",\"-\"],[\"token\",\"b\"],[\"char\",\"'0'\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"b_connected\"],[\"token\",\",\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"a\"],[\"token\",\".\"],[\"token\",\"validate_rings\"],[\"token\",\"(\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
   ]
 }
