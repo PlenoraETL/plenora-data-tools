@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(actual.d.value, expected.d);
     }
 
-    /// IEEE 754 binary64, algebra delle frazioni e AGENTS §3: confronto
+    /// IEEE 754 binary64, algebra delle frazioni e regola 3 di AGENTS: confronto
     /// input per input con il percorso generico precedente, compresi
     /// subnormali, esponenti estremi, zeri con segno e segni opposti.
     #[test]

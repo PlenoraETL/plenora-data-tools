@@ -182,7 +182,7 @@ mod tests {
     // Conserva il dominio teorico separato dai bit effettivi. Le operazioni
     // costruiscono anche numeratore e denominatore NON RIDOTTI con BigInt:
     // verificare soltanto il risultato di Q::new perderebbe proprio il
-    // problema di capacita' che questa tranche deve risolvere.
+    // problema di capacita' che il bilancio dell'aritmetica deve coprire.
     struct Witness {
         value: crate::noding::oracle::Q,
         envelope: Envelope,
