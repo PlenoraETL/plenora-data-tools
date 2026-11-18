@@ -14,6 +14,13 @@ la cui versione non ha qui una voce datata.
 
 ### Aggiunte
 
+- API Rust `line_boolean` per booleane XY punto/linea e linea/poligono:
+  noding razionale e pubblicazione GOP-015A al binary64 piu' vicino,
+  meta' al pari, errore massimo di mezza ulp per ordinata costruita.
+  Vertici d'ingresso conservati bit per bit; verifica del grafo pubblicato
+  con errore tipizzato `InvalidRoundedTopology` per collassi, incroci nuovi
+  o inversioni. Risorse, cancellazione e deadline restano errori distinti.
+
 - `extended_algorithms::polygonize_with_limits`: facce del linework sul noder comune con `RelateLimits` e `PredicateError`; polygonize 6.0.0 invariata.
 
 - `extended_algorithms::split_line_with_limits`: split sul noder comune con `RelateLimits` e `PredicateError`; `split_line` 6.0.0 invariata.

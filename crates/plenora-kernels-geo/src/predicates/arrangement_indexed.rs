@@ -1233,3 +1233,5 @@ mod tests {
 
 /// Booleane planari con almeno un operando puntuale.
 pub mod point_boolean;
+
+pub mod line_boolean;

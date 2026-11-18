@@ -242,7 +242,7 @@ fn copy_line(
     Ok(LineString::new(coords.export(work)?))
 }
 
-fn copy_higher(
+pub(super) fn copy_higher(
     g: &Geometry<f64>,
     work: &mut Work<'_>,
 ) -> Result<Option<Geometry<f64>>, PredicateError> {

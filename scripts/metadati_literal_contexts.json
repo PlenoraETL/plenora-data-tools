@@ -2369,5 +2369,18 @@
   "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs": [
     "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\"}\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean.rs": [
+    "[[\"token\",\";\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"right\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"}\"],[\"token\",\"validate_structure\"],[\"token\",\"(\"],[\"token\",\"left\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean/tests.rs": [
+    "[[\"token\",\":\"],[\"token\",\"InvalidGeometry\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\".\"],[\"token\",\".\"],[\"token\",\"}\"],[\"token\",\")\"]]",
+    "[[\"token\",\":\"],[\"token\",\"InvalidGeometry\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\".\"],[\"token\",\".\"],[\"token\",\"}\"],[\"token\",\")\"]]",
+    "[[\"token\",\":\"],[\"token\",\"NonFiniteCoordinate\"],[\"token\",\"{\"],[\"token\",\"side\"],[\"token\",\":\"],[\"string\",\"right\"],[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"]]",
+    "[[\"token\",\"Cancelled\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"worker\"],[\"token\",\".\"],[\"token\",\"join\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"],[\"token\",\"(\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"]]",
+    "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"linee\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]",
+    "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"poligono\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"let\"]]",
+    "[[\"token\",\"else\"],[\"token\",\"{\"],[\"token\",\"panic\"],[\"token\",\"!\"],[\"token\",\"(\"],[\"string\",\"punti\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"assert_eq\"]]"
   ]
 }
