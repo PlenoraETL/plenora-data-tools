@@ -24,8 +24,8 @@
 //! Alcune varianti vengono dall'engine, dalla CLI e dal trasporto fra
 //! processi di `plenora-data-tools` e qui nessun codice le produce
 //! (`Execution`, `Protocol`): lo dice il rustdoc di ciascuna. `Cancelled` e
-//! `Timeout` le produce il runner (`plenora-pipeline`), al controllo
-//! cooperativo fra i passi.
+//! `Timeout` provengono dai controlli cooperativi del runner e dei kernel;
+//! la scadenza precede sempre l'annullamento (GOP-028).
 //!
 //! La forma pubblica, `plenora-error-v1`, è [`PlenoraError::public_projection`]
 //! ([`PublicError`]): i quattro assi, un `code` stabile dove l'errore ne ha

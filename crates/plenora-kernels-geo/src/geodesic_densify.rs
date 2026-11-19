@@ -5,7 +5,9 @@
     reason = "Identita geometrica e casi di simmetria esatti G2"
 )]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use geo::{Coord, LineString};
@@ -15,6 +17,10 @@ use thiserror::Error;
 
 use crate::geodetica::EllissoideGeodetico;
 
+mod geometry;
+mod validation;
+pub use geometry::{geodesic_densify_geometry_with_limits, GeodesicGeometryDensifyLimits};
+
 /// Limiti cumulativi dell'output, verificati prima delle prenotazioni.
 #[derive(Clone, Copy, Debug)]
 pub struct GeodesicDensifyLimits {
@@ -23,13 +29,25 @@ pub struct GeodesicDensifyLimits {
     /// Capacita' richiesta dei vettori di parti e coordinate, in byte.
     /// Esclude input, stack e overhead dell'allocatore.
     pub max_reserved_bytes: u64,
-    /// Scadenza monotona; l'annullamento ha precedenza.
+    /// Scadenza monotona; prevale sull'annullamento allo stesso checkpoint.
     pub deadline: Option<Instant>,
 }
 
 /// Fallimenti senza coordinate o valori dell'ingresso.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum GeodesicDensifyError {
+    /// Tipo fuori dal dominio GOP-007 (`unsupported`).
+    #[error("tipo geometrico non supportato")]
+    UnsupportedGeometry,
+    /// Struttura o relazione di contenimento non valida (`data_mapping`).
+    #[error("superficie geografica non valida")]
+    InvalidGeometry,
+    /// Contatti, incroci o complemento ambiguo (`unsupported`).
+    #[error("superficie geodetica non supportata")]
+    UnsupportedSurface,
+    /// Lavoro di validazione esaurito (`resource_limit`).
+    #[error("limite di lavoro geodetico superato")]
+    WorkLimit,
     /// Il CRS non e' geografico.
     #[error("densify geodetico richiede un CRS geografico")]
     GeographicRequired,
@@ -55,7 +73,7 @@ pub enum GeodesicDensifyError {
     #[error("allocazione geodetica fallita")]
     Allocation,
     /// Precisione o lunghezza delle divisioni non certificabile.
-    #[error("accuratezza geodetica non dimostrata")]
+    #[error("GEOMETRY_ACCURACY_UNPROVEN")]
     AccuracyUnproven,
     /// Annullamento cooperativo.
     #[error("densify geodetico annullato")]
@@ -69,47 +87,63 @@ pub enum GeodesicDensifyError {
 // Un micrometro copre anche conversioni angolari e composizione direct/inverse.
 const ROUND_OFF_M: f64 = 1e-6;
 
-struct DensifyWork<'a> {
-    limits: GeodesicDensifyLimits,
-    cancelled: Option<&'a AtomicBool>,
-    points: u64,
-    bytes: u64,
-}
-
-impl DensifyWork<'_> {
-    fn checkpoint(&self) -> Result<(), GeodesicDensifyError> {
-        if self
-            .cancelled
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            return Err(GeodesicDensifyError::Cancelled);
-        }
-        if self
-            .limits
-            .deadline
-            .is_some_and(|end| Instant::now() >= end)
-        {
-            return Err(GeodesicDensifyError::DeadlineExceeded);
-        }
-        Ok(())
+use work::DensifyWork;
+mod work {
+    use super::{AtomicBool, GeodesicDensifyError, GeodesicDensifyLimits};
+    pub(super) struct DensifyWork<'a> {
+        limits: GeodesicDensifyLimits,
+        cancelled: Option<&'a AtomicBool>,
+        points: u64,
+        bytes: u64,
     }
 
-    fn charge(&mut self, points: u64, bytes: u64) -> Result<(), GeodesicDensifyError> {
-        self.points = self
-            .points
-            .checked_add(points)
-            .ok_or(GeodesicDensifyError::PointLimit)?;
-        if self.points > self.limits.max_points {
-            return Err(GeodesicDensifyError::PointLimit);
+    impl<'a> DensifyWork<'a> {
+        pub(super) const fn new(
+            limits: GeodesicDensifyLimits,
+            cancelled: Option<&'a AtomicBool>,
+        ) -> Self {
+            Self {
+                limits,
+                cancelled,
+                points: 0,
+                bytes: 0,
+            }
         }
-        self.bytes = self
-            .bytes
-            .checked_add(bytes)
-            .ok_or(GeodesicDensifyError::MemoryLimit)?;
-        if self.bytes > self.limits.max_reserved_bytes {
-            return Err(GeodesicDensifyError::MemoryLimit);
+        pub(super) const fn bytes(&self) -> u64 {
+            self.bytes
         }
-        Ok(())
+
+        pub(super) fn checkpoint(&self) -> Result<(), GeodesicDensifyError> {
+            crate::noding::check_interruption(
+                self.limits.deadline,
+                self.cancelled,
+                GeodesicDensifyError::DeadlineExceeded,
+                GeodesicDensifyError::Cancelled,
+            )?;
+            Ok(())
+        }
+
+        pub(super) fn charge(
+            &mut self,
+            points: u64,
+            bytes: u64,
+        ) -> Result<(), GeodesicDensifyError> {
+            self.points = self
+                .points
+                .checked_add(points)
+                .ok_or(GeodesicDensifyError::PointLimit)?;
+            if self.points > self.limits.max_points {
+                return Err(GeodesicDensifyError::PointLimit);
+            }
+            self.bytes = self
+                .bytes
+                .checked_add(bytes)
+                .ok_or(GeodesicDensifyError::MemoryLimit)?;
+            if self.bytes > self.limits.max_reserved_bytes {
+                return Err(GeodesicDensifyError::MemoryLimit);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -183,14 +217,25 @@ fn edge(
     let divisions = if length == 0.0 || length + ROUND_OFF_M <= maximum {
         1
     } else {
-        let count = (length / maximum).ceil().max(2.0);
+        if (length / maximum).ceil() > f64::from(u32::MAX) {
+            return Err(GeodesicDensifyError::PointLimit);
+        }
+        let available = 4.0_f64.mul_add(-ROUND_OFF_M, maximum);
+        if available <= 0.0 {
+            return Err(GeodesicDensifyError::AccuracyUnproven);
+        }
+        // Salto al primo intero compatibile con il certificato, poi verifica.
+        let count = (length / available).ceil().max(2.0);
         if !count.is_finite() || count > f64::from(u32::MAX) {
             return Err(GeodesicDensifyError::PointLimit);
         }
         // Il controllo precedente rende esatta la conversione intera.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let mut divisions = count as u32;
-        if 4.0_f64.mul_add(ROUND_OFF_M, length / f64::from(divisions)) > maximum {
+        loop {
+            if 4.0_f64.mul_add(ROUND_OFF_M, length / f64::from(divisions)) <= maximum {
+                break;
+            }
             divisions = divisions
                 .checked_add(1)
                 .ok_or(GeodesicDensifyError::PointLimit)?;
@@ -213,7 +258,7 @@ fn edge(
 ///
 /// Per lunghezza L, parte da n=max(1,ceil(L/h)); le divisioni sono a i*L/n
 /// dal primo estremo. Se il margine numerico di 4 micrometri non permette
-/// di certificare il massimo, aumenta n di uno. Un lato entro un micrometro
+/// di certificare il massimo, aumenta n fino a soddisfare il certificato. Un lato entro un micrometro
 /// dalla soglia riceve almeno due divisioni. Ogni tratto prodotto viene
 /// verificato con inverse e margine di un micrometro; se non certificabile,
 /// fallisce atomicamente. Il passo non e' un limite all'errore della forma.
@@ -242,12 +287,7 @@ pub fn geodesic_densify_with_limits(
     limits: GeodesicDensifyLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError> {
-    let mut work = DensifyWork {
-        limits,
-        cancelled,
-        points: 0,
-        bytes: 0,
-    };
+    let mut work = DensifyWork::new(limits, cancelled);
     work.checkpoint()?;
     if crs.kind() != CrsKind::Geographic {
         return Err(GeodesicDensifyError::GeographicRequired);
@@ -283,54 +323,7 @@ pub fn geodesic_densify_with_limits(
         .map_err(|_| GeodesicDensifyError::Allocation)?;
     for part in parts {
         work.checkpoint()?;
-        let mut count = usize::from(!part.0.is_empty());
-        for pair in part.0.windows(2) {
-            work.checkpoint()?;
-            let divisions = edge(pair[0], pair[1], &ellipsoid, maximum_m)?.divisions;
-            count = count
-                .checked_add(
-                    usize::try_from(divisions).map_err(|_| GeodesicDensifyError::PointLimit)?,
-                )
-                .ok_or(GeodesicDensifyError::PointLimit)?;
-        }
-        let mut points = Vec::new();
-        points
-            .try_reserve_exact(count)
-            .map_err(|_| GeodesicDensifyError::Allocation)?;
-        if let Some(&first) = part.0.first() {
-            points.push(first);
-        }
-        for pair in part.0.windows(2) {
-            work.checkpoint()?;
-            let segment = edge(pair[0], pair[1], &ellipsoid, maximum_m)?;
-            let mut previous = pair[0];
-            for i in 1..=segment.divisions {
-                work.checkpoint()?;
-                let point = if i == segment.divisions {
-                    pair[1]
-                } else {
-                    let (latitude, longitude): (f64, f64) = ellipsoid.geodetica().direct(
-                        pair[0].y,
-                        pair[0].x,
-                        segment.azimuth,
-                        segment.length * (f64::from(i) / f64::from(segment.divisions)),
-                    );
-                    canonical_coordinate(latitude, longitude)
-                };
-                coordinate(point)?;
-                let distance: f64 = ellipsoid
-                    .geodetica()
-                    .inverse(previous.y, previous.x, point.y, point.x);
-                if !distance.is_finite()
-                    || (!coincident(previous, point) && distance + ROUND_OFF_M > maximum_m)
-                {
-                    return Err(GeodesicDensifyError::AccuracyUnproven);
-                }
-                points.push(point);
-                previous = point;
-            }
-        }
-        output.push(LineString(points));
+        output.push(emit_part(part, &ellipsoid, maximum_m, &work)?);
     }
     work.checkpoint()?;
     Ok(output)
@@ -339,3 +332,62 @@ pub fn geodesic_densify_with_limits(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod geometry_tests;
+
+fn emit_part(
+    part: &LineString<f64>,
+    ellipsoid: &EllissoideGeodetico,
+    maximum_m: f64,
+    work: &DensifyWork<'_>,
+) -> Result<LineString<f64>, GeodesicDensifyError> {
+    let mut count = usize::from(!part.0.is_empty());
+    for pair in part.0.windows(2) {
+        work.checkpoint()?;
+        let divisions = edge(pair[0], pair[1], ellipsoid, maximum_m)?.divisions;
+        count = count
+            .checked_add(usize::try_from(divisions).map_err(|_| GeodesicDensifyError::PointLimit)?)
+            .ok_or(GeodesicDensifyError::PointLimit)?;
+    }
+    let mut points = Vec::new();
+    points
+        .try_reserve_exact(count)
+        .map_err(|_| GeodesicDensifyError::Allocation)?;
+    if let Some(&first) = part.0.first() {
+        points.push(first);
+    }
+    for pair in part.0.windows(2) {
+        work.checkpoint()?;
+        let segment = edge(pair[0], pair[1], ellipsoid, maximum_m)?;
+        let mut previous = pair[0];
+        for i in 1..=segment.divisions {
+            work.checkpoint()?;
+            let point = if i == segment.divisions {
+                pair[1]
+            } else {
+                let (latitude, longitude): (f64, f64) = ellipsoid.geodetica().direct(
+                    pair[0].y,
+                    pair[0].x,
+                    segment.azimuth,
+                    segment.length * (f64::from(i) / f64::from(segment.divisions)),
+                );
+                canonical_coordinate(latitude, longitude)
+            };
+            coordinate(point)?;
+            let distance: f64 = ellipsoid
+                .geodetica()
+                .inverse(previous.y, previous.x, point.y, point.x);
+            if !distance.is_finite()
+                || (!coincident(previous, point) && distance + ROUND_OFF_M > maximum_m)
+            {
+                return Err(GeodesicDensifyError::AccuracyUnproven);
+            }
+            points.push(point);
+            previous = point;
+        }
+    }
+
+    Ok(LineString(points))
+}

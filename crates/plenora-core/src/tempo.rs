@@ -6,6 +6,26 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::{PlenoraError, Result};
 
+/// GOP-028: controllo comune del workspace, scadenza prima dell'annullamento.
+/// Gli errori sono costruiti solo quando il controllo interrompe il lavoro.
+///
+/// # Errors
+/// L'errore di scadenza se raggiunta, altrimenti quello di annullamento.
+pub fn verifica_interruzione<E>(
+    scadenza: Option<Instant>,
+    annullamento: Option<&std::sync::atomic::AtomicBool>,
+    errore_scadenza: impl FnOnce() -> E,
+    errore_annullamento: impl FnOnce() -> E,
+) -> std::result::Result<(), E> {
+    if scadenza.is_some_and(|fine| Instant::now() >= fine) {
+        return Err(errore_scadenza());
+    }
+    if annullamento.is_some_and(|segnale| segnale.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err(errore_annullamento());
+    }
+    Ok(())
+}
+
 fn fuori_dominio() -> PlenoraError {
     PlenoraError::InvalidConfiguration("tempo fuori dal dominio rappresentabile".into())
 }

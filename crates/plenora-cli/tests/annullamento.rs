@@ -1,6 +1,7 @@
 //! Annullamento cooperativo (CLI 2.0, sezione 9): con il segnale alzato i
 //! comandi che lo dichiarano finiscono con `cancelled` ed exit 130, senza
-//! output; senza gestore installato non partono.
+//! output; con scadenza raggiunta prevalgono `timeout` ed exit 5 (GOP-028).
+//! Senza gestore installato non partono.
 //!
 //! Il segnale si alza qui direttamente: è lo stesso `Arc<AtomicBool>` che
 //! `main.rs` passa al gestore di Ctrl-C e SIGTERM (`ctrlc`). Che il sistema
@@ -66,8 +67,6 @@ fn segnale_alzato_annulla_senza_output() {
             format!("t={}", testo(&ingresso)),
             "--output".into(),
             testo(&uscita),
-            "--timeout-ms".into(),
-            "0".into(),
         ],
     ];
     for argomenti in &casi {
@@ -78,6 +77,19 @@ fn segnale_alzato_annulla_senza_output() {
         assert_eq!(errore["category"], "cancelled");
         assert_eq!(errore["code"], "EXECUTION_CANCELLED");
         assert_eq!(errore["remote_effect"], "none");
+        assert!(!uscita.exists());
+    }
+
+    // La stessa invocazione con entrambi i controlli attivi e' un timeout.
+    for argomenti in &casi {
+        let mut argomenti = argomenti.clone();
+        argomenti.extend(["--timeout-ms".into(), "0".into()]);
+        let esito = esegui_invocazione(&argomenti, &alzato);
+        assert_eq!(esito.codice, 5, "{}", esito.stdout);
+        let documento = documento(&esito.stdout);
+        assert_eq!(documento["error"]["category"], "timeout");
+        assert_eq!(documento["error"]["code"], "EXECUTION_DEADLINE_EXCEEDED");
+        assert_eq!(documento["error"]["remote_effect"], "none");
         assert!(!uscita.exists());
     }
 

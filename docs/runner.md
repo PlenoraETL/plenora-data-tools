@@ -253,7 +253,8 @@ di ogni passo e prima di consegnare gli output:
 - scadenza passata: `Timeout` (categoria `timeout`, codice
   `EXECUTION_DEADLINE_EXCEEDED`, come il vettore `data-run-timeout-error`
   del contratto);
-- con entrambi vince l'annullamento.
+- con entrambi vince sempre la scadenza (GOP-028), in tutto il workspace.
+  Runner, IO, CLI, SDK e kernel usano lo stesso controllo in `plenora-core`.
 
 Il testo dice dove («prima del passo `x` (table.sort)», «prima di
 consegnare gli output»), la fase anche: `write` prima di un passo,

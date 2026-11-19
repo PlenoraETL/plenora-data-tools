@@ -34,12 +34,12 @@ impl<'a> Work<'a> {
         }
     }
     pub(super) fn step(&mut self) -> Result<(), PredicateError> {
-        if self
-            .cancelled
-            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
-        {
-            return Err(PredicateError::Cancelled);
-        }
+        crate::noding::check_interruption(
+            self.limits.deadline,
+            self.cancelled,
+            PredicateError::DeadlineExceeded,
+            PredicateError::Cancelled,
+        )?;
         self.steps = self
             .steps
             .checked_add(1)
@@ -1253,5 +1253,23 @@ mod tests {
                 super::super::relate_matrix(&b, &other).expect("permutata")
             );
         }
+    }
+}
+
+/// Fonte GOP-028: anche l'oracolo differenziale osserva deadline prima del token.
+#[test]
+fn oracle_deadline_precedence_at_entry_and_during_work() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    for steps in [0, 5] {
+        let flag = AtomicBool::new(false);
+        let mut work = Work::new(RelateLimits::default(), Some(&flag));
+        for _ in 0..steps {
+            work.step().unwrap();
+        }
+        assert_eq!(work.steps, steps);
+        work.limits.deadline = Some(std::time::Instant::now());
+        flag.store(true, Ordering::Relaxed);
+        assert!(matches!(work.step(), Err(PredicateError::DeadlineExceeded)));
+        assert_eq!(work.steps, steps);
     }
 }

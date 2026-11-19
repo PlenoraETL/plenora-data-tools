@@ -7,11 +7,17 @@
 //! «Precisione delle operazioni geografiche»), `ResourceLimit` un limite di
 //! lavoro, d'uscita o di coppie superato (il piano e' corretto, sono i dati a
 //! non entrarci: la definizione di `PlenoraError::ResourceLimit`, come le
-//! tabellari; a `190c493` erano `InvalidPlan`), `InvalidPlan` il resto. Il
+//! tabellari; a `190c493` erano `InvalidPlan`), `InvalidPlan` i rifiuti del piano. La
+//! scadenza e' sempre `Timeout`, l'annullamento `Cancelled`. Il
 //! testo e' quello del kernel, che non porta valori di cella (al piu'
 //! l'indice di una riga del passo).
 
 use plenora_core::PlenoraError;
+use plenora_kernels_geo::coordinate_api::{CoordinateApiError, CoordinateErrorKind};
+use plenora_kernels_geo::geodesic_densify::GeodesicDensifyError;
+use plenora_kernels_geo::geodesic_distance::GeodesicDistanceError;
+use plenora_kernels_geo::preserve_shape_measure::ShapeMeasureError;
+
 use plenora_kernels_geo::advanced::AdvancedError;
 use plenora_kernels_geo::analysis::AnalysisError;
 use plenora_kernels_geo::cluster::ClusterError;
@@ -27,12 +33,22 @@ use plenora_kernels_geo::topology::TopologyError;
 /// Categoria di un errore di kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Classe {
+    /// Certificazione del calcolo non conclusa.
+    Esecuzione,
     /// Calcolo o validazione non conclusi, invariante violata.
     Interna,
-    /// Spostamento oltre la precisione dichiarata.
+    /// Dominio non supportato o precisione insufficiente.
     Precisione,
     /// Un limite di lavoro, d'uscita o di coppie superato.
     Limite,
+    /// Scadenza raggiunta, indipendentemente dal punto di controllo.
+    Scaduta,
+    /// Configurazione non valida.
+    Configurazione,
+    /// Dominio CRS non valido.
+    Crs,
+    /// Dati non validi.
+    Dati,
     /// Calcolo annullato dal chiamante.
     Annullata,
     /// Ingresso o parametri rifiutati dal kernel.
@@ -48,9 +64,19 @@ pub trait ErroreKernel: std::fmt::Display {
 /// L'errore nella categoria giusta, con il nome dell'operazione.
 pub fn del_kernel(op: &str, errore: &impl ErroreKernel) -> PlenoraError {
     match errore.classe() {
+        Classe::Esecuzione => PlenoraError::Execution {
+            node: String::new(),
+            operation: op.to_owned(),
+            execution_id: String::new(),
+            reason: errore.to_string(),
+        },
         Classe::Interna => PlenoraError::Internal(format!("{op}: {errore}")),
         Classe::Precisione => PlenoraError::Unsupported(format!("{op}: {errore}")),
         Classe::Limite => PlenoraError::ResourceLimit(format!("{op}: {errore}")),
+        Classe::Scaduta => PlenoraError::Timeout(format!("{op}: {errore}")),
+        Classe::Configurazione => PlenoraError::InvalidConfiguration(format!("{op}: {errore}")),
+        Classe::Crs => PlenoraError::Crs(format!("{op}: {errore}")),
+        Classe::Dati => PlenoraError::DataMapping(format!("{op}: {errore}")),
         Classe::Annullata => PlenoraError::Cancelled(format!("{op}: {errore}")),
         Classe::Piano => PlenoraError::InvalidPlan(format!("{op}: {errore}")),
     }
@@ -211,17 +237,276 @@ impl ErroreKernel for ConstructionError {
     }
 }
 
-impl ErroreKernel for PredicateError {
+// Tabella unica GOP-028: match esaustivi, nessuna variante futura ignorata.
+// Ogni famiglia dichiara qui le interruzioni e le altre categorie.
+macro_rules! mappa_interruzioni {
+    ($($tipo:ident { $($pattern:pat => $classe:ident),* $(,)? }),* $(,)?) => {
+        $(impl ErroreKernel for $tipo {
+            fn classe(&self) -> Classe {
+                match self {
+                    Self::DeadlineExceeded => Classe::Scaduta,
+                    Self::Cancelled => Classe::Annullata,
+                    $($pattern => Classe::$classe),*
+                }
+            }
+        })*
+
+        #[cfg(test)]
+        #[test]
+        #[deny(clippy::disallowed_methods)]
+        fn tutte_le_varianti_di_interruzione_kernel() {
+            $(for (errore, categoria, codice) in [
+                ($tipo::DeadlineExceeded, plenora_core::ErrorCategory::Timeout,
+                 plenora_core::error::CODE_DEADLINE_EXCEEDED),
+                ($tipo::Cancelled, plenora_core::ErrorCategory::Cancelled,
+                 plenora_core::error::CODE_CANCELLED),
+            ] {
+                let errore = del_kernel("op", &errore);
+                assert_eq!(errore.category(), categoria);
+                assert_eq!(errore.public_projection().code(), Some(codice));
+            })*
+        }
+    };
+}
+
+mappa_interruzioni! {
+    PredicateError {
+        Self::WorkLimit | Self::ReservationLimit | Self::AllocationFailed => Limite,
+        Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Interna,
+        Self::InvalidRoundedTopology | Self::UnsupportedGeometry => Precisione,
+        Self::AccuracyUnproven => Esecuzione,
+        Self::NonFiniteCoordinate { .. } | Self::InvalidGeometry { .. } => Piano,
+    },
+    CoordinateErrorKind {
+        Self::InvalidConfiguration => Configurazione,
+        Self::Crs => Crs,
+        Self::DataMapping => Dati,
+        Self::ResourceLimit => Limite,
+        Self::Unsupported => Precisione,
+        Self::Execution => Esecuzione,
+    },
+    GeodesicDistanceError {
+        Self::WorkLimit | Self::MemoryLimit | Self::Allocation => Limite,
+        Self::AccuracyUnproven => Esecuzione,
+        Self::GeographicRequired => Crs,
+        Self::InvalidGeometry | Self::EmptyGeometry => Dati,
+        Self::UnsupportedEllipsoid | Self::UnsupportedGeometry |
+        Self::AmbiguousGeodesic | Self::UnsupportedSurface => Precisione,
+    },
+    GeodesicDensifyError {
+        Self::WorkLimit | Self::PointLimit | Self::MemoryLimit | Self::Allocation => Limite,
+        Self::AccuracyUnproven => Esecuzione,
+        Self::GeographicRequired => Crs,
+        Self::InvalidMaximum => Configurazione,
+        Self::InvalidGeometry | Self::InvalidCoordinate => Dati,
+        Self::UnsupportedEllipsoid | Self::UnsupportedGeometry |
+        Self::AmbiguousGeodesic | Self::UnsupportedSurface => Precisione,
+    },
+    ShapeMeasureError {
+        Self::WorkLimit => Limite,
+        Self::AccuracyUnproven | Self::CertifiedDomain => Esecuzione,
+        Self::InvalidTolerance => Configurazione,
+        Self::CrsDomain | Self::UnsupportedEllipsoid |
+        Self::UnsupportedTopology | Self::UnsupportedSurface => Precisione,
+    },
+}
+
+impl ErroreKernel for CoordinateApiError {
+    fn classe(&self) -> Classe {
+        self.kind.classe()
+    }
+}
+
+// Le famiglie che incapsulano PredicateError delegano alla stessa tabella.
+impl ErroreKernel for plenora_kernels_geo::point_boolean::PointBooleanError {
     fn classe(&self) -> Classe {
         match self {
-            Self::WorkLimit
-            | Self::ReservationLimit
-            | Self::AllocationFailed
-            | Self::DeadlineExceeded => Classe::Limite,
-            Self::Cancelled => Classe::Annullata,
-            Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
-            Self::NonFiniteCoordinate { .. } | Self::InvalidGeometry { .. } => Classe::Piano,
+            Self::Predicate(errore) => errore.classe(),
+            Self::UnsupportedOperands | Self::InvalidOutputDimension => Classe::Piano,
         }
+    }
+}
+
+impl ErroreKernel for plenora_kernels_geo::line_boolean::LineBooleanError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Predicate(errore) => errore.classe(),
+            Self::UnsupportedOperands | Self::InvalidOutputDimension => Classe::Piano,
+            Self::InvalidRoundedTopology | Self::CoordinateOutOfRange => Classe::Precisione,
+        }
+    }
+}
+
+impl ErroreKernel for plenora_kernels_geo::polygon_boolean::PolygonBooleanError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Predicate(errore) => errore.classe(),
+            Self::UnsupportedOperands | Self::InvalidOutputDimension => Classe::Piano,
+            Self::InvalidRoundedTopology | Self::CoordinateOutOfRange => Classe::Precisione,
+        }
+    }
+}
+
+impl ErroreKernel for plenora_kernels_geo::polygon_completion::PolygonCompletionError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Predicate(errore) => errore.classe(),
+            Self::UnsupportedLinework | Self::OverlappingInteriors | Self::AmbiguousProvenance => {
+                Classe::Piano
+            }
+            Self::InvalidRoundedTopology | Self::CoordinateOutOfRange => Classe::Precisione,
+        }
+    }
+}
+
+impl ErroreKernel for plenora_kernels_geo::reshape::ReshapeError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Predicate(errore) => errore.classe(),
+            Self::InvalidGeometry => Classe::Dati,
+            Self::Unsupported | Self::InvalidRoundedTopology | Self::CoordinateOutOfRange => {
+                Classe::Precisione
+            }
+        }
+    }
+}
+
+impl ErroreKernel for plenora_kernels_geo::trim_extend::TrimExtendError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Predicate(errore) => errore.classe(),
+            Self::InvalidGeometry => Classe::Dati,
+            Self::Unsupported | Self::InvalidRoundedTopology | Self::CoordinateOutOfRange => {
+                Classe::Precisione
+            }
+        }
+    }
+}
+
+impl ErroreKernel for plenora_kernels_geo::offset::OffsetError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Predicate(errore) => errore.classe(),
+            Self::InvalidConfiguration => Classe::Configurazione,
+            Self::InvalidGeometry => Classe::Dati,
+            Self::Unsupported | Self::InvalidRoundedTopology | Self::CoordinateOutOfRange => {
+                Classe::Precisione
+            }
+            Self::AccuracyUnproven => Classe::Esecuzione,
+        }
+    }
+}
+
+#[cfg(test)]
+macro_rules! verifica {
+    ($errore:expr, $categoria:expr) => {
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::point_boolean::PointBooleanError::Predicate($errore)
+            )
+            .category(),
+            $categoria
+        );
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::line_boolean::LineBooleanError::Predicate($errore)
+            )
+            .category(),
+            $categoria
+        );
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::polygon_boolean::PolygonBooleanError::Predicate($errore)
+            )
+            .category(),
+            $categoria
+        );
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::polygon_completion::PolygonCompletionError::Predicate(
+                    $errore
+                )
+            )
+            .category(),
+            $categoria
+        );
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::reshape::ReshapeError::Predicate($errore)
+            )
+            .category(),
+            $categoria
+        );
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::trim_extend::TrimExtendError::Predicate($errore)
+            )
+            .category(),
+            $categoria
+        );
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::offset::OffsetError::Predicate($errore)
+            )
+            .category(),
+            $categoria
+        );
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::general_boolean::GeneralBooleanError::Predicate($errore)
+            )
+            .category(),
+            $categoria
+        );
+    };
+}
+
+#[cfg(test)]
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn interruzioni_annidate_e_limiti_mantengono_categoria() {
+    use plenora_core::ErrorCategory;
+    verifica!(PredicateError::DeadlineExceeded, ErrorCategory::Timeout);
+    verifica!(PredicateError::Cancelled, ErrorCategory::Cancelled);
+    verifica!(PredicateError::WorkLimit, ErrorCategory::ResourceLimit);
+    verifica!(
+        PredicateError::ReservationLimit,
+        ErrorCategory::ResourceLimit
+    );
+    verifica!(
+        PredicateError::AllocationFailed,
+        ErrorCategory::ResourceLimit
+    );
+    for (kind, categoria) in [
+        (
+            CoordinateErrorKind::DeadlineExceeded,
+            ErrorCategory::Timeout,
+        ),
+        (CoordinateErrorKind::Cancelled, ErrorCategory::Cancelled),
+        (
+            CoordinateErrorKind::ResourceLimit,
+            ErrorCategory::ResourceLimit,
+        ),
+    ] {
+        assert_eq!(
+            del_kernel(
+                "op",
+                &CoordinateApiError {
+                    kind,
+                    index: Some(0)
+                }
+            )
+            .category(),
+            categoria
+        );
     }
 }
 
@@ -239,7 +524,6 @@ mod tests {
             PredicateError::WorkLimit,
             PredicateError::ReservationLimit,
             PredicateError::AllocationFailed,
-            PredicateError::DeadlineExceeded,
         ] {
             assert_eq!(
                 del_kernel("op", &error).category(),
@@ -249,6 +533,19 @@ mod tests {
         assert_eq!(
             del_kernel("op", &PredicateError::Cancelled).category(),
             ErrorCategory::Cancelled
+        );
+    }
+
+    #[test]
+    #[deny(clippy::disallowed_methods)]
+    fn unsupported_and_accuracy_categories() {
+        assert_eq!(
+            del_kernel("op", &PredicateError::UnsupportedGeometry).category(),
+            ErrorCategory::Unsupported
+        );
+        assert_eq!(
+            del_kernel("op", &PredicateError::AccuracyUnproven).category(),
+            ErrorCategory::Execution
         );
     }
 
@@ -275,6 +572,14 @@ mod tests {
         // Ogni limite superato e' `ResourceLimit`, anche annidato: il piano
         // e' corretto, sono i dati a non entrarci.
         let limiti = [
+            del_kernel("op", &GeodesicDistanceError::WorkLimit),
+            del_kernel("op", &GeodesicDistanceError::MemoryLimit),
+            del_kernel("op", &GeodesicDistanceError::Allocation),
+            del_kernel("op", &GeodesicDensifyError::WorkLimit),
+            del_kernel("op", &GeodesicDensifyError::PointLimit),
+            del_kernel("op", &GeodesicDensifyError::MemoryLimit),
+            del_kernel("op", &GeodesicDensifyError::Allocation),
+            del_kernel("op", &ShapeMeasureError::WorkLimit),
             del_kernel("op", &AnalysisError::WorkLimitExceeded { limit: 1 }),
             del_kernel("op", &AnalysisError::ResultLimitExceeded { limit: 1 }),
             del_kernel(

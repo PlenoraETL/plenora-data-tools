@@ -13,9 +13,9 @@
 //!
 //! I gettoni si portano nel segnale anche prima di far partire il lavoro (un
 //! gettone già alzato non lascia leggere né scrivere nulla) e alla consegna:
-//! un annullamento arrivato mentre il lavoro finiva diventa `cancelled` in
-//! fase `finalize`, con effetto `committed` se gli output sono stati
-//! scritti, mai un successo.
+//! un annullamento arrivato mentre il lavoro finiva diventa `cancelled`,
+//! oppure `timeout` se anche la scadenza e' raggiunta (GOP-028), in fase
+//! `finalize`, con effetto `committed` se gli output sono stati scritti.
 //!
 //! La scadenza è l'`Interruzione` del runner, la stessa della CLI: fissata
 //! all'ingresso della chiamata e controllata fra le letture, i passi e le
@@ -125,16 +125,19 @@ impl Controlli {
     }
 
     /// L'annullamento visto alla consegna, dopo che il lavoro è finito con
-    /// successo: `cancelled` in fase `finalize`, con l'effetto vero
+    /// successo: scadenza prioritaria (GOP-028), altrimenti `cancelled`,
+    /// in fase `finalize`, con l'effetto vero
     /// (`committed` se il lavoro ha scritto i suoi output), mai un successo
     /// taciuto né un effetto perso.
-    fn annullato_alla_consegna(con_effetti: bool) -> PlenoraError {
-        let errore = PlenoraError::Cancelled(
-            "esecuzione annullata alla consegna: il lavoro era finito, il risultato \
-             non si consegna"
-                .to_owned(),
-        )
-        .with_phase(ErrorPhase::Finalize);
+    fn annullato_alla_consegna(&self, con_effetti: bool) -> PlenoraError {
+        let errore = self
+            .interruzione
+            .verifica("alla consegna")
+            .err()
+            .unwrap_or_else(|| {
+                PlenoraError::Internal("consegna interrotta senza scadenza o segnale".to_owned())
+            })
+            .with_phase(ErrorPhase::Finalize);
         if con_effetti {
             errore.with_remote_effect(RemoteEffect::Committed)
         } else {
@@ -217,12 +220,12 @@ impl Controlli {
                     // Consegna: un annullamento arrivato nell'ultimo
                     // intervallo (gettone o segnale) non diventa un successo.
                     if let Err(eccezione) = self.sorveglia(py) {
-                        let errore = Self::annullato_alla_consegna(con_effetti);
+                        let errore = self.annullato_alla_consegna(con_effetti);
                         eccezione.set_cause(py, Some(in_python(py, &errore)));
                         break Err(Errore::Python(eccezione));
                     }
-                    if self.segnale.load(Ordering::Acquire) {
-                        break Err(Errore::Plenora(Self::annullato_alla_consegna(con_effetti)));
+                    if self.interruzione.verifica("alla consegna").is_err() {
+                        break Err(Errore::Plenora(self.annullato_alla_consegna(con_effetti)));
                     }
                     break Ok(valore);
                 }
@@ -238,7 +241,7 @@ impl Controlli {
                         });
                         let errore = match esito {
                             Ok(Err(errore)) => Some(errore),
-                            Ok(Ok(_)) => Some(Self::annullato_alla_consegna(con_effetti)),
+                            Ok(Ok(_)) => Some(self.annullato_alla_consegna(con_effetti)),
                             Err(_) => None,
                         };
                         if let Some(errore) = errore {

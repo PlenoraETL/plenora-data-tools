@@ -66,7 +66,18 @@
 //! <= P: usare un dominio uniforme allarga, non restringe, il limite.
 //! Le direzioni vengono SOMMATE A COPPIE, mai accumulate nel ciclo;
 //! i campioni vengono costruiti dai valori critici, mai da altri campioni.
-//! Edge contiene sempre estremi binary64, mai nodi reinseriti come estremi.
+//! Il noder riceve sempre estremi binary64, mai nodi reinseriti come estremi.
+//! Le booleane lineari usano anche Edge con estremi C per contains, senza
+//! rinodarli: sub(C,C)=(11573,10546), cross(sub(C,C),sub(C,C))=(44239,42184).
+//! Questi intermedi sono inclusi nel massimo globale; i loro punti medi
+//! sono nel dominio X, incluso nel dominio uniforme P della classificazione.
+//! Le frontiere poligonali usano midpoint(C,C), normali ottenute da
+//! sub(C,C) e orientamenti cross(sub(C,C),sub(C,C)). Per assegnare i buchi,
+//! `ring_contains` riceve lati C, punto X e direzione nulla: sub(X,C) =
+//! (16848,15821), cross(sub(C,C),sub(X,C)) = (54789,52734).
+//! Il verso delle facce usa un solo determinante al minimo lessicografico.
+//! I buchi usano contenimento esatto, senza accumulare aree razionali.
+//! Tutti questi intermedi restano sotto il massimo globale indipendente da n.
 //! Questa proprieta' e' indispensabile: rinodare segmenti con estremi
 //! razionali richiederebbe un'altra derivazione, non la stessa costante.
 //!
@@ -83,6 +94,20 @@
 //! di rappresentazione: memorizzare ogni estremo con tale larghezza sarebbe
 //! molto costoso. La prova dei valori non sostituisce quella delle allocazioni.
 
+// Il confronto d'area usa un filtro a 128 bit frazionari, poi divisioni
+// binarie progressive. Ogni termine cross(C,C) ha al massimo 23145 bit
+// al numeratore e 21092 al denominatore; lo shift iniziale usa 23273 bit.
+// Un prodotto di coordinate finite e' < 2^2048, la differenza < 2^2049;
+// fino a 2^64 termini accumulano meno di 2241 bit alla griglia iniziale.
+// Dopo ogni cifra indecisa il quoziente cumulativo ha modulo < n; il passo
+// successivo ha modulo < 3n e usa al massimo usize::BITS + 2 bit. I resti
+// rimangono minori dei rispettivi denominatori, senza denominatore comune.
+// Se S != 0, |S| >= 1/prodotto(d_i) > 2^-sum(bits(d_i)). Dopo
+// sum(bits(d_i)) + usize::BITS + 2 cifre, un intervallo ancora indeciso
+// certifica S=0. Cresce il lavoro, addebitato a Work, non la larghezza
+// degli interi. Nessun tetto di precisione dipendente dal numero di lati.
+// Il tetto interno resta distinto dai budget del chiamante; tutti gli
+// intermedi sono controllati prima di add/sub/mul/shift e contabilizzati.
 pub const INTERMEDIATE_BITS: u64 = 145_173;
 /// Massimo addebito post-creazione di un intero (non scratch del backend).
 pub const MAX_VALUE_BYTES: u64 = INTERMEDIATE_BITS.div_ceil(usize::BITS as u64)
@@ -155,7 +180,10 @@ mod tests {
             (r.mul(t), Envelope(19201, 19251)),
             (f.add(r.mul(t)), Envelope(20277, 20326)),
             (c.add(c), Envelope(11573, 10546)),
+            (c.add(c).cross(c.add(c)), Envelope(44239, 42184)),
             (x, Envelope(11574, 10548)),
+            (x.add(c), Envelope(16848, 15821)),
+            (c.add(c).cross(x.add(c)), Envelope(54789, 52734)),
             (offset, Envelope(12650, 11623)),
             (scaled, Envelope(14750, 13773)),
             (quotient, Envelope(16900, 15873)),

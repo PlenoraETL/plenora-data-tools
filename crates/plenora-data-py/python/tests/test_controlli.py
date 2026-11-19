@@ -502,11 +502,12 @@ def _causa_dell_annullamento(annullamento: BaseException) -> BaseException | Non
     return annullamento.__cause__
 
 
-def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:
+@pytest.mark.parametrize("scadenza", [None, "monotona", "epoca"])
+def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito(scadenza: str | None) -> None:
     """Il lavoro finisce con successo dopo l'annullamento del task (qui una
     chiamata che ignora i gettoni): il risultato non si consegna, ma la causa
     dice l'effetto, `committed` quando gli output sono stati scritti."""
-    from plenora_data._api import _in_thread
+    from plenora_data._api import _Preparata, _in_thread
 
     for con_effetti, effetto, ritentativo in (
         (True, "committed", "requires_recovery"),
@@ -532,7 +533,11 @@ def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:
             partito: threading.Event = partito,
             procedi: threading.Event = procedi,
         ) -> BaseException:
-            compito = asyncio.create_task(_in_thread(lavoro, [], con_effetti=con_effetti))
+            preparata = _Preparata(
+                lavoro, 0.0 if scadenza == "epoca" else None,
+                0.0 if scadenza == "monotona" else None,
+            )
+            compito = asyncio.create_task(_in_thread(preparata, [], con_effetti=con_effetti))
             assert await asyncio.to_thread(partito.wait, TETTO)
             compito.cancel()
             procedi.set()
@@ -543,7 +548,8 @@ def test_un_task_annullato_mentre_il_lavoro_finisce_dice_l_esito() -> None:
             raise AssertionError("il task doveva essere annullato")
 
         causa = _causa_dell_annullamento(asyncio.run(principale()))
-        assert isinstance(causa, pd.PlenoraCancelledError)
+        assert isinstance(causa, pd.PlenoraTimeoutError if scadenza else pd.PlenoraCancelledError)
+        assert causa.code == ("EXECUTION_DEADLINE_EXCEEDED" if scadenza else "EXECUTION_CANCELLED")
         assert causa.remote_effect == effetto
         assert causa.retry == {"kind": ritentativo}
         assert causa.phase == "finalize"
@@ -640,3 +646,12 @@ def test_la_scadenza_asincrona_arriva_scaduta_al_confine_nativo(
     assert restanti == [0.0]
     assert errore.phase == "prepare"
     assert errore.remote_effect == "none"
+
+
+def test_scadenza_prevale_sul_gettone_alzato() -> None:
+    gettone = pd.CancellationToken()
+    gettone.cancel()
+    with pytest.raises(pd.PlenoraTimeoutError) as errore:
+        pd.describe(tabella_semplice(), timeout=0, cancel=gettone)
+    assert errore.value.code == "EXECUTION_DEADLINE_EXCEEDED"
+    assert errore.value.remote_effect == "none"

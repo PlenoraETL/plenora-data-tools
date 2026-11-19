@@ -12,6 +12,7 @@
 
 use super::*;
 use plenora_core::crs::resolve_crs;
+use std::sync::atomic::Ordering;
 
 fn limits() -> ShapeMeasureLimits {
     ShapeMeasureLimits {
@@ -194,26 +195,28 @@ fn exact_work_thresholds_and_interruption() {
         max_work: 0,
         deadline: Some(Instant::now()),
     };
-    // Contratto densify: precedenza cancellazione, poi deadline, poi risorse.
+    // GOP-028: precedenza deadline, poi cancellazione, poi risorse.
     assert_eq!(
         preserve_shape_length_with_limits(&parts, &crs, tolerance(1.0), expired, Some(&cancelled)),
-        Err(ShapeMeasureError::Cancelled)
+        Err(ShapeMeasureError::DeadlineExceeded)
     );
     assert_eq!(
         preserve_shape_area_with_limits(&[], &crs, tolerance(1.0), expired, None),
         Err(ShapeMeasureError::DeadlineExceeded)
     );
     cancelled.store(false, Ordering::Relaxed);
-    let mut work = MeasureWork {
-        limits: limits(),
-        cancelled: Some(&cancelled),
-        used: 0,
-    };
+    let mut work = MeasureWork::new(limits(), Some(&cancelled));
     work.charge().unwrap();
     cancelled.store(true, Ordering::Relaxed);
     assert_eq!(work.charge(), Err(ShapeMeasureError::Cancelled));
     cancelled.store(false, Ordering::Relaxed);
-    work.limits.deadline = Some(Instant::now());
+    work = MeasureWork::new(
+        ShapeMeasureLimits {
+            deadline: Some(Instant::now()),
+            ..limits()
+        },
+        Some(&cancelled),
+    );
     assert_eq!(work.charge(), Err(ShapeMeasureError::DeadlineExceeded));
 }
 
@@ -497,10 +500,16 @@ fn transverse_proof_domain_boundary_is_rejected() {
         (500_000.0, 1.1 * divisor),
         (500_000.0, -1.1 * divisor),
     ] {
+        // Il core CRS e' l'oracolo del dominio dell'inversa, distinto dal certificato.
+        let context = ShapeContext::new(&crs, tolerance(2.0)).unwrap();
+        let expected = match context.projection.geografiche_sorgente(x, y) {
+            Ok(_) => ShapeMeasureError::CertifiedDomain,
+            Err(_) => ShapeMeasureError::CrsDomain,
+        };
         let line = LineString::from(vec![(500_000.0, 5_000_000.0), (x, y)]);
         assert_eq!(
             preserve_shape_length_with_limits(&[line], &crs, tolerance(2.0), limits(), None),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
         let polygon = Polygon::new(rectangle(490_000.0, 4_900_000.0, x, y), vec![]);
         assert_eq!(
@@ -511,7 +520,7 @@ fn transverse_proof_domain_boundary_is_rejected() {
                 limits(),
                 None
             ),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
     }
 }
@@ -575,10 +584,16 @@ fn lambert_proof_domain_boundary_is_rejected() {
         (700_000.0, 6_600_000.0 + radius),
         (700_000.0, 6_600_000.0 + radius + axis),
     ] {
+        // Il core CRS e' l'oracolo del dominio dell'inversa, distinto dal certificato.
+        let context = ShapeContext::new(&crs, tolerance(2.0)).unwrap();
+        let expected = match context.projection.geografiche_sorgente(x, y) {
+            Ok(_) => ShapeMeasureError::CertifiedDomain,
+            Err(_) => ShapeMeasureError::CrsDomain,
+        };
         let line = LineString::from(vec![(700_000.0, 6_600_000.0), (x, y)]);
         assert_eq!(
             preserve_shape_length_with_limits(&[line], &crs, tolerance(2.0), limits(), None),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
         let polygon = Polygon::new(rectangle(690_000.0, 6_500_000.0, x, y), vec![]);
         assert_eq!(
@@ -589,7 +604,7 @@ fn lambert_proof_domain_boundary_is_rejected() {
                 limits(),
                 None
             ),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
     }
 }
@@ -661,10 +676,16 @@ fn azimuthal_proof_domain_and_disk_boundary_are_rejected() {
     ] {
         let x = 4_321_000.0 + u * dx;
         let y = 3_210_000.0 + v * dy;
+        // Il core CRS e' l'oracolo del dominio dell'inversa, distinto dal certificato.
+        let context = ShapeContext::new(&crs, tolerance(2.0)).unwrap();
+        let expected = match context.projection.geografiche_sorgente(x, y) {
+            Ok(_) => ShapeMeasureError::CertifiedDomain,
+            Err(_) => ShapeMeasureError::CrsDomain,
+        };
         let line = LineString::from(vec![(4_321_000.0, 3_210_000.0), (x, y)]);
         assert_eq!(
             preserve_shape_length_with_limits(&[line], &crs, tolerance(2.0), limits(), None),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
         let polygon = Polygon::new(rectangle(4_311_000.0, 3_200_000.0, x, y), vec![]);
         assert_eq!(
@@ -675,7 +696,7 @@ fn azimuthal_proof_domain_and_disk_boundary_are_rejected() {
                 limits(),
                 None
             ),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
     }
 }
@@ -747,10 +768,16 @@ fn stereographic_proof_domain_boundary_is_rejected() {
     ] {
         let x = 155_000.0 + u * dx;
         let y = 463_000.0 + v * dy;
+        // Il core CRS e' l'oracolo del dominio dell'inversa, distinto dal certificato.
+        let context = ShapeContext::new(&crs, tolerance(2.0)).unwrap();
+        let expected = match context.projection.geografiche_sorgente(x, y) {
+            Ok(_) => ShapeMeasureError::CertifiedDomain,
+            Err(_) => ShapeMeasureError::CrsDomain,
+        };
         let line = LineString::from(vec![(155_000.0, 463_000.0), (x, y)]);
         assert_eq!(
             preserve_shape_length_with_limits(&[line], &crs, tolerance(2.0), limits(), None),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
         let polygon = Polygon::new(rectangle(145_000.0, 453_000.0, x, y), vec![]);
         assert_eq!(
@@ -761,7 +788,7 @@ fn stereographic_proof_domain_boundary_is_rejected() {
                 limits(),
                 None
             ),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
     }
 }
@@ -833,10 +860,16 @@ fn hotine_proof_domain_boundary_is_rejected() {
     ] {
         let x = 2_600_000.0 + u * dx;
         let y = 1_200_000.0 + v * dy;
+        // Il core CRS e' l'oracolo del dominio dell'inversa, distinto dal certificato.
+        let context = ShapeContext::new(&crs, tolerance(2.0)).unwrap();
+        let expected = match context.projection.geografiche_sorgente(x, y) {
+            Ok(_) => ShapeMeasureError::CertifiedDomain,
+            Err(_) => ShapeMeasureError::CrsDomain,
+        };
         let line = LineString::from(vec![(2_600_000.0, 1_200_000.0), (x, y)]);
         assert_eq!(
             preserve_shape_length_with_limits(&[line], &crs, tolerance(2.0), limits(), None),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
         let polygon = Polygon::new(rectangle(2_590_000.0, 1_190_000.0, x, y), vec![]);
         assert_eq!(
@@ -847,7 +880,68 @@ fn hotine_proof_domain_boundary_is_rejected() {
                 limits(),
                 None
             ),
-            Err(ShapeMeasureError::AccuracyUnproven)
+            Err(expected)
         );
     }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn certificate_components_are_public_and_sum_to_absolute_bound() {
+    let parts = [LineString::from(vec![(0.0, 30.0), (0.01, 30.0)])];
+    let measured = length(&parts, "EPSG:4326", 1.0);
+    let c = measured.error_components;
+    assert_eq!(measured.relative_error_bound, 0.0);
+    assert_eq!(c.transformation, 0.0);
+    assert_eq!(
+        (c.transformation + c.discretization) + c.numerical,
+        measured.absolute_error_bound
+    );
+    assert!(c.discretization >= 0.0 && c.numerical >= 0.0);
+    // Parallelo ellissoidico: N(phi)*cos(phi)*delta_lambda.
+    let f = 1.0 / 298.257_223_563;
+    let phi = 30.0_f64.to_radians();
+    let radius = 6_378_137.0 / (1.0 - f * (2.0 - f) * phi.sin().powi(2)).sqrt();
+    let exact = radius * phi.cos() * 0.01_f64.to_radians();
+    assert!((measured.value - exact).abs() <= measured.absolute_error_bound);
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn overlapping_independent_area_operands_are_summed() {
+    let polygon = Polygon::new(rectangle(0.0, 0.0, 0.01, 0.01), vec![]);
+    let single = area(std::slice::from_ref(&polygon), 1.0);
+    let doubled = area(&[polygon.clone(), polygon], 2.0);
+    assert!(
+        (doubled.value - 2.0 * single.value).abs()
+            <= doubled.absolute_error_bound + 2.0 * single.absolute_error_bound
+    );
+}
+
+#[test]
+fn resource_prefixes_preserve_the_equatorial_length_certificate() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let parts = [LineString::from(vec![(0.0, 0.0), (1.0, 0.0)])];
+    // G1: la retta lon/lat sull'equatore ha integrale a * delta_lambda.
+    let expected = 6_378_137.0 * 1.0_f64.to_radians();
+    let mut succeeded = false;
+    for budget in (0..128).chain((7..=20).map(|power| 1_u64 << power)) {
+        let bounded = ShapeMeasureLimits {
+            max_work: budget,
+            ..limits()
+        };
+        match preserve_shape_length_with_limits(&parts, &crs, tolerance(0.01), bounded, None) {
+            Ok(actual) => {
+                assert!((actual.value - expected).abs() <= actual.absolute_error_bound);
+                assert!(actual.absolute_error_bound <= 0.01);
+                succeeded = true;
+            }
+            Err(error) => {
+                // GOP-026: il budget non autorizza un certificato incompleto.
+                assert!(!succeeded);
+                assert_eq!(error, ShapeMeasureError::WorkLimit);
+            }
+        }
+    }
+    assert!(succeeded);
 }

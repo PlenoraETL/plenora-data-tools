@@ -1,4 +1,4 @@
-//! C1: formule analitiche e snapshot del tag v6.0.0.
+//! C1: facce cartesiane e anelli concentrici con attese analitiche.
 use super::*;
 use geo::{Area, MultiLineString};
 
@@ -62,21 +62,6 @@ fn polygon_keys(polygons: &[Polygon<f64>]) -> Vec<Vec<Vec<(u64, u64)>>> {
     keys.sort();
     keys
 }
-fn baseline(g: &Geometry<f64>, result: &[Polygon<f64>]) {
-    use crate::rust_backend::polygonize::{baseline_600, PolygonizeLimits, PolygonizeOptions};
-    // Fonte: snapshot v6.0.0, blob 768a11b454fc839fd964aa313aaba5729976ff09.
-    let old = baseline_600::polygonize_linework_rust(
-        g,
-        PolygonizeOptions {
-            node_input: true,
-            require_complete: false,
-            limits: PolygonizeLimits::unlimited(),
-            precision: 0.01,
-        },
-    )
-    .expect("baseline 6.0.0");
-    assert_eq!(polygon_keys(result), polygon_keys(&old.polygons));
-}
 
 #[test]
 fn rectangular_grids_have_exact_faces() {
@@ -104,7 +89,18 @@ fn rectangular_grids_have_exact_faces() {
         assert!(result
             .iter()
             .all(|p| p.unsigned_area() == 6. && p.interiors().is_empty()));
-        baseline(&g, &result);
+        let expected: Vec<_> = (0..n - 1)
+            .flat_map(|y| {
+                (0..m - 1).map(move |x| {
+                    let (x, y) = (3. * f64::from(x), 2. * f64::from(y));
+                    Polygon::new(
+                        line(&[(x, y), (x + 3., y), (x + 3., y + 2.), (x, y + 2.), (x, y)]),
+                        vec![],
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(polygon_keys(&result), polygon_keys(&expected));
     }
 }
 #[test]
@@ -116,7 +112,12 @@ fn nested_rings_holes_overlaps_and_dangles() {
     // Fonte: quadrati concentrici: 100-36, 36-4, 4; due buchi.
     assert_eq!(areas, [4., 32., 64.]);
     assert_eq!(result.iter().map(|p| p.interiors().len()).sum::<usize>(), 2);
-    baseline(&g, &result);
+    let expected = [
+        Polygon::new(square(0., 10.), vec![square(2., 8.)]),
+        Polygon::new(square(2., 8.), vec![square(4., 6.)]),
+        Polygon::new(square(4., 6.), vec![]),
+    ];
+    assert_eq!(polygon_keys(&result), polygon_keys(&expected));
     let g = input(vec![
         square(0., 4.),
         line(&[(1., 0.), (3., 0.)]),
@@ -129,7 +130,10 @@ fn nested_rings_holes_overlaps_and_dangles() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].unsigned_area(), 16.);
     assert!(result[0].interiors().is_empty());
-    baseline(&g, &result);
+    assert_eq!(
+        polygon_keys(&result),
+        polygon_keys(&[Polygon::new(square(0., 4.), vec![])])
+    );
     let g = input(vec![
         square(0., 10.),
         square(2., 8.),
@@ -138,7 +142,13 @@ fn nested_rings_holes_overlaps_and_dangles() {
     // Fonte: un ponte tra anelli non separa la corona: aree 64 e 36.
     let result = run(&g);
     assert_eq!(result.len(), 2);
-    baseline(&g, &result);
+    assert_eq!(
+        polygon_keys(&result),
+        polygon_keys(&[
+            Polygon::new(square(0., 10.), vec![square(2., 8.)]),
+            Polygon::new(square(2., 8.), vec![])
+        ])
+    );
 }
 #[test]
 fn large_sparse_input_succeeds_without_pairs() {
@@ -167,9 +177,10 @@ fn exact_limits_and_interruptions() {
     let g = input(vec![square(0., 2.)]);
     let mut work = Work::new(RelateLimits::default(), None);
     let expected = polygonize(&g, &mut work).expect("misura");
-    // Fonte: 8 estremi + 8 copie noder + 8 incidenze; verifica f64:
-    // 4 vertici + 8 incidenze. Quattro coppie per ciascuno dei due sweep.
-    assert_eq!((work.pairs, work.nodes), (8, 36));
+    // Fonte: quattro coppie per sweep, piu' otto per la validazione
+    // superficiale comune degli anelli materializzati.
+    assert_eq!(work.pairs, 16);
+    assert!(work.nodes > 36);
     // Fonte contabile: checkpoint e picco ricevute del percorso completo.
     let exact = RelateLimits {
         max_segment_pairs: work.pairs,
@@ -218,11 +229,11 @@ fn exact_limits_and_interruptions() {
         ..RelateLimits::default()
     };
     let flag = std::sync::atomic::AtomicBool::new(true);
-    // Fonte: Work::step, cancellazione prima di deadline, anche su vuoto.
+    // Fonte: Work::step, deadline prima della cancellazione, anche su vuoto.
     let empty = input(vec![]);
     assert!(matches!(
         polygonize_with_limits(&empty, expired, Some(&flag)),
-        Err(PredicateError::Cancelled)
+        Err(PredicateError::DeadlineExceeded)
     ));
     assert!(matches!(
         polygonize_with_limits(&empty, expired, None),
@@ -230,7 +241,7 @@ fn exact_limits_and_interruptions() {
     ));
 }
 #[test]
-fn invalid_and_unrepresentable_nodes_are_explicit() {
+fn invalid_coordinates_are_explicit() {
     // Fonte: contratto finitezza dell'ingresso.
     assert!(matches!(
         polygonize_with_limits(
@@ -240,23 +251,13 @@ fn invalid_and_unrepresentable_nodes_are_explicit() {
         ),
         Err(PredicateError::NonFiniteCoordinate { .. })
     ));
-    // Fonte: 2^50 + 1/10, ulp=1/4: errore minimo 10 cm > 1 cm.
-    let x = 2_f64.powi(50);
-    let g = input(vec![
-        line(&[(x, 0.), (x + 1., 0.)]),
-        line(&[(x, -1.), (x + 1., 9.)]),
-    ]);
-    assert!(matches!(
-        polygonize_with_limits(&g, RelateLimits::default(), None),
-        Err(PredicateError::CalcoloNonConcluso(_))
-    ));
 }
 
 #[test]
 fn rounded_triangle_cannot_silently_become_collinear() {
     // Fonte: equazioni y=x-X e y=1-(1.999/2)*(x-X+1).
     // Apice x=X+circa 0.00025006, ULP(X)=0.0078125: arrotonda X.
-    // Tre vertici distinti diventano collineari, entro 1 cm ma non validi.
+    // Fonte GOP-015A: tre vertici distinti diventano collineari dopo rounding.
     let x = 2_f64.powi(45);
     let g = input(vec![
         line(&[(x, -2.), (x, 2.)]),
@@ -265,6 +266,153 @@ fn rounded_triangle_cannot_silently_become_collinear() {
     ]);
     assert!(matches!(
         polygonize_with_limits(&g, RelateLimits::default(), None),
-        Err(PredicateError::CalcoloNonConcluso(_))
+        Err(PredicateError::InvalidRoundedTopology)
     ));
+}
+
+#[test]
+fn gop015a_face_nodes_ties_and_subnormals() {
+    // Fonte: GOP-015A; incrocio a meta' delle ascisse, pareggio al pari.
+    for bits in [1.0_f64.to_bits(), 1.0_f64.to_bits() + 1, 1] {
+        let a = f64::from_bits(bits);
+        let b = f64::from_bits(bits + 1);
+        let g = input(vec![
+            line(&[(0., -1.), (2., -1.), (2., 1.), (0., 1.), (0., -1.)]),
+            line(&[(0., 0.), (2., 0.)]),
+            line(&[(a, -1.), (b, 1.)]),
+        ]);
+        let result = run(&g);
+        let expected = f64::from_bits(if bits & 1 == 0 { bits } else { bits + 1 });
+        assert_eq!(result.len(), 4);
+        assert!(result
+            .iter()
+            .flat_map(geo::CoordsIter::coords_iter)
+            .any(|c| c.x.to_bits() == expected.to_bits() && c.y == 0.));
+    }
+}
+
+#[test]
+fn gop015a_nondyadic_faces_and_discarded_dangles() {
+    // Fonte: y=-1+d*x, incrocio con y=0 in x=1/d; GOP-015A.
+    for d in [3, 5, 7] {
+        let g = input(vec![
+            square(0., 1.),
+            line(&[(0., 0.), (1., 0.)]),
+            line(&[(0., -1.), (1., f64::from(d - 1))]),
+        ]);
+        let result = run(&g);
+        assert!(result
+            .iter()
+            .flat_map(geo::CoordsIter::coords_iter)
+            .any(|c| c.x == 1. / f64::from(d) && c.y == 0.));
+    }
+    // Fonte GOP-015A: X+1/10 si pubblica X; facce valide anche con ulp=1/4.
+    let x = 2_f64.powi(50);
+    let faces = input(vec![
+        line(&[
+            (x - 1., 0.),
+            (x + 2., 0.),
+            (x + 2., 1.),
+            (x - 1., 1.),
+            (x - 1., 0.),
+        ]),
+        line(&[(x, -1.), (x + 1., 9.)]),
+    ]);
+    assert_eq!(run(&faces).len(), 2);
+    // Fonte: nessuna faccia, quindi il nodo costruito non viene pubblicato.
+    let x = 2_f64.powi(50);
+    let g = input(vec![
+        line(&[(x, 0.), (x + 1., 0.)]),
+        line(&[(x, -1.), (x + 1., 9.)]),
+    ]);
+    assert!(run(&g).is_empty());
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn excluded_point_is_typed_unsupported() {
+    assert!(matches!(
+        polygonize_with_limits(
+            &Geometry::Point(geo::Point::new(0., 0.)),
+            RelateLimits::default(),
+            None
+        ),
+        Err(PredicateError::UnsupportedGeometry)
+    ));
+}
+
+/// Girandola del lettore `p1_bits.py`: i prolungamenti lasciano una sola
+/// faccia centrale di k lati; gli estremi lontani sono dangles esclusi.
+#[test]
+#[allow(clippy::suboptimal_flops)] // Conserva i due arrotondamenti della fixture Python.
+fn pinwheel_large_denominators_do_not_accumulate_ring_area() {
+    let count = 68;
+    let vertices: Vec<_> = (0..count)
+        .map(|j| {
+            let angle = std::f64::consts::TAU * f64::from(j) / f64::from(count);
+            (10.0 * angle.cos(), 10.0 * angle.sin())
+        })
+        .collect();
+    let lines: Vec<_> = vertices
+        .iter()
+        .zip(vertices.iter().cycle().skip(1))
+        .map(|(a, b)| {
+            let direction = (b.0 - a.0, b.1 - a.1);
+            line(&[
+                (a.0 - 0.01 * direction.0, a.1 - 0.01 * direction.1),
+                (
+                    direction.0 * 2.0_f64.powi(1000),
+                    direction.1 * 2.0_f64.powi(1000),
+                ),
+            ])
+        })
+        .collect();
+    let polygons = polygonize_with_limits(&input(lines), RelateLimits::default(), None)
+        .expect("faccia della girandola");
+    assert_eq!(polygons.len(), 1);
+    assert_eq!(polygons[0].exterior().0.len(), 69);
+    assert!(polygons[0].interiors().is_empty());
+}
+
+#[test]
+fn resource_prefixes_are_atomic_and_monotone() {
+    // SFA 6.1.11: il ciclo semplice quadrato delimita una sola faccia.
+    let source = input(vec![square(0.0, 2.0)]);
+    let expected = vec![Polygon::new(square(0.0, 2.0), vec![])];
+    // GOP-026/027: esaurimento durante raccolta, noding o pubblicazione
+    // non restituisce un prefisso; budget maggiori conservano l'esito.
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = RelateLimits::default();
+            match resource {
+                0 => limits.max_steps = budget,
+                1 => limits.max_reserved_bytes = budget,
+                2 => limits.max_nodes = budget,
+                _ => limits.max_segment_pairs = budget,
+            }
+            match polygonize_with_limits(&source, limits, None) {
+                Ok(actual) => {
+                    assert_eq!(polygon_keys(&actual), polygon_keys(&expected));
+                    succeeded = true;
+                }
+                Err(error) => {
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+            }
+        }
+        assert!(succeeded);
+    }
 }

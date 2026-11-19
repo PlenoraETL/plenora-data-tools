@@ -25,6 +25,32 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 
 ## Che cosa è provato qui
 
+### Split e polygonize con limiti: pubblicazione GOP-015A
+
+Le API Rust `extended_algorithms::split_line_with_limits` e
+`extended_algorithms::polygonize_with_limits`, additive nella 6.1.0,
+usano noding razionale esatto e `RelateLimits`. Le coordinate costruite
+sono pubblicate al binary64 piu' vicino, meta' al pari: errore massimo
+mezza ulp per ordinata, nelle unita' del CRS planare dichiarato.
+Non si applica una soglia in centimetri. Le API `split_line` e `polygonize`
+della 6.0.0 conservano firme e comportamento.
+
+Arrotondatore e verificatore sono quelli condivisi con `line_boolean`.
+`PredicateError::InvalidRoundedTopology` segnala collassi, nuovi contatti,
+incroci o inversioni; nessun risultato parziale. Risorse, cancellazione e
+deadline mantengono errori distinti e condividono lo stesso bilancio.
+Split conserva ordine, verso e bit dei vertici sorgente, anche gli zeri con
+segno per occorrenza. Il certificato segue anche gli autoincroci e i tratti
+ripercorsi senza aggiungere vertici all'output. Polygonize verifica i bordi
+delle facce emesse, esclusi dangles e ponti scartati. Per siti d'ingresso
+coincidenti deduplicati prevale il primo, con priorita' della sorgente nello
+split; i nodi interni al certificato non sono coordinate pubblicate.
+
+Le prove dedicate coprono 1/3, 1/5, 1/7, pareggi pari/dispari, segni,
+subnormali, collassi, facce collineari dopo rounding e limiti inclusivi.
+Questa garanzia riguarda le due API dirette: non modifica la precisione
+metrica degli adapter e dei kernel 6.0.0 descritti sotto.
+
 ### Noding comune: migrazione DE-9IM, tranche 1b incompleta
 
 `relate_matrix` e la variante con limiti usano ora
@@ -123,7 +149,7 @@ Il drop rilascia il budget; pop e dedup mantengono la capacita'. Il fallback
 aritmetico e le esclusioni fisiche sono specificati sopra: questo conteggio
 non costituisce un tetto all'heap totale. `RelateLimits::deadline` e'
 opzionale (default `None`) e produce `PredicateError::DeadlineExceeded`;
-se anche il token e' alzato prevale `Cancelled`.
+se anche il token e' alzato prevale sempre `DeadlineExceeded`.
 Nessun maggiorante anticipato decide il rifiuto. Validazione e calcolo
 condividono i contatori; cancellazione, scadenza, lavoro esaurito e prenotazione
 esaurita producono varianti tipizzate di `PredicateError`.
@@ -322,3 +348,96 @@ Serve GEOS in esecuzione, quindi non gira qui. Vive in
   simmetrica di GEOS.
 - **Fuori perimetro come per le altre operazioni**: diagnostica per riga,
   envelope e fusione dei segmenti vivevano nell'engine, che non è portato.
+
+## Booleane poligonali Rust con limiti
+
+`plenora_kernels_geo::polygon_boolean` espone `boolean_with_limits` e le
+scorciatoie `union_with_limits`, `intersection_with_limits`,
+`difference_with_limits`. Accetta due Polygon/MultiPolygon validi, XY planari
+finiti nello stesso CRS e ordine degli assi. Le parti di ciascun MultiPolygon
+sono disgiunte anche sul confine; contatti che richiedono normalizzazione,
+GeometryCollection in ingresso, array, molti-a-uno, clip e dissolve sono esclusi.
+Non modifica `topology::boolean_operation` e non introduce semantica Esri.
+
+Il filtro `output_dimension` di `boolean_with_limits` conserva soltanto le
+componenti richieste (0/1/2), senza estrarre confini. Intersezioni di soli lati
+o punti restano esplicite. Risultati omogenei multi; misti GeometryCollection
+con componenti in dimensione crescente. Vuoto generale GeometryCollection;
+vuoto filtrato multi tipizzato. Differenza con chiusura del residuo.
+
+Noding e appartenenza ai settori incidenti sono razionali esatti. L'enumeratore
+dei cicli e' condiviso con polygonize; i contatti ripetuti separano anelli
+semplici. Gusci antiorari e buchi orari, a partire dal minimo XY pubblicato;
+gusci e buchi ordinati per minimo e vertice successivo. Tratti collineari
+nodati conservati. Le componenti lineari sono segmenti atomici ordinati per
+estremi XY; i punti isolati sono unici e ordinati XY.
+
+GOP-015A: nodi costruiti al binary64 piu' vicino, meta' al pari, errore massimo
+1/2 ulp per ordinata nelle unita' delle coordinate. Nessuno snap metrico.
+Vertici originali conservati bit per bit; per siti coincidenti con zeri di
+segno diverso prevale il primo nell'ordine degli operandi. Un solo arrotondatore
+e un solo verificatore della pubblicazione: incidenze, assenza di nuovi
+incroci, orientamento, corrispondenza dei lati serializzati, semplicita' degli
+anelli, buchi nel guscio, interno connesso e interni disgiunti. Collassi e
+inversioni falliscono con `InvalidRoundedTopology`, senza risultato parziale.
+Le componenti escluse dal filtro non sono pubblicate o certificate.
+
+`PolygonBooleanLimits.work` adotta i contatori e le esclusioni di
+`RelateLimits`, inclusa l'aritmetica GOP-027 (massimo per intero 145173 bit
+arrotondati ai limb piu' header). `max_edges` conta le incidenze atomiche prima
+della deduplicazione; `max_faces` conta i cammini chiusi della frontiera
+selezionata, inclusi quelli esterni dei buchi; `max_rings` conta gli anelli
+semplici separati da questi cammini. Non sono stime n*m ne' un tetto RSS.
+Ogni crescita e' prenotata; l'aritmetica addebita il valore appena creato.
+Per decidere il verso non si accumulano aree con denominatori crescenti.
+
+Ogni ciclo controlla lavoro, deadline e cancellazione; una primitiva razionale
+ha dimensione massima finita indipendente dal numero di elementi. Nei confronti
+si elaborano al massimo due punti o raggi fra checkpoint. GOP-028: deadline
+scaduta prima del token, in tutte le API con limiti. Il limite
+non promette una latenza a tempo reale. Ricostruzione dei successori e verifica
+della corrispondenza dei lati possono richiedere lavoro quadratico, interrotto
+dai contatori reali; non viene promesso un algoritmo subquadratico.
+
+## Booleane generali Rust con limiti
+
+`plenora_kernels_geo::general_boolean` adotta GOP-014/015/015A/027/028 per
+Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon e
+GeometryCollection anche annidate, nelle combinazioni di dimensioni 0/1/2.
+Il modello e' planare XY finito, nello stesso CRS risolto e ordine degli assi
+forniti dal chiamante. Nessun legame con Esri o modifica delle API precedenti.
+
+`boolean_with_limits` applica un operatore a due geometrie.
+`union_with_limits` prende uno slice di geometrie e restituisce un solo
+risultato, anche per input vuoto. `intersection_with_limits` e
+`difference_with_limits` prendono uno slice A e una geometria B: restituiscono
+un risultato per A, nell'ordine originale, conservando vuoti e duplicati.
+Le chiamate sono atomiche; anche con A vuoto si valida B. Tutte espongono il
+filtro dimensionale opzionale, che conserva componenti senza estrarre confini.
+Contenitori, chiusura dei residui, ordine canonico e precisione sono quelli
+delle booleane poligonali descritte sopra.
+
+GOP-002 vieta riparazioni implicite: un MultiPolygon con interni sovrapposti
+o un tratto di confine condiviso e' invalido secondo SFA 1.2.1, 6.1.14, e viene
+rifiutato con `PredicateError::InvalidGeometry`. Il contatto puntuale valido
+e' ammesso. Le componenti valide di una GeometryCollection, anche sovrapposte,
+e gli elementi dell'unione molti-a-uno sono interpretati come unione dei loro
+insiemi. La selezione avviene sul grafo razionale complessivo: non si piegano
+unioni binarie su risultati intermedi gia' arrotondati. Parti coperte e
+duplicati geometrici sono eliminati prima del filtro e della pubblicazione.
+
+Il noder, il ricostruttore degli anelli, l'arrotondatore e il verificatore sono
+condivisi con `polygon_boolean` e `line_boolean`. I punti isolati non occupano
+intervalli aperti, anche quando coincidono con il midpoint usato per la
+classificazione. Tutti i siti nodati partecipano alla selezione puntuale,
+compresi gli incroci di linee.
+
+`GeneralBooleanLimits` riusa `PolygonBooleanLimits`: passi, coppie, nodi,
+byte vivi, incidenze atomiche, facce e anelli sono cumulativi per l'intera
+chiamata, anche sugli array. Output precedenti e ricevute restano vivi fino
+al ritorno. Sono esclusi input preso in prestito, overhead dell'allocatore e
+scratch aritmetico privato, come in `RelateLimits`; non e' un tetto RSS.
+L'aritmetica conserva il massimo per valore indipendente dal numero degli
+elementi. Le visite di componenti vuote e collezioni hanno checkpoint contati.
+Deadline precede cancellazione allo stesso checkpoint; nessun successo
+parziale e nessun dato degli operandi negli errori.

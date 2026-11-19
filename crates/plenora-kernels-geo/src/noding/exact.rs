@@ -1,5 +1,17 @@
 //! Aritmetica fallibile: ogni intero, compresi gcd e prodotti dei confronti,
 //! possiede una ricevuta sul bilancio vivo dei contenitori.
+//!
+//! Il tetto interno `MAX_BITS` non e' un budget del chiamante: il suo
+//! superamento preventivo e' `AccuracyUnproven`. Le prenotazioni vive restano
+//! una risorsa distinta. Il gcd controlla la deadline ad ogni resto;
+//! per Lame effettua meno di 2 * `MAX_BITS` divisioni euclidee per Q.
+//! Dopo la creazione, invece, `MAX_BITS` e' un'invariante dimostrata dai
+//! precontrolli di add/sub/mul/shift e dalla non crescita delle altre
+//! primitive (sqrt inclusa): violarla e' `CalcoloNonConcluso` (Interna).
+//! Il DAG del noder dimostrato in bounds.rs non raggiunge il rifiuto
+//! preventivo. Nessun chiamante sceglie una politica diversa per Q.
+//! L'addebito effettivo resta dopo la creazione; lo sforamento contabile
+//! e' al massimo `MAX_VALUE_BYTES`, esclusi gli scratch privati del backend.
 
 use super::storage::{Budget, Lease};
 use crate::predicates::PredicateError;
@@ -7,7 +19,7 @@ use num_bigint::{BigInt, Sign};
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-/// Limite del DAG dimostrato in `bounds.rs`, non una prenotazione anticipata.
+/// Tetto per valore, derivato dal DAG del noder in `bounds.rs`.
 pub(super) const MAX_BITS: u64 = super::bounds::INTERMEDIATE_BITS;
 const LIMB_BITS: u64 = usize::BITS as u64;
 pub(super) const MAX_VALUE_BYTES: u64 = super::bounds::MAX_VALUE_BYTES;
@@ -32,6 +44,61 @@ struct CountedInt {
 mod tests {
     use super::*;
     use crate::noding::oracle;
+
+    #[test]
+    fn streamed_sum_proves_rational_equalities_and_close_signs() {
+        let mut work = super::super::Work::new(crate::predicates::RelateLimits::default(), None);
+        let mut terms = super::super::CountedVec::new();
+        for (n, d, subtract) in [(1, 3, false), (2, 3, false), (1, 1, true)] {
+            let q = work
+                .integer(n)
+                .expect("numeratore")
+                .try_div(&work.integer(d).expect("denominatore"))
+                .expect("termine razionale");
+            work.push(&mut terms, (q, subtract))
+                .expect("termini contati");
+        }
+        assert_eq!(
+            sum_sign(&terms, &mut work).expect("uguaglianza razionale"),
+            Ordering::Equal
+        );
+        let tiny = Q::float_in(f64::from_bits(1), &work.budget).expect("minimo subnormale");
+        work.push(&mut terms, (tiny, true))
+            .expect("perturbazione negativa");
+        assert_eq!(
+            sum_sign(&terms, &mut work).expect("segno razionale"),
+            Ordering::Less
+        );
+        terms.last_mut().expect("perturbazione razionale").1 = false;
+        assert_eq!(
+            sum_sign(&terms, &mut work).expect("segno opposto"),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn bounded_sum_matches_rational_oracle() {
+        let work = super::super::Work::new(crate::predicates::RelateLimits::default(), None);
+        for count in 0..64 {
+            let mut sum = BoundedSum::new(128, &work).expect("sum");
+            let mut expected = oracle::Q::int(0);
+            for i in 0..count {
+                let term = work
+                    .integer(i - 20)
+                    .expect("n")
+                    .try_div(&work.integer(2 * i + 1).expect("d"))
+                    .expect("term");
+                let generic = oracle::Q::int(i - 20).div(&oracle::Q::int(2 * i + 1));
+                sum.add(&term, i % 3 == 0).expect("add");
+                expected = if i % 3 == 0 {
+                    expected.sub(&generic)
+                } else {
+                    expected.add(&generic)
+                };
+            }
+            assert_eq!(sum.sign(), Some(expected.sign()));
+        }
+    }
 
     /// GOP-027: clone e temporanei possiedono ricevute distinte; il
     /// risultato puo' sopravvivere al Work perche' possiede il bilancio.
@@ -119,6 +186,100 @@ mod tests {
         assert_eq!(budget.live(), 0);
     }
 
+    #[test]
+    #[deny(clippy::disallowed_methods)]
+    fn square_roots_and_preallocation_bit_ceiling() {
+        let budget = Rc::new(Budget::new(u64::MAX));
+        // Fonte C1: GOP-015A, radice razionale iff numeratore e denominatore
+        // canonici sono quadrati; nessuna normalizzazione floating point.
+        for value in [0.0, 1.0, 3.0, f64::from_bits(1), f64::MAX] {
+            let q = Q::float_in(value, &budget).unwrap();
+            let square = q.try_mul(&q).unwrap();
+            assert_eq!(square.try_sqrt_exact().unwrap().unwrap(), q);
+        }
+        assert!(Q::int_in(2, &budget)
+            .unwrap()
+            .try_sqrt_exact()
+            .unwrap()
+            .is_none());
+        // Fonte C1: GOP-027; rifiuto prima di allocare un intero oltre
+        // MAX_BITS, anche quando il DAG degli editor supera quello del noder.
+        let large = CountedInt::created(BigInt::from(1) << (MAX_BITS - 1), &budget).unwrap();
+        let two = CountedInt::int(2, &budget).unwrap();
+        let live = budget.live();
+        let attempted = budget.attempted_peak();
+        assert!(matches!(
+            large.sub(&large),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        assert!(matches!(
+            large.mul(&two),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        assert!(matches!(
+            large.add(&large),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        assert!(matches!(
+            large.shift(1),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        assert_eq!(budget.live(), live);
+        assert_eq!(budget.attempted_peak(), attempted);
+    }
+
+    /// GOP-027: una creazione oltre tetto viola la prova dei precontrolli.
+    #[test]
+    fn oversized_created_value_is_an_invariant_violation() {
+        let budget = Rc::new(Budget::new(0));
+        assert!(matches!(
+            CountedInt::created(BigInt::from(1) << MAX_BITS, &budget),
+            Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"))
+        ));
+        assert_eq!(budget.live(), 0);
+        assert_eq!(budget.attempted_peak(), 0);
+    }
+
+    /// GOP-027: somma a profondita' variabile, rifiuto prima del valore
+    /// oltre il dominio fisso; nessun temporaneo eccede `MAX_VALUE_BYTES`.
+    #[test]
+    fn accumulator_rejects_before_oversized_integer_creation() {
+        let budget = Rc::new(Budget::new(u64::MAX));
+        let mut value = Q::int_in(1, &budget).expect("uno");
+        let mut count = 0;
+        loop {
+            match value.try_add(&value) {
+                Ok(next) => {
+                    value = next;
+                    count += 1;
+                }
+                Err(PredicateError::AccuracyUnproven) => break,
+                Err(error) => panic!("errore inatteso: {error}"),
+            }
+        }
+        assert!(count > 100_000);
+        assert!(value.n.value.bits() <= MAX_BITS);
+        let before = budget.attempted_peak();
+        assert!(matches!(
+            value.try_add(&value),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        assert_eq!(before, budget.attempted_peak());
+        drop(value);
+        assert_eq!(budget.live(), 0);
+        let largest =
+            CountedInt::created(BigInt::from(1) << (MAX_BITS - 1), &budget).expect("massimo");
+        let two = CountedInt::int(2, &budget).expect("due");
+        assert!(matches!(
+            largest.mul(&two),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        assert!(matches!(
+            largest.shift(1),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+    }
+
     fn same(actual: &Q, expected: &oracle::Q) {
         assert_eq!(actual.n.value, expected.n);
         assert_eq!(actual.d.value, expected.d);
@@ -176,6 +337,12 @@ impl PartialEq for CountedInt {
 }
 impl Eq for CountedInt {}
 
+#[derive(Clone, Copy)]
+enum BitCheck {
+    BeforeCreation,
+    Created,
+}
+
 impl CountedInt {
     fn same_budget(&self, b: &Self) -> Result<(), PredicateError> {
         if Rc::ptr_eq(self.lease.budget(), b.lease.budget()) {
@@ -187,9 +354,7 @@ impl CountedInt {
         }
     }
     fn created(value: BigInt, budget: &Rc<Budget>) -> Result<Self, PredicateError> {
-        if value.bits() > MAX_BITS {
-            return Err(PredicateError::CalcoloNonConcluso("dominio aritmetico"));
-        }
+        Self::check_bits(value.bits(), BitCheck::Created)?;
         let bytes = value.bits().div_ceil(LIMB_BITS) * (LIMB_BITS / 8)
             + std::mem::size_of::<BigInt>() as u64;
         debug_assert!(bytes <= MAX_VALUE_BYTES);
@@ -209,18 +374,38 @@ impl CountedInt {
         Self::created(-&self.value, self.lease.budget())
     }
 
+    // Unica regola di dominio; la fase distingue limite e invariante.
+    const fn check_bits(bits: u64, phase: BitCheck) -> Result<(), PredicateError> {
+        if bits <= MAX_BITS {
+            return Ok(());
+        }
+        Err(match phase {
+            BitCheck::BeforeCreation => PredicateError::AccuracyUnproven,
+            BitCheck::Created => PredicateError::CalcoloNonConcluso("dominio aritmetico"),
+        })
+    }
+
     fn add(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::check_bits(
+            self.value.bits().max(b.value.bits()) + 1,
+            BitCheck::BeforeCreation,
+        )?;
         Self::created(&self.value + &b.value, self.lease.budget())
     }
 
     fn sub(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::check_bits(
+            self.value.bits().max(b.value.bits()) + 1,
+            BitCheck::BeforeCreation,
+        )?;
         Self::created(&self.value - &b.value, self.lease.budget())
     }
 
     fn mul(&self, b: &Self) -> Result<Self, PredicateError> {
         self.same_budget(b)?;
+        Self::check_bits(self.value.bits() + b.value.bits(), BitCheck::BeforeCreation)?;
         Self::created(&self.value * &b.value, self.lease.budget())
     }
 
@@ -241,6 +426,10 @@ impl CountedInt {
     }
 
     fn shift(&self, bits: u32) -> Result<Self, PredicateError> {
+        Self::check_bits(
+            self.value.bits() + u64::from(bits),
+            BitCheck::BeforeCreation,
+        )?;
         Self::created(&self.value << bits, self.lease.budget())
     }
 }
@@ -254,6 +443,20 @@ pub struct Q {
 }
 
 impl Q {
+    /// Radice razionale esatta, oppure assenza se il valore e' irrazionale.
+    pub fn try_sqrt_exact(&self) -> Result<Option<Self>, PredicateError> {
+        if self.sign().is_lt() {
+            return Err(PredicateError::CalcoloNonConcluso("radicando negativo"));
+        }
+        let n = CountedInt::created(self.n.value.sqrt(), self.n.lease.budget())?;
+        let d = CountedInt::created(self.d.value.sqrt(), self.d.lease.budget())?;
+        if n.mul(&n)? == self.n && d.mul(&d)? == self.d {
+            Ok(Some(Self::new(n, d)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub(super) fn belongs_to(&self, budget: &Rc<Budget>) -> bool {
         Rc::ptr_eq(self.n.lease.budget(), budget) && Rc::ptr_eq(self.d.lease.budget(), budget)
     }
@@ -279,6 +482,12 @@ impl Q {
         };
         let mut b = d.copy()?;
         while b.value.sign() != Sign::NoSign {
+            crate::noding::check_interruption(
+                a.lease.budget().deadline,
+                None,
+                PredicateError::DeadlineExceeded,
+                PredicateError::Cancelled,
+            )?;
             let r = a.rem(&b)?;
             a = b;
             b = r;
@@ -371,5 +580,130 @@ impl Q {
         let left = self.n.mul(&b.d)?;
         let right = b.n.mul(&self.d)?;
         Ok(left.value.cmp(&right.value))
+    }
+}
+
+/// Somma a punto fisso con resto certificato: nessun denominatore cumulativo.
+/// Il numero di termini e' limitato da usize; 64 bit coprono il riporto.
+pub struct BoundedSum {
+    value: CountedInt,
+    error: CountedInt,
+    precision: u32,
+}
+impl BoundedSum {
+    pub fn new(precision: u32, work: &super::Work<'_>) -> Result<Self, PredicateError> {
+        Ok(Self {
+            value: CountedInt::int(0, &work.budget)?,
+            error: CountedInt::int(0, &work.budget)?,
+            precision,
+        })
+    }
+    pub fn add(&mut self, term: &Q, subtract: bool) -> Result<(), PredicateError> {
+        let scaled = term.n.shift(self.precision)?;
+        let quotient = scaled.div(&term.d)?;
+        self.value = if subtract {
+            self.value.sub(&quotient)?
+        } else {
+            self.value.add(&quotient)?
+        };
+        if scaled.rem(&term.d)?.value.sign() != Sign::NoSign {
+            self.error = self
+                .error
+                .add(&CountedInt::int(1, term.n.lease.budget())?)?;
+        }
+        // Somme di prodotti di coordinate finite: modulo < 2^2115,
+        // inclusi fino a 2^64 termini. La precisione e' fissata dal chiamante.
+        CountedInt::check_bits(
+            self.value.value.bits().max(self.error.value.bits()),
+            BitCheck::BeforeCreation,
+        )?;
+        Ok(())
+    }
+    pub fn sign(&self) -> Option<Ordering> {
+        if self.error.value.sign() == Sign::NoSign {
+            return Some(self.value.value.cmp(&BigInt::from(0)));
+        }
+        if self.value.value.magnitude() > self.error.value.magnitude() {
+            Some(if self.value.value.sign() == Sign::Minus {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Segno di una somma razionale senza costruire il denominatore comune.
+/// Il filtro veloce e' seguito da divisioni binarie con resti limitati.
+pub fn sum_sign(
+    terms: &[(Q, bool)],
+    work: &mut super::Work<'_>,
+) -> Result<Ordering, PredicateError> {
+    let mut filter = BoundedSum::new(128, work)?;
+    for (term, subtract) in terms {
+        work.step()?;
+        filter.add(term, *subtract)?;
+    }
+    if let Some(sign) = filter.sign() {
+        return Ok(sign);
+    }
+    let mut residuals = super::CountedVec::new();
+    let mut value = CountedInt::int(0, &work.budget)?;
+    let mut bound = u128::from(usize::BITS) + 2;
+    for (term, subtract) in terms {
+        work.step()?;
+        // Al massimo usize::MAX denominatori di MAX_BITS bit: su host
+        // fino a 64 bit il contatore di separazione richiede meno di 83 bit.
+        bound += u128::from(term.d.value.bits());
+        let scaled = term.n.shift(128)?;
+        let quotient = scaled.div(&term.d)?;
+        value = if *subtract {
+            value.sub(&quotient)?
+        } else {
+            value.add(&quotient)?
+        };
+        let remainder = scaled.rem(&term.d)?;
+        let remainder = if *subtract {
+            remainder.neg()?
+        } else {
+            remainder
+        };
+        work.push(&mut residuals, (remainder, &term.d))?;
+    }
+    let count = CountedInt::created(BigInt::from(terms.len()), &work.budget)?;
+    let mut precision = 128_u128;
+    loop {
+        work.step()?;
+        // L'errore troncato ha modulo strettamente minore del numero di
+        // termini. Dopo un passo indeciso l'accumulatore ha al massimo
+        // usize::BITS + 2 bit, non cresce col numero di cifre visitate.
+        if value.value.magnitude() >= count.value.magnitude() {
+            return Ok(if value.value.sign() == Sign::Minus {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            });
+        }
+        // Se S != 0, |S| >= 1/prodotto(d_i) > 2^-sum(bits(d_i)).
+        // Qui l'intervallo indeciso e' piu' stretto di questa separazione:
+        // l'unico valore razionale possibile e' zero.
+        if precision >= bound {
+            return Ok(Ordering::Equal);
+        }
+        value = value.shift(1)?;
+        let mut exact = true;
+        for (remainder, denominator) in residuals.iter_mut() {
+            work.step()?;
+            let doubled = remainder.shift(1)?;
+            value = value.add(&doubled.div(denominator)?)?;
+            *remainder = doubled.rem(denominator)?;
+            exact &= remainder.value.sign() == Sign::NoSign;
+        }
+        if exact {
+            return Ok(value.value.cmp(&BigInt::from(0)));
+        }
+        precision += 1;
     }
 }

@@ -11,6 +11,10 @@ cronologia delle modifiche si consulta in Git.
 | [`inventario.md`](inventario.md) | stato generato: crate, operazioni del catalogo, operazioni pubbliche della CLI, numero dei test |
 | [`operazioni.md`](operazioni.md) | riferimento generato delle operazioni, una scheda ciascuna (sorgenti in [`schede/`](schede/)) |
 | [`limiti.md`](limiti.md) | registro dei limiti dichiarati: precisione geografica di 1 cm, misure geodetiche, validazione OGC, hash e memoria delle chiavi, tipi e formati |
+| [`trim-extend.md`](trim-extend.md) | Taglio ed estensione planare GOP-018: API, precisione, prove e limiti |
+| [`reshape.md`](reshape.md) | Reshape planare XY GOP-019: costruzione, precisione e limiti |
+| [`offset.md`](offset.md) | Offset planare orientato GOP-017: API, precisione, prove e limiti |
+| [`polygon-completion.md`](polygon-completion.md) | completamento planare GOP-020: API Rust, facce, precisione e limiti di qualifica |
 | [`topologia.md`](topologia.md) | `geo.make_valid`, `geo.polygonize` e `geo.split` in Rust puro; API diretta DE-9IM, prove e limiti |
 | [`errori.md`](errori.md) | categorie d'errore ed effetto di un errore a metà della scrittura |
 | [`runner.md`](runner.md) | il piano, validazione, esecuzione, scadenza, diagnostica, operazioni geo, budget di memoria e limiti del runner |
@@ -20,6 +24,7 @@ cronologia delle modifiche si consulta in Git.
 | [`crs.md`](crs.md) | CRS integrati, i loro limiti e come aggiungere un codice |
 | [`riproiezione.md`](riproiezione.md) | `geo.reproject`: catena, metodi, cambi di datum, griglie NTv2, oracolo |
 | [`maggioranti-forma.md`](maggioranti-forma.md) | tabella esaustiva dei metodi inversi, derivazione e limiti dei certificati |
+| [`geodetica-coordinate.md`](geodetica-coordinate.md) | API dirette geodetiche e coordinate: certificati, grammatica, categorie e limiti |
 | [`misure-forma-conservata.md`](misure-forma-conservata.md) | API Rust di lunghezza e area sul percorso originale, certificati, budget e dominio geografico/Mercator |
 | [`../crates/plenora-data-py/README.md`](../crates/plenora-data-py/README.md) | l'SDK Python `plenora-data`: uso, errori, scadenza e annullamento, deviazioni, limiti, aggiornamento dei contratti |
 

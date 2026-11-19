@@ -382,6 +382,32 @@ fn run(
     })
 }
 
+/// Controllo comune alla consegna asincrona, dopo il ritorno del lavoro.
+#[pyfunction]
+fn _interruzione_consegna(
+    py: Python<'_>,
+    scadenza: Option<f64>,
+    scadenza_monotona: Option<f64>,
+    gettoni: Vec<Bound<'_, Gettone>>,
+    con_effetti: bool,
+) -> PyResult<()> {
+    proteggi(py, con_effetti, || {
+        match controlli(py, scadenza, scadenza_monotona, gettoni) {
+            Err(Errore::Plenora(errore)) => {
+                // Si riusa il controllo d'ingresso ma qui il lavoro e' gia' finito.
+                let errore = errore.untag().with_phase(ErrorPhase::Finalize);
+                Err(Errore::Plenora(if con_effetti {
+                    errore.with_remote_effect(plenora_core::RemoteEffect::Committed)
+                } else {
+                    errore
+                }))
+            }
+            Err(errore) => Err(errore),
+            Ok(_) => Err(interno("consegna annullata senza segnale")),
+        }
+    })
+}
+
 #[pymodule]
 fn _native(modulo: &Bound<'_, PyModule>) -> PyResult<()> {
     // Nessun testo di panico su stderr: il payload può contenere valori di
@@ -390,6 +416,7 @@ fn _native(modulo: &Bound<'_, PyModule>) -> PyResult<()> {
     // dell'interprete né di altri moduli.
     let _ = install(PanicPolicy::Silent);
     modulo.add_class::<Gettone>()?;
+    modulo.add_function(wrap_pyfunction!(_interruzione_consegna, modulo)?)?;
     modulo.add_function(wrap_pyfunction!(version, modulo)?)?;
     modulo.add_function(wrap_pyfunction!(capabilities, modulo)?)?;
     modulo.add_function(wrap_pyfunction!(catalog, modulo)?)?;

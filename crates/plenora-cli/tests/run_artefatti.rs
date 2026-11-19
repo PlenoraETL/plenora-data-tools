@@ -1317,3 +1317,19 @@ fn runtime_catalog_describe_validate_api_comuni() {
         "plenora-data-plan-validation-result-v1"
     );
 }
+
+/// GOP-028: il confine CLI osserva la scadenza prima del token.
+#[test]
+fn scadenza_e_annullamento_insieme_non_leggono_ne_pubblicano() {
+    let interruzione = Interruzione {
+        scadenza: Some(std::time::Instant::now()),
+        annullamento: Some(Arc::new(AtomicBool::new(true))),
+    };
+    let risolutore = risolutore();
+    let errore = esegui_artefatti(&testo(&richiesta()), &risolutore, &interruzione)
+        .expect_err("scadenza raggiunta");
+    assert_eq!(errore.category(), ErrorCategory::Timeout);
+    assert_eq!(errore.remote_effect(), RemoteEffect::None);
+    assert_eq!(*risolutore.eventi.borrow(), ["prepara 2"]);
+    assert!(risolutore.pubblicati.borrow().is_empty());
+}

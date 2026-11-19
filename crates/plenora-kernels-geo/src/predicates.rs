@@ -18,7 +18,7 @@ mod arrangement;
 #[deny(clippy::disallowed_methods)]
 mod arrangement_exhaustive;
 pub(crate) mod arrangement_indexed;
-mod interval_index;
+pub(crate) mod interval_index;
 
 /// Limiti della matrice sul noder comune (API 6.1.0 non rilasciata).
 /// Lavoro e nodi sono cumulativi; contenitori e aritmetica hanno ricevute vive.
@@ -85,7 +85,7 @@ impl Default for RelateLimits {
 /// Nessun prodotto del numero dei segmenti decide l'ammissione. Il noder
 /// emette ascisse critiche senza materializzare il grafo; lavoro, nodi e
 /// scadenza includono la validazione. Le prenotazioni seguono la durata
-/// dei vettori temporanei. Il flag ha precedenza sulla scadenza.
+/// dei vettori temporanei. La scadenza ha precedenza sul flag.
 ///
 /// # Errors
 /// Gli errori di [`relate_matrix`], piu' limite di lavoro/prenotazioni,
@@ -276,6 +276,15 @@ pub enum SpatialPredicate {
 /// `"right"`; nessun messaggio riporta coordinate.
 #[derive(Debug, Error)]
 pub enum PredicateError {
+    /// Tipo escluso dal profilo richiesto.
+    #[error("tipo geometrico non supportato")]
+    UnsupportedGeometry,
+    /// Il tetto aritmetico interno impedisce la certificazione.
+    #[error("GEOMETRY_ACCURACY_UNPROVEN")]
+    AccuracyUnproven,
+    /// La pubblicazione binary64 altererebbe la topologia esatta.
+    #[error("topologia non conservata dalla pubblicazione binary64")]
+    InvalidRoundedTopology,
     /// Il calcolo ha consumato il numero consentito di coppie o passi.
     #[error("limite di lavoro DE-9IM superato")]
     WorkLimit,

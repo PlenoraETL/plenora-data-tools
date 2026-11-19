@@ -1,6 +1,9 @@
 //! Split per incidenze razionali ordinate lungo la sorgente.
 #![allow(clippy::float_cmp)]
-use crate::noding::{sorted, CountedVec, Edge, Work, P, Q};
+use crate::noding::{sorted, CountedVec, Edge, Work, P};
+use crate::predicates::arrangement_indexed::line_boolean::{
+    verify_publication, LineBooleanError, Originals, PublishedEdge,
+};
 use crate::predicates::{PredicateError, RelateLimits};
 use geo::{Coord, Geometry, LineString};
 use std::cmp::Ordering;
@@ -16,20 +19,21 @@ use std::cmp::Ordering;
 /// Usa il noder comune e [`RelateLimits`], senza ammissione quadratica.
 /// Coppie e nodi includono anche gli incontri fra primitive dello stesso
 /// operando; passi, memoria contabile e controlli cooperativi includono
-/// validazione e costruzione dell'output. Il flag precede la deadline.
+/// validazione e costruzione dell'output. La deadline precede il flag.
 /// La memoria ha gli stessi limiti contabili (non heap fisico) di `RelateLimits`.
 ///
-/// XY planari in metri, stesso CRS per entrambi gli operandi. Ordinamento
+/// XY planari, stesso CRS e unita' per entrambi gli operandi. Ordinamento
 /// e deduplicazione sono razionali esatti; solo i nuovi estremi vengono
-/// arrotondati in f64, con errore euclideo verificato <= 1 cm. Un collasso
-/// di estremi distinti e' rifiutato. Nessuna lunghezza cumulativa floating
+/// pubblicati secondo GOP-015A: binary64 piu' vicino, meta' al pari,
+/// errore <= mezza ulp per ordinata. La topologia viene verificata dopo
+/// l'arrotondamento, compresi gli autoincroci della sorgente. Nessuna lunghezza cumulativa floating
 /// point interviene nel taglio. Linea vuota: un unico pezzo vuoto.
 ///
 /// # Errors
 /// [`PredicateError`]: ingressi non finiti o invalidi, limiti di lavoro,
 /// nodi o prenotazioni, allocazione fallita, cancellazione e deadline.
-/// `CalcoloNonConcluso` per splitter Line/Rect/Triangle non supportati,
-/// arrotondamento oltre 1 cm o collasso di estremi distinti.
+/// `CalcoloNonConcluso` per splitter Line/Rect/Triangle non supportati;
+/// `InvalidRoundedTopology` se la pubblicazione altera la topologia.
 pub fn split_line_with_limits(
     source: &LineString<f64>,
     splitter: &Geometry<f64>,
@@ -141,11 +145,7 @@ fn cutters(
                     _ => return Err(PredicateError::CalcoloNonConcluso("tipo poligonale")),
                 }
             }
-            _ => {
-                return Err(PredicateError::CalcoloNonConcluso(
-                    "tipo di tagliatore non supportato",
-                ))
-            }
+            _ => return Err(PredicateError::UnsupportedGeometry),
         }
     }
     Ok(())
@@ -160,71 +160,17 @@ fn compare(a: &P, b: &P) -> Result<Ordering, PredicateError> {
     }
 }
 
-// Ricerca dei due f64 adiacenti: nessuna conversione BigInt approssimata.
-// Al piu' 63 confronti razionali per coordinata; pareggio verso zero.
-fn rounded(value: &Q, work: &mut Work<'_>) -> Result<f64, PredicateError> {
-    let negative = value.sign().is_lt();
-    let magnitude = if negative {
-        work.integer(0)?.try_sub(value)?
-    } else {
-        value.try_clone()?
-    };
-    let mut low = 0_u64;
-    let mut high = f64::MAX.to_bits();
-    while low < high {
-        work.step()?;
-        let middle = low + (high - low).div_ceil(2);
-        let candidate = P::of_in(
-            Coord {
-                x: f64::from_bits(middle),
-                y: 0.0,
-            },
-            work,
-        )?;
-        if candidate.x.try_cmp(&magnitude)?.is_gt() {
-            high = middle - 1;
-        } else {
-            low = middle;
+pub(super) fn publication_error(error: LineBooleanError) -> PredicateError {
+    match error {
+        LineBooleanError::Predicate(error) => error,
+        LineBooleanError::InvalidRoundedTopology => PredicateError::InvalidRoundedTopology,
+        LineBooleanError::CoordinateOutOfRange => {
+            PredicateError::CalcoloNonConcluso("coordinata costruita non finita")
+        }
+        LineBooleanError::UnsupportedOperands | LineBooleanError::InvalidOutputDimension => {
+            PredicateError::CalcoloNonConcluso("certificato di pubblicazione non valido")
         }
     }
-    let lower = f64::from_bits(low);
-    let exact_lower = P::of_in(Coord { x: lower, y: 0.0 }, work)?;
-    let result = if exact_lower.x == magnitude {
-        lower
-    } else {
-        if low == f64::MAX.to_bits() {
-            return Err(PredicateError::CalcoloNonConcluso("conversione non finita"));
-        }
-        let upper = f64::from_bits(low + 1);
-        let exact_upper = P::of_in(Coord { x: upper, y: 0.0 }, work)?;
-        if magnitude
-            .try_cmp(&exact_lower.x.try_midpoint(&exact_upper.x)?)?
-            .is_gt()
-        {
-            upper
-        } else {
-            lower
-        }
-    };
-    Ok(if negative { -result } else { result })
-}
-
-pub(super) fn coordinate(point: &P, work: &mut Work<'_>) -> Result<Coord<f64>, PredicateError> {
-    let result = Coord {
-        x: rounded(&point.x, work)?,
-        y: rounded(&point.y, work)?,
-    };
-    let delta = P::of_in(result, work)?.try_sub(point)?;
-    let distance_squared = delta
-        .x
-        .try_mul(&delta.x)?
-        .try_add(&delta.y.try_mul(&delta.y)?)?;
-    // Fonte: contratto geografico 1 cm; (1/100)^2 = 1/10000 esatto.
-    let bound = work.integer(1)?.try_div(&work.integer(10_000)?)?;
-    if distance_squared.try_cmp(&bound)?.is_gt() {
-        return Err(PredicateError::CalcoloNonConcluso("precisione del nodo"));
-    }
-    Ok(result)
 }
 
 fn finish(
@@ -236,25 +182,69 @@ fn finish(
     work.push(output, LineString(coordinates))
 }
 
-fn split(
-    source: &LineString<f64>,
-    splitter: &Geometry<f64>,
+fn record_path<'a>(
+    topology: &'a [P],
+    cursor: &mut usize,
+    end: &P,
+    coords: [Coord<f64>; 2],
+    paths: &mut CountedVec<CountedVec<&'a P>>,
+    converted: &mut CountedVec<Edge>,
     work: &mut Work<'_>,
-) -> Result<Vec<LineString<f64>>, PredicateError> {
-    work.step()?;
-    let mut edges = CountedVec::new();
-    line_edges(source, "left", &mut edges, work)?;
-    let source_count = edges.len();
-    cutters(splitter, &mut edges, work)?;
+) -> Result<(), PredicateError> {
+    let mut path = CountedVec::new();
+    loop {
+        work.step()?;
+        let p = topology
+            .get(*cursor)
+            .ok_or(PredicateError::InvalidRoundedTopology)?;
+        work.push(&mut path, p)?;
+        if p == end {
+            break;
+        }
+        *cursor += 1;
+    }
+    work.push(paths, path)?;
+    work.nodes(2)?;
+    let edge = Edge {
+        a: P::of_in(coords[0], work)?,
+        b: P::of_in(coords[1], work)?,
+    };
+    work.push(converted, edge)
+}
+
+struct SplitNodes {
+    cuts: CountedVec<CountedVec<P>>,
+    topology: CountedVec<CountedVec<P>>,
+}
+
+fn split_nodes(
+    edges: &[Edge],
+    source_count: usize,
+    work: &mut Work<'_>,
+) -> Result<SplitNodes, PredicateError> {
+    let mut topology = CountedVec::new();
     let mut cuts = CountedVec::new();
-    for _ in 0..source_count {
+    for e in &edges[..source_count] {
+        let mut path = CountedVec::new();
+        work.nodes(2)?;
+        work.push(&mut path, e.a.try_clone()?)?;
+        work.push(&mut path, e.b.try_clone()?)?;
+        work.push(&mut topology, path)?;
         work.push(&mut cuts, CountedVec::new())?;
     }
     let mut references = CountedVec::new();
-    for e in &edges {
+    for e in edges {
         work.push(&mut references, e)?;
     }
     crate::noding::visit(&references, work, |i, j, hits, work| {
+        for index in [i, j] {
+            if index < source_count {
+                for p in hits.iter().flatten() {
+                    work.nodes(1)?;
+                    work.push(&mut topology[index], p.try_clone()?)?;
+                }
+            }
+        }
         let source_index = if i < source_count && j >= source_count {
             i
         } else if j < source_count && i >= source_count {
@@ -267,6 +257,30 @@ fn split(
         }
         Ok(())
     })?;
+    for (e, path) in edges[..source_count].iter().zip(topology.iter_mut()) {
+        let reverse = compare(&e.a, &e.b)?.is_gt();
+        sorted(
+            path,
+            |a, b| compare(a, b).map(|o| if reverse { o.reverse() } else { o }),
+            work,
+        )?;
+        path.dedup_by(|a, b| Ok(a == b), work)?;
+    }
+    Ok(SplitNodes { cuts, topology })
+}
+
+fn split(
+    source: &LineString<f64>,
+    splitter: &Geometry<f64>,
+    work: &mut Work<'_>,
+) -> Result<Vec<LineString<f64>>, PredicateError> {
+    work.step()?;
+    let mut edges = CountedVec::new();
+    line_edges(source, "left", &mut edges, work)?;
+    let source_count = edges.len();
+    cutters(splitter, &mut edges, work)?;
+    let originals = Originals::for_editing(source.0.iter().copied(), splitter, work)?;
+    let SplitNodes { mut cuts, topology } = split_nodes(&edges, source_count, work)?;
     let mut last_nondegenerate = 0;
     for (i, e) in edges[..source_count].iter().enumerate() {
         work.step()?;
@@ -274,6 +288,8 @@ fn split(
             last_nondegenerate = i;
         }
     }
+    let mut paths = CountedVec::new();
+    let mut converted = CountedVec::new();
     let mut piece_has_length = false;
     let mut output = CountedVec::new();
     let mut piece = CountedVec::new();
@@ -290,15 +306,27 @@ fn split(
         )?;
         points.dedup_by(|a, b| Ok(a == b), work)?;
         let mut previous = &e.a;
+        let mut previous_coord = source.0[index];
+        let mut cursor = 0;
         for p in points.iter() {
             work.step()?;
             if *p == e.a || *p == e.b {
                 continue;
             }
-            let c = coordinate(p, work)?;
+            let c = originals.coordinate(p, work).map_err(publication_error)?;
             if Some(&c) == piece.last() && *previous != *p {
-                return Err(PredicateError::CalcoloNonConcluso("collasso del nodo"));
+                return Err(PredicateError::InvalidRoundedTopology);
             }
+            record_path(
+                &topology[index],
+                &mut cursor,
+                p,
+                [previous_coord, c],
+                &mut paths,
+                &mut converted,
+                work,
+            )?;
+            previous_coord = c;
             work.push(&mut piece, c)?;
             finish(&mut piece, &mut output, work)?;
             work.push(&mut piece, c)?;
@@ -306,7 +334,18 @@ fn split(
         }
         let end = source.0[index + 1];
         if Some(&end) == piece.last() && *previous != e.b {
-            return Err(PredicateError::CalcoloNonConcluso("collasso del nodo"));
+            return Err(PredicateError::InvalidRoundedTopology);
+        }
+        if *previous != e.b {
+            record_path(
+                &topology[index],
+                &mut cursor,
+                &e.b,
+                [previous_coord, end],
+                &mut paths,
+                &mut converted,
+                work,
+            )?;
         }
         work.push(&mut piece, end)?;
         piece_has_length |= e.a != e.b;
@@ -322,7 +361,38 @@ fn split(
         }
     }
     finish(&mut piece, &mut output, work)?;
+    certify_paths(&paths, &converted, &originals, work)?;
     output.export(work)
+}
+
+fn certify_paths(
+    paths: &[CountedVec<&P>],
+    converted: &[Edge],
+    originals: &Originals,
+    work: &mut Work<'_>,
+) -> Result<(), PredicateError> {
+    let mut refs = CountedVec::new();
+    for edge in converted {
+        work.push(&mut refs, edge)?;
+    }
+    let rounded_paths = crate::noding::node(&refs, work)?;
+    let mut published = CountedVec::new();
+    for (exact, rounded) in paths.iter().zip(&rounded_paths) {
+        work.step()?;
+        if exact.len() < 2 || exact.len() != rounded.len() {
+            return Err(PredicateError::InvalidRoundedTopology);
+        }
+        for i in 0..exact.len() - 1 {
+            let certificate = PublishedEdge::noded(
+                [exact[i], exact[i + 1]],
+                [&rounded[i], &rounded[i + 1]],
+                work,
+            )?;
+            work.push(&mut published, certificate)?;
+        }
+    }
+    verify_publication(&published, originals, false, None, work).map_err(publication_error)?;
+    Ok(())
 }
 
 #[cfg(test)]

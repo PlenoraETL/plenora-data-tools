@@ -21,7 +21,7 @@ fra poligoni distinti si contano piu' volte. Un poligono vuoto vale zero.
 
 Entrambe richiedono `ResolvedCrs`, `ShapeTolerance`, `ShapeMeasureLimits`
 e un flag `AtomicBool` opzionale. Il risultato `ShapeMeasure` contiene valore,
-bound assoluto, ellissoide e lavoro consumato. Il CRS del certificato e'
+bound assoluto, bound relativo zero, componenti trasformazione/discretizzazione/numerica, ellissoide e lavoro consumato. Il CRS del certificato e'
 esattamente l'argomento della chiamata; il modello e' `preserve_shape`, le
 unita' sono fissate dalla funzione. Nessun cambio di datum: le conversioni
 riusano `Riproiettore::geografiche_sorgente` con piano identita'.
@@ -34,8 +34,11 @@ e ogni tolleranza sono certificabili. TM, LCC, LAEA, stereografica obliqua e
 Hotine svizzera rifiutano
 fuori dal proprio dominio qualificato o quando il residuo a intervalli non
 dimostra la precisione numerica richiesta. Una convergenza campionaria non li
-sostituisce. CRS senza inversa integrata e punti fuori dominio danno
-`CrsDomain`. Non si ripiega su WGS 84.
+sostituisce. L'inversa viene verificata prima del certificato: CRS senza inversa
+integrata e punti fuori dal dominio del CRS danno `CrsDomain` (`crs`).
+Un punto invertibile ma fuori dal dominio della prova da' `CertifiedDomain`
+(`execution`, codice `GEOMETRY_ACCURACY_UNPROVEN`); un residuo non dimostrato
+dentro quel dominio da' `AccuracyUnproven`, con la stessa categoria e codice. Non si ripiega su WGS 84.
 
 Il segmento geografico interpola linearmente longitudine e latitudine.
 Da 179 a -179 attraversa zero e copre 358 gradi; non c'e' unwrap implicito.
@@ -147,7 +150,7 @@ Il residuo include anche l'errore di accumulazione GeographicLib con le
 feature effettive del workspace (`default-features=false`). Non si assume
 che la sua somma sia esatta. I bound degli anelli si sommano anche per i
 buchi; la cancellazione delle aree non riduce il bound. Ulteriori margini
-di `32 epsilon` coprono il residuo e la somma finale.
+di `64 epsilon` coprono il residuo e la somma finale.
 
 Una differenza sorgente non nulla che diventa zero o subnormale durante
 normalizzazione o divisione e' `AccuracyUnproven`. Il numero complessivo
@@ -170,11 +173,11 @@ ammessa attraverso una stima. Somme intere controllate; nessun prodotto
 fra cardinalita' decide l'ammissione. Un errore non restituisce un prefisso.
 
 Checkpoint all'ingresso, per parte, per coordinata e per primitiva, nei
-confronti topologici, e prima del ritorno. Cancellazione prima della
-deadline, poi budget. Le singole primitive core/GeographicLib sono
+confronti topologici, e prima del ritorno. Deadline prima della cancellazione,
+poi budget, tramite `Work::new` (costruttore unico, deadline prima della cancellazione) come nelle altre API GOP-028. Le singole primitive core/GeographicLib sono
 sincrone; non si promette interruzione all'interno di una loro chiamata.
 
-Errori distinti: `InvalidTolerance`, `CrsDomain`, `UnsupportedEllipsoid`,
+Errori distinti: `InvalidTolerance`, `CrsDomain`, `CertifiedDomain`, `UnsupportedEllipsoid`,
 `UnsupportedTopology`, `UnsupportedSurface`, `AccuracyUnproven`,
 `WorkLimit`, `Cancelled`, `DeadlineExceeded`. Il testo non contiene dati.
 
@@ -202,3 +205,31 @@ per lato. La differenza fra i due riferimenti e' circa 2.7 micrometri sulla
 linea e 0.77 m² sul rettangolo; le prove usano margini rispettivamente
 di 0.1 mm e 1 m² per la fixture. La prova analitica dell'area non dipende
 da quel margine campionario.
+
+## Scomposizione pubblica e costo del certificato
+
+`ShapeMeasure.error_components` pubblica tre maggioranti assoluti, in metri
+oppure metri quadrati; la loro somma, nello stesso ordine del kernel, e'
+`absolute_error_bound`. `relative_error_bound` e' zero. La discretizzazione
+copre la sostituzione della curva e la quadratura; la numerica copre primitive,
+somme e residuo dell'integrale d'area. La trasformazione e' zero: non ci sono cambi di datum o approssimazioni
+aggiuntive del modello matematico. L'inversa esatta appartiene al modello
+preserveShape; TUTTO l'errore della sua valutazione numerica, insieme a
+interpolazione, primitive e somme, appartiene alla componente numerica.
+Questo non significa che l'inversa calcolata abbia errore zero.
+Nessuna incertezza geodetica di rilievo
+viene incorporata in questi numeri.
+
+I maggioranti globali di derivate per TM, LCC, LAEA, stereografica e Hotine
+possono essere molto conservativi. Il corpus indipendente osserva rapporti
+bound/errore reale dell'ordine di 1e8--1e10: un percorso TM di circa 70 km
+ha prodotto circa 41 m di bound contro circa 2e-9 m di differenza dall'oracolo.
+Sono osservazioni di quel corpus, non limiti universali sul rapporto.
+Il raddoppio globale rivaluta anche i segmenti gia' accurati: tolleranze strette
+possono richiedere minuti o esaurire `max_work`. L'algoritmo non sostituisce
+il certificato con una semplice prova di convergenza.
+
+La slice di poligoni rappresenta misure indipendenti, la cui somma e' prescritta
+per le parti da GOP-007. La funzione non promette l'area dell'unione: due copie
+dello stesso poligono contribuiscono due volte. Non viene certificata la
+validita' della slice come singolo MultiPolygon OGC con interni disgiunti.

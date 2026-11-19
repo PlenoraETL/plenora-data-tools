@@ -15,7 +15,7 @@
 mod certificate;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use geo::kernels::RobustKernel;
@@ -45,7 +45,7 @@ pub struct ShapeMeasureLimits {
     /// Unita': visita di coordinata, conversione, primitiva geodetica,
     /// confronto di segmenti o passo del test di contenimento.
     pub max_work: u64,
-    /// Scadenza monotona; cancellazione prioritaria.
+    /// Scadenza monotona; prevale sulla cancellazione allo stesso checkpoint.
     pub deadline: Option<Instant>,
 }
 
@@ -54,13 +54,52 @@ pub struct ShapeMeasureLimits {
 pub struct ShapeMeasure {
     /// Metri per lunghezza, metri quadrati per area.
     pub value: f64,
-    /// Maggiorante assoluto composto di discretizzazione e numerica.
+    /// Maggiorante assoluto composto di trasformazione, discretizzazione e numerica.
     /// Soddisfa anche `absolute + relative * abs(valore_esatto)` richiesto.
     pub absolute_error_bound: f64,
+    /// Bound relativo pubblicato: zero, tutto il certificato e' assoluto.
+    pub relative_error_bound: f64,
+    /// Scomposizione nell'unita' della misura, con somma pari al bound assoluto.
+    pub error_components: ShapeErrorComponents,
     /// Ellissoide del datum sorgente; il CRS e' quello passato alla chiamata.
     pub ellipsoid: Ellipsoid,
     /// Lavoro effettivamente contato, inclusi i tentativi scartati.
     pub work: u64,
+}
+
+/// Componenti del certificato GOP-006, tutte finite e non negative.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ShapeErrorComponents {
+    /// Zero: nessun cambio datum o approssimazione aggiuntiva del modello.
+    pub transformation: f64,
+    /// Approssimazione del percorso continuo e quadratura.
+    pub discretization: f64,
+    /// Valutazione dell'inversa, interpolazione, primitive, residuo d'area e somme.
+    pub numerical: f64,
+}
+
+#[derive(Default)]
+struct MeasureErrors {
+    transformation: MeasureSum,
+    discretization: MeasureSum,
+    numerical: MeasureSum,
+}
+impl MeasureErrors {
+    fn components(&self) -> ShapeErrorComponents {
+        ShapeErrorComponents {
+            transformation: self.transformation.value(),
+            discretization: self.discretization.value(),
+            numerical: self.numerical.value(),
+        }
+    }
+    fn value(&self) -> f64 {
+        (self.transformation.value() + self.discretization.value()) + self.numerical.value()
+    }
+    fn merge(&mut self, other: &Self) {
+        self.transformation.add(other.transformation.value());
+        self.discretization.add(other.discretization.value());
+        self.numerical.add(other.numerical.value());
+    }
 }
 
 /// Errori senza coordinate, definizioni CRS o valori dell'ingresso.
@@ -72,6 +111,9 @@ pub enum ShapeMeasureError {
     /// CRS non convertibile o coordinata fuori dal dominio dell'inversa.
     #[error("dominio CRS della misura non supportato")]
     CrsDomain,
+    /// Inversa definita nel CRS, ma fuori dal dominio del certificato (execution).
+    #[error("GEOMETRY_ACCURACY_UNPROVEN: dominio certificato escluso")]
+    CertifiedDomain,
     /// Ellissoide fuori dal dominio terrestre qualificato.
     #[error("ellissoide della misura non supportato")]
     UnsupportedEllipsoid,
@@ -82,7 +124,7 @@ pub enum ShapeMeasureError {
     #[error("dominio della superficie non supportato")]
     UnsupportedSurface,
     /// Manca una dimostrazione del bound, o precisione numerica insufficiente.
-    #[error("accuratezza della misura non dimostrata")]
+    #[error("GEOMETRY_ACCURACY_UNPROVEN")]
     AccuracyUnproven,
     /// Budget realmente consumato.
     #[error("limite di lavoro della misura superato")]
@@ -97,26 +139,34 @@ pub enum ShapeMeasureError {
 
 struct MeasureWork<'a> {
     limits: ShapeMeasureLimits,
-    cancelled: Option<&'a AtomicBool>,
+    interrupt: crate::noding::Work<'a>,
     used: u64,
 }
 
-impl MeasureWork<'_> {
-    fn checkpoint(&self) -> Result<(), ShapeMeasureError> {
-        if self
-            .cancelled
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            return Err(ShapeMeasureError::Cancelled);
+impl<'a> MeasureWork<'a> {
+    fn new(limits: ShapeMeasureLimits, cancelled: Option<&'a AtomicBool>) -> Self {
+        Self {
+            limits,
+            interrupt: crate::noding::Work::new(
+                crate::predicates::RelateLimits {
+                    max_steps: 1_u64 << 50,
+                    deadline: limits.deadline,
+                    ..crate::predicates::RelateLimits::default()
+                },
+                cancelled,
+            ),
+            used: 0,
         }
-        if self
-            .limits
-            .deadline
-            .is_some_and(|end| Instant::now() >= end)
-        {
-            return Err(ShapeMeasureError::DeadlineExceeded);
-        }
-        Ok(())
+    }
+
+    fn checkpoint(&mut self) -> Result<(), ShapeMeasureError> {
+        self.interrupt.step().map_err(|error| match error {
+            crate::predicates::PredicateError::DeadlineExceeded => {
+                ShapeMeasureError::DeadlineExceeded
+            }
+            crate::predicates::PredicateError::Cancelled => ShapeMeasureError::Cancelled,
+            _ => ShapeMeasureError::WorkLimit,
+        })
     }
 
     fn charge(&mut self) -> Result<(), ShapeMeasureError> {
@@ -239,25 +289,51 @@ impl ShapeContext {
         work: &mut MeasureWork<'_>,
     ) -> Result<Coord<f64>, ShapeMeasureError> {
         work.charge()?;
-        if let ShapeDerivatives::Transverse(certificate) = &self.derivatives {
-            certificate.check_domain(point.x, point.y)?;
-        }
-        if let ShapeDerivatives::Lambert(certificate) = &self.derivatives {
-            certificate.check_domain(point.x, point.y)?;
-        }
-        if let ShapeDerivatives::Azimuthal(certificate) = &self.derivatives {
-            certificate.check_domain(point.x, point.y)?;
-        }
-        if let ShapeDerivatives::Stereographic(certificate) = &self.derivatives {
-            certificate.check_domain(point.x, point.y)?;
-        }
-        if let ShapeDerivatives::Hotine(certificate) = &self.derivatives {
-            certificate.check_domain(point.x, point.y)?;
-        }
         let (x, y) = self
             .projection
             .geografiche_sorgente(point.x, point.y)
             .map_err(|_| ShapeMeasureError::CrsDomain)?;
+
+        if let ShapeDerivatives::Transverse(certificate) = &self.derivatives {
+            certificate
+                .check_domain(point.x, point.y)
+                .map_err(|error| match error {
+                    ShapeMeasureError::AccuracyUnproven => ShapeMeasureError::CertifiedDomain,
+                    other => other,
+                })?;
+        }
+        if let ShapeDerivatives::Lambert(certificate) = &self.derivatives {
+            certificate
+                .check_domain(point.x, point.y)
+                .map_err(|error| match error {
+                    ShapeMeasureError::AccuracyUnproven => ShapeMeasureError::CertifiedDomain,
+                    other => other,
+                })?;
+        }
+        if let ShapeDerivatives::Azimuthal(certificate) = &self.derivatives {
+            certificate
+                .check_domain(point.x, point.y)
+                .map_err(|error| match error {
+                    ShapeMeasureError::AccuracyUnproven => ShapeMeasureError::CertifiedDomain,
+                    other => other,
+                })?;
+        }
+        if let ShapeDerivatives::Stereographic(certificate) = &self.derivatives {
+            certificate
+                .check_domain(point.x, point.y)
+                .map_err(|error| match error {
+                    ShapeMeasureError::AccuracyUnproven => ShapeMeasureError::CertifiedDomain,
+                    other => other,
+                })?;
+        }
+        if let ShapeDerivatives::Hotine(certificate) = &self.derivatives {
+            certificate
+                .check_domain(point.x, point.y)
+                .map_err(|error| match error {
+                    ShapeMeasureError::AccuracyUnproven => ShapeMeasureError::CertifiedDomain,
+                    other => other,
+                })?;
+        }
         let ShapeDerivatives::Separable(derivatives) = &self.derivatives else {
             if let ShapeDerivatives::Transverse(certificate) = &self.derivatives {
                 certificate.certify(point.x, point.y, x, y)?;
@@ -348,13 +424,15 @@ fn accepted(value: f64, bound: f64, tolerance: ShapeTolerance) -> bool {
 fn result(
     context: &ShapeContext,
     value: f64,
-    bound: f64,
-    work: &MeasureWork<'_>,
+    error: &MeasureErrors,
+    work: &mut MeasureWork<'_>,
 ) -> Result<ShapeMeasure, ShapeMeasureError> {
     work.checkpoint()?;
     Ok(ShapeMeasure {
         value,
-        absolute_error_bound: bound,
+        absolute_error_bound: error.value(),
+        relative_error_bound: 0.0,
+        error_components: error.components(),
         ellipsoid: context.ellipsoid.parametri(),
         work: work.used,
     })
@@ -380,17 +458,13 @@ pub fn preserve_shape_length_with_limits(
     limits: ShapeMeasureLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<ShapeMeasure, ShapeMeasureError> {
-    let mut work = MeasureWork {
-        limits,
-        cancelled,
-        used: 0,
-    };
+    let mut work = MeasureWork::new(limits, cancelled);
     work.checkpoint()?;
     let context = ShapeContext::new(crs, tolerance)?;
     let mut divisions = 1_u32;
     loop {
         let mut value = MeasureSum::default();
-        let mut error = MeasureSum::default();
+        let mut error = MeasureErrors::default();
         for part in parts {
             work.charge()?;
             for &point in &part.0 {
@@ -402,9 +476,12 @@ pub fn preserve_shape_length_with_limits(
                 )?;
             }
         }
-        let bound = error.value() + value.value().abs() * 32.0 * f64::EPSILON;
+        error
+            .numerical
+            .add(value.value().abs() * 64.0 * f64::EPSILON);
+        let bound = error.value();
         if accepted(value.value(), bound, tolerance) {
-            return result(&context, value.value(), bound, &work);
+            return result(&context, value.value(), &error, &mut work);
         }
         divisions = divisions
             .checked_mul(2)
@@ -419,7 +496,7 @@ fn length_edge(
     divisions: u32,
     work: &mut MeasureWork<'_>,
     value: &mut MeasureSum,
-    error: &mut MeasureSum,
+    error: &mut MeasureErrors,
 ) -> Result<(), ShapeMeasureError> {
     if start == end || (context.geographic && start.y == end.y && start.y.abs() == 90.0) {
         work.charge()?;
@@ -463,11 +540,14 @@ fn length_edge(
         let lower = distance - numerical;
         if lower <= 0.0 {
             // Il maggiorante della velocita' resta valido anche ai poli o ai coincidenti.
-            error.add(1.1 * a * speed + numerical);
+            error.discretization.add(1.1 * a * speed);
         } else {
             // Varianza della velocita' ECEF: L-d <= A^2/(12d), senza test di convergenza.
-            error.add(acceleration.powi(2) / (12.0 * lower) + numerical);
+            error
+                .discretization
+                .add(acceleration.powi(2) / (12.0 * lower));
         }
+        error.numerical.add(numerical);
         value.add(distance);
         previous = point;
     }
@@ -493,11 +573,7 @@ pub fn preserve_shape_area_with_limits(
     limits: ShapeMeasureLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<ShapeMeasure, ShapeMeasureError> {
-    let mut work = MeasureWork {
-        limits,
-        cancelled,
-        used: 0,
-    };
+    let mut work = MeasureWork::new(limits, cancelled);
     work.checkpoint()?;
     let context = ShapeContext::new(crs, tolerance)?;
     for polygon in polygons {
@@ -506,7 +582,7 @@ pub fn preserve_shape_area_with_limits(
     let mut divisions = 1_u32;
     loop {
         let mut value = MeasureSum::default();
-        let mut error = MeasureSum::default();
+        let mut error = MeasureErrors::default();
         for polygon in polygons {
             work.charge()?;
             for (index, ring) in std::iter::once(polygon.exterior())
@@ -515,12 +591,15 @@ pub fn preserve_shape_area_with_limits(
             {
                 let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;
                 value.add(if index == 0 { area.abs() } else { -area.abs() });
-                error.add(bound);
+                error.merge(&bound);
             }
         }
-        let bound = error.value() + value.value().abs() * 32.0 * f64::EPSILON;
+        error
+            .numerical
+            .add(value.value().abs() * 64.0 * f64::EPSILON);
+        let bound = error.value();
         if value.value() >= 0.0 && accepted(value.value(), bound, tolerance) {
-            return result(&context, value.value(), bound, &work);
+            return result(&context, value.value(), &error, &mut work);
         }
         divisions = divisions
             .checked_mul(2)
@@ -549,10 +628,10 @@ fn ring_area(
     ring: &LineString<f64>,
     divisions: u32,
     work: &mut MeasureWork<'_>,
-) -> Result<(f64, f64), ShapeMeasureError> {
+) -> Result<(f64, MeasureErrors), ShapeMeasureError> {
     let mut polygon = PolygonArea::new(context.ellipsoid.geodetica(), Winding::CounterClockwise);
     let mut integral = MeasureSum::default();
-    let mut error = MeasureSum::default();
+    let mut error = MeasureErrors::default();
     let parameters = context.ellipsoid.parametri();
     for pair in ring.0.windows(2) {
         let (dx, dy) = context.deltas(pair[0], pair[1], divisions)?;
@@ -576,11 +655,11 @@ fn ring_area(
                     integral.add(-area_primitive(midpoint.y, parameters) * dx);
                     let derivative_bound =
                         1.1 * (bounds.latitude_first.powi(2) + bounds.latitude_second);
-                    error.add(
-                        dx.abs()
-                            * parameters.semi_major_axis_metre.powi(2)
-                            * (derivative_bound * dy * dy / 24.0 + 512.0 * f64::EPSILON),
-                    );
+                    let scale = dx.abs() * parameters.semi_major_axis_metre.powi(2);
+                    error
+                        .discretization
+                        .add(scale * derivative_bound * dy * dy / 24.0);
+                    error.numerical.add(scale * 512.0 * f64::EPSILON);
                 }
                 ShapeDerivatives::Transverse(_)
                 | ShapeDerivatives::Lambert(_)
@@ -595,10 +674,9 @@ fn ring_area(
                     integral.add(-area_primitive(midpoint.y, parameters) * longitude_delta);
                     // Taylor di Q(phi) attorno al centro; lambda' non e' costante.
                     let delta = dx.abs() + dy.abs();
-                    error.add(
-                        parameters.semi_major_axis_metre.powi(2)
-                            * (8.25 * delta.powi(3) + 16384.0 * f64::EPSILON),
-                    );
+                    let scale = parameters.semi_major_axis_metre.powi(2);
+                    error.discretization.add(scale * 8.25 * delta.powi(3));
+                    error.numerical.add(scale * 16384.0 * f64::EPSILON);
                 }
             }
         }
@@ -607,11 +685,14 @@ fn ring_area(
     let (_, area, _) = polygon.compute(true);
     // Il valore GeographicLib si confronta con un integrale indipendente con bound.
     // Anche l'errore della primitiva area e della sua accumulazione entra nel residuo.
-    let bound = (area - integral.value()).abs() + error.value() + 32.0 * f64::EPSILON * area.abs();
+    error
+        .numerical
+        .add((area - integral.value()).abs() + 64.0 * f64::EPSILON * area.abs());
+    let bound = error.value();
     if !area.is_finite() || !bound.is_finite() {
         return Err(ShapeMeasureError::AccuracyUnproven);
     }
-    Ok((area, bound))
+    Ok((area, error))
 }
 
 fn validate_polygon(

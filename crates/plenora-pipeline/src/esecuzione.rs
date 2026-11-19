@@ -26,7 +26,7 @@
 //! `190c493`, per un solo batch per arco.
 
 use std::collections::{BTreeMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -112,8 +112,8 @@ pub struct ReportPasso {
 /// Il runner li controlla prima di ogni passo e prima di consegnare gli
 /// output, mai durante un kernel: un passo lungo finisce anche oltre la
 /// scadenza, e l'errore arriva al controllo successivo (limite dichiarato
-/// in docs/runner.md, «Scadenza e annullamento»). L'annullamento prevale sulla
-/// scadenza quando valgono entrambi.
+/// in docs/runner.md, «Scadenza e annullamento»). La scadenza prevale
+/// sull'annullamento quando valgono entrambi.
 #[derive(Clone, Debug, Default)]
 pub struct Interruzione {
     /// Istante oltre il quale l'esecuzione si ferma con `Timeout`
@@ -131,32 +131,20 @@ impl Interruzione {
     /// Pubblica perché la usano anche i confini sopra il runner
     /// (`plenora-io` fra la lettura di un file e l'altro, la CLI fra le fasi
     /// di un comando): un solo controllo, con la stessa precedenza
-    /// dell'annullamento sulla scadenza e gli stessi testi.
+    /// della scadenza sull'annullamento e gli stessi testi.
     ///
     /// # Errors
     ///
-    /// `Cancelled` se il segnale è alzato, altrimenti `Timeout` se la
-    /// scadenza è passata; la fase è quella derivata dalla variante, e chi
+    /// `Timeout` se la scadenza è passata, altrimenti `Cancelled` se il
+    /// segnale è alzato; la fase è quella derivata dalla variante, e chi
     /// conosce il momento esatto la raffina con `with_phase`.
     pub fn verifica(&self, dove: &str) -> Result<()> {
-        if self
-            .annullamento
-            .as_ref()
-            .is_some_and(|segnale| segnale.load(Ordering::Acquire))
-        {
-            return Err(PlenoraError::Cancelled(format!(
-                "esecuzione annullata {dove}"
-            )));
-        }
-        if self
-            .scadenza
-            .is_some_and(|scadenza| Instant::now() >= scadenza)
-        {
-            return Err(PlenoraError::Timeout(format!(
-                "scadenza dell'esecuzione superata {dove}"
-            )));
-        }
-        Ok(())
+        plenora_core::tempo::verifica_interruzione(
+            self.scadenza,
+            self.annullamento.as_deref(),
+            || PlenoraError::Timeout(format!("scadenza dell'esecuzione superata {dove}")),
+            || PlenoraError::Cancelled(format!("esecuzione annullata {dove}")),
+        )
     }
 }
 
