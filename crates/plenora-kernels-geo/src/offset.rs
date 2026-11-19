@@ -149,10 +149,7 @@ fn dot(a: &P, b: &P) -> Result<Q, OffsetError> {
     Ok(a.x.try_mul(&b.x)?.try_add(&a.y.try_mul(&b.y)?)?)
 }
 
-fn validate(input: &Geometry<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>, OffsetError> {
-    let Geometry::LineString(line) = input else {
-        return Err(OffsetError::Unsupported);
-    };
+fn validate(line: &LineString<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>, OffsetError> {
     if line.0.len() < 2 {
         return Err(OffsetError::InvalidGeometry);
     }
@@ -226,11 +223,11 @@ fn execute(
     {
         return Err(OffsetError::InvalidConfiguration);
     }
-    let points = validate(input, work)?;
+    let Geometry::LineString(line) = input else {
+        return Err(OffsetError::Unsupported);
+    };
+    let points = validate(line, work)?;
     if options.distance.to_bits() << 1 == 0 {
-        let Geometry::LineString(line) = input else {
-            return Err(OffsetError::Unsupported);
-        };
         let mut copy = CountedVec::new();
         for coord in &line.0 {
             work.nodes(1)?;

@@ -2,6 +2,58 @@ use super::*;
 use geo::Coord;
 use std::time::{Duration, Instant};
 
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn resource_prefixes_never_publish_a_partial_trim() {
+    let target = line(&[(0.0, 0.0), (4.0, 0.0)]);
+    let guide = line(&[(2.0, 10.0), (2.0, 11.0)]);
+    // GOP-018: la semiretta sinistra della guida e' x<=2.
+    let expected = LineString::from(vec![(0.0, 0.0), (2.0, 0.0)]);
+    // GOP-026/027: ogni prefisso del budget deve fallire atomicamente;
+    // dopo il primo successo aumentare il budget non cambia la geometria.
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = RelateLimits::default();
+            match resource {
+                0 => limits.max_steps = budget,
+                1 => limits.max_reserved_bytes = budget,
+                2 => limits.max_nodes = budget,
+                _ => limits.max_segment_pairs = budget,
+            }
+            match trim_extend_with_limits(
+                &target,
+                &guide,
+                TrimExtendOptions::default(),
+                limits,
+                None,
+            ) {
+                Ok(actual) => {
+                    assert_eq!(actual, expected);
+                    succeeded = true;
+                }
+                Err(TrimExtendError::Predicate(error)) => {
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+                Err(error) => panic!("categoria inattesa: {error:?}"),
+            }
+        }
+        assert!(succeeded);
+    }
+}
+
 #[deny(clippy::disallowed_methods)]
 fn line(points: &[(f64, f64)]) -> Geometry<f64> {
     Geometry::LineString(LineString::from(points.to_vec()))
@@ -511,4 +563,78 @@ fn degenerate_guide_is_invalid_geometry() {
         ),
         Err(TrimExtendError::InvalidGeometry)
     ));
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn resource_prefixes_terminal_extensions_are_atomic() {
+    let target = line(&[(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]);
+    // GOP-018: rette x=-2 e x=4 incontrano solo il raggio terminale
+    // corrispondente; add_vertex conserva anche il vecchio estremo.
+    for (x, mode, expected) in [
+        (
+            -2.0,
+            TrimExtendMode::AddVertex,
+            vec![(-2.0, 0.0), (0.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
+        ),
+        (
+            4.0,
+            TrimExtendMode::AddVertex,
+            vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (4.0, 0.0)],
+        ),
+        (
+            -2.0,
+            TrimExtendMode::MoveTerminalVertex,
+            vec![(-2.0, 0.0), (1.0, 0.0), (2.0, 0.0)],
+        ),
+        (
+            4.0,
+            TrimExtendMode::MoveTerminalVertex,
+            vec![(0.0, 0.0), (1.0, 0.0), (4.0, 0.0)],
+        ),
+    ] {
+        let guide = line(&[(x, 10.0), (x, 11.0)]);
+        let expected = LineString::from(expected);
+        let config = TrimExtendOptions {
+            ends: TrimExtendEnds::Both,
+            mode,
+        };
+        // GOP-026/027: ogni prefisso del budget deve fallire atomicamente;
+        // dopo il primo successo aumentare il budget non cambia la geometria.
+        for resource in 0..4 {
+            let memory = resource == 1;
+            let mut succeeded = false;
+            for budget in (0..=4096)
+                .map(|value| if memory { value * 16 } else { value })
+                .chain((17..=26).map(|power| 1_u64 << power))
+            {
+                if succeeded && budget < (1_u64 << 26) {
+                    continue;
+                }
+                let mut limits = RelateLimits::default();
+                match resource {
+                    0 => limits.max_steps = budget,
+                    1 => limits.max_reserved_bytes = budget,
+                    2 => limits.max_nodes = budget,
+                    _ => limits.max_segment_pairs = budget,
+                }
+                match trim_extend_with_limits(&target, &guide, config, limits, None) {
+                    Ok(actual) => {
+                        assert_eq!(actual, expected);
+                        succeeded = true;
+                    }
+                    Err(TrimExtendError::Predicate(error)) => {
+                        assert!(!succeeded);
+                        if memory {
+                            assert!(matches!(error, PredicateError::ReservationLimit));
+                        } else {
+                            assert!(matches!(error, PredicateError::WorkLimit));
+                        }
+                    }
+                    Err(error) => panic!("categoria inattesa: {error:?}"),
+                }
+            }
+            assert!(succeeded);
+        }
+    }
 }

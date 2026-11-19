@@ -12,6 +12,16 @@ la cui versione non ha qui una voce datata.
 
 ## [6.1.0] - non rilasciata
 
+### Correzioni
+
+- GOP-028 nella pipeline e in tutto il workspace: quando scadenza e
+  annullamento sono entrambi attivi prevale sempre la scadenza, anche ai
+  confini IO, CLI e SDK. Controllo condiviso con i kernel in `plenora-core`.
+  Le scadenze dei kernel diventano `Timeout`, come quelle del runner;
+  annullamento `Cancelled`, limiti di lavoro e memoria `ResourceLimit`.
+  Cambia il comportamento precedente della pipeline, che dava precedenza
+  all'annullamento e classificava `DeadlineExceeded` come `ResourceLimit`.
+
 ### Aggiunte
 
 - API comune `coordinate_api`, profilo esplicito `standard_v1`: DD, DMS,
@@ -90,7 +100,7 @@ la cui versione non ha qui una voce datata.
   La 6.1.0 non e' rilasciata: `RelateLimits` conta ora i test esatti dopo
   entrambi i filtri, le capacita' strutturali vive e aggiunge `max_nodes`
   (duplicati intermedi inclusi, default 10 milioni) e `deadline` (default
-  nessuna). Errore distinto `DeadlineExceeded`, categoria ResourceLimit
+  nessuna). Errore distinto `DeadlineExceeded`, categoria Timeout
   nella pipeline. La semantica precedente dei limiti 1a non e' mantenuta.
   Gli ingressi controllati split_line/polygonize sono disponibili; i valori
   BigInt sono addebitati sul bilancio vivo, con le esclusioni documentate

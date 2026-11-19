@@ -361,3 +361,116 @@ fn excluded_line_cutter_is_typed_unsupported() {
         Err(PredicateError::UnsupportedGeometry)
     ));
 }
+
+#[test]
+fn resource_prefixes_are_atomic_and_monotone() {
+    // Il punto interno 1 divide [0,2] in [0,1] e [1,2].
+    let source = line_string![(x:0.,y:0.),(x:2.,y:0.)];
+    let cutter = Geometry::Point(Point::new(1.0, 0.0));
+    let expected = vec![
+        line_string![(x:0.,y:0.),(x:1.,y:0.)],
+        line_string![(x:1.,y:0.),(x:2.,y:0.)],
+    ];
+    // GOP-026/027: esaurimento durante raccolta, noding o pubblicazione
+    // non restituisce un prefisso; budget maggiori conservano l'esito.
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = RelateLimits::default();
+            match resource {
+                0 => limits.max_steps = budget,
+                1 => limits.max_reserved_bytes = budget,
+                2 => limits.max_nodes = budget,
+                _ => limits.max_segment_pairs = budget,
+            }
+            match split_line_with_limits(&source, &cutter, limits, None) {
+                Ok(actual) => {
+                    assert_eq!(actual, expected);
+                    succeeded = true;
+                }
+                Err(error) => {
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+            }
+        }
+        assert!(succeeded);
+    }
+}
+
+#[test]
+fn nested_mixed_cutters_have_the_same_cartesian_partition() {
+    use geo::{GeometryCollection, MultiPoint, MultiPolygon, Rect};
+    let source = line_string![(x:0.,y:0.),(x:12.,y:0.)];
+    let cutter = Geometry::GeometryCollection(GeometryCollection(vec![
+        Geometry::MultiPoint(MultiPoint(vec![Point::new(3.0, 0.0), Point::new(1.0, 0.0)])),
+        Geometry::GeometryCollection(GeometryCollection(vec![
+            Geometry::MultiPolygon(MultiPolygon(vec![
+                Rect::new((5.0, -1.0), (7.0, 1.0)).to_polygon()
+            ])),
+            Geometry::MultiLineString(MultiLineString(vec![
+                line_string![(x:9.,y:-1.),(x:9.,y:1.)],
+            ])),
+            Geometry::Point(Point::new(11.0, 0.0)),
+        ])),
+    ]));
+    // GOP-015A e contratto split: nodi ordinati lungo il sorgente,
+    // non nell'ordine dei tagli. Il bordo del quadrato taglia in x=5,7.
+    let nodes = [0.0, 1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 12.0];
+    let expected: Vec<_> = nodes
+        .windows(2)
+        .map(|p| LineString::from(vec![(p[0], 0.0), (p[1], 0.0)]))
+        .collect();
+    assert_eq!(run(&source, &cutter), expected);
+}
+
+#[cfg(test)]
+#[test]
+fn degenerate_and_nonfinite_lines_identify_the_operand() {
+    let valid = line_string![(x:0.,y:0.),(x:2.,y:0.)];
+    // Contratto split: un percorso non vuoto deve contenere due punti
+    // distinti; la categoria identifica il lato senza riportare coordinate.
+    for invalid in [
+        line_string![(x:1.,y:0.)],
+        line_string![(x:1.,y:0.),(x:1.,y:0.)],
+    ] {
+        assert!(matches!(
+            split_line_with_limits(
+                &invalid,
+                &Geometry::LineString(valid.clone()),
+                RelateLimits::default(),
+                None
+            ),
+            Err(PredicateError::InvalidGeometry { side: "left", .. })
+        ));
+        assert!(matches!(
+            split_line_with_limits(
+                &valid,
+                &Geometry::LineString(invalid),
+                RelateLimits::default(),
+                None
+            ),
+            Err(PredicateError::InvalidGeometry { side: "right", .. })
+        ));
+    }
+    assert!(matches!(
+        split_line_with_limits(
+            &line_string![(x:0.,y:f64::NAN),(x:2.,y:0.)],
+            &Geometry::Point(Point::new(1.0, 0.0)),
+            RelateLimits::default(),
+            None
+        ),
+        Err(PredicateError::NonFiniteCoordinate { side: "left" })
+    ));
+}

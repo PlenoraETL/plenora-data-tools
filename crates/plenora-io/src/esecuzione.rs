@@ -691,9 +691,14 @@ mod tests {
             scadenza: Some(Instant::now()),
             annullamento: None,
         };
+        let entrambe = Interruzione {
+            scadenza: scaduta.scadenza,
+            annullamento: annullata.annullamento.clone(),
+        };
         for (interruzione, categoria) in [
             (&annullata, ErrorCategory::Cancelled),
             (&scaduta, ErrorCategory::Timeout),
+            (&entrambe, ErrorCategory::Timeout),
         ] {
             let errore = verifica_finale(interruzione, std::slice::from_ref(&scritta))
                 .expect_err("interrotta");

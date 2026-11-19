@@ -146,7 +146,10 @@ ferma la chiamata allo stesso punto, senza leggere né scrivere nulla. Un
 annullamento (gettone, Ctrl-C, task) arrivato mentre il lavoro finiva non
 diventa un successo: è `PlenoraCancelledError` in fase `finalize`, con
 effetto `committed` (ritentativo `requires_recovery`) se gli output sono
-stati scritti, `none` altrimenti.
+stati scritti, `none` altrimenti. Se anche la scadenza e' raggiunta,
+prevale `PlenoraTimeoutError` (GOP-028), anche alla consegna. Questo vale
+anche quando il task asincrono viene annullato dopo il ritorno nativo:
+la causa di `asyncio.CancelledError` usa lo stesso controllo Rust.
 
 Il lavoro gira in un thread suo, senza il GIL; il thread del chiamante
 aspetta senza il GIL e ogni 10 ms porta i gettoni nel segnale del runner e

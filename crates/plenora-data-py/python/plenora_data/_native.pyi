@@ -52,3 +52,11 @@ def run(
     scadenza_monotona: float | None,
     gettoni: list[CancellationToken],
 ) -> tuple[str, list[tuple[str, object]]]: ...
+
+
+def _interruzione_consegna(
+    scadenza: float | None,
+    scadenza_monotona: float | None,
+    gettoni: list[CancellationToken],
+    con_effetti: bool,
+) -> None: ...

@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Protocol, TypeVar, Union
+from typing import Any, Generic, Protocol, TypeVar, Union
 
 import pyarrow as pa
 
@@ -29,7 +29,6 @@ from . import _native
 from ._native import CancellationToken
 from .errors import (
     PlenoraError,
-    _annullata_alla_consegna,
     _configurazione,
     _dati,
     _interno,
@@ -253,7 +252,14 @@ def _uscite(outputs: Mapping[str, Destination] | None) -> list[tuple[str, object
 
 # Una chiamata preparata: riceve i gettoni d'annullamento e fa la chiamata
 # nativa. La forma asincrona aggiunge il suo gettone interno.
-_Preparata = Callable[[list[CancellationToken]], _T]
+@dataclass(frozen=True)
+class _Preparata(Generic[_T]):
+    chiamata: Callable[[list[CancellationToken]], _T]
+    epoca: float | None
+    monotona: float | None
+
+    def __call__(self, gettoni: list[CancellationToken]) -> _T:
+        return self.chiamata(gettoni)
 
 
 @_classificata
@@ -271,7 +277,7 @@ def _prepara_describe(
         documento: dict[str, Any] = json.loads(testo)
         return documento
 
-    return chiamata, gettoni
+    return _Preparata(chiamata, epoca, monotona), gettoni
 
 
 @_classificata
@@ -293,7 +299,7 @@ def _prepara_validate(
         documento: dict[str, Any] = json.loads(testo)
         return documento
 
-    return chiamata, gettoni
+    return _Preparata(chiamata, epoca, monotona), gettoni
 
 
 @_classificata
@@ -324,11 +330,11 @@ def _prepara_run(
         documento: dict[str, Any] = json.loads(testo)
         return RunResult(result=documento, tables=MappingProxyType(dict(tabelle)))
 
-    return chiamata, gettoni
+    return _Preparata(chiamata, epoca, monotona), gettoni
 
 
 async def _in_thread(
-    chiamata: _Preparata[_T],
+    chiamata: Callable[[list[CancellationToken]], _T],
     gettoni: list[CancellationToken],
     *,
     con_effetti: bool = False,
@@ -339,8 +345,8 @@ async def _in_thread(
     controllo successivo; il task aspetta che il lavoro si sia fermato (mai
     lavoro che continua dopo l'annullamento) e poi propaga
     `asyncio.CancelledError`, con l'esito del lavoro come `__cause__`. Se il
-    lavoro era già finito con successo, la causa è l'annullamento alla
-    consegna con l'effetto vero (`committed` se `con_effetti`: gli output
+    lavoro era già finito con successo, la causa è la scadenza se raggiunta,
+    altrimenti l'annullamento alla consegna, con l'effetto vero (`committed` se `con_effetti`: gli output
     sono stati scritti), mai un risultato perso senza assi.
     """
     interno = CancellationToken()
@@ -354,7 +360,10 @@ async def _in_thread(
         while True:
             try:
                 await asyncio.shield(futuro)
-                causa = _annullata_alla_consegna(con_effetti=con_effetti)
+                # Anche dopo il ritorno nativo si usa il controllo GOP-028.
+                epoca = chiamata.epoca if isinstance(chiamata, _Preparata) else None
+                monotona = chiamata.monotona if isinstance(chiamata, _Preparata) else None
+                _native._interruzione_consegna(epoca, monotona, tutti, con_effetti)
             except asyncio.CancelledError:
                 # Un altro annullamento mentre il lavoro si ferma: si
                 # continua ad aspettarlo.

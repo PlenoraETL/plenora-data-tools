@@ -135,3 +135,13 @@ l'unico punto in cui un effetto si sostituisce).
   *Rientro*: una pulizia dei `.plenora-io-*.tmp` orfani all'avvio, o
   temporanei fuori dalla directory della destinazione dove la rinomina
   atomica lo permette.
+
+## Interruzioni GOP-028
+
+La scadenza raggiunta ha sempre categoria `Timeout`, anche se proviene da
+un kernel (`DeadlineExceeded`); l'annullamento ha categoria `Cancelled`.
+Al medesimo controllo la scadenza precede sempre l'annullamento.
+I limiti di lavoro, memoria e allocazione restano `ResourceLimit`.
+La tabella esaustiva degli errori kernel e' in
+`crates/plenora-pipeline/src/geo/errori.rs`; il controllo condiviso da
+runner, IO, CLI, SDK e kernel e' `plenora_core::tempo::verifica_interruzione`.

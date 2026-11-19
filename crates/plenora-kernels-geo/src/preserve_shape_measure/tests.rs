@@ -917,3 +917,31 @@ fn overlapping_independent_area_operands_are_summed() {
             <= doubled.absolute_error_bound + 2.0 * single.absolute_error_bound
     );
 }
+
+#[test]
+fn resource_prefixes_preserve_the_equatorial_length_certificate() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let parts = [LineString::from(vec![(0.0, 0.0), (1.0, 0.0)])];
+    // G1: la retta lon/lat sull'equatore ha integrale a * delta_lambda.
+    let expected = 6_378_137.0 * 1.0_f64.to_radians();
+    let mut succeeded = false;
+    for budget in (0..128).chain((7..=20).map(|power| 1_u64 << power)) {
+        let bounded = ShapeMeasureLimits {
+            max_work: budget,
+            ..limits()
+        };
+        match preserve_shape_length_with_limits(&parts, &crs, tolerance(0.01), bounded, None) {
+            Ok(actual) => {
+                assert!((actual.value - expected).abs() <= actual.absolute_error_bound);
+                assert!(actual.absolute_error_bound <= 0.01);
+                succeeded = true;
+            }
+            Err(error) => {
+                // GOP-026: il budget non autorizza un certificato incompleto.
+                assert!(!succeeded);
+                assert_eq!(error, ShapeMeasureError::WorkLimit);
+            }
+        }
+    }
+    assert!(succeeded);
+}

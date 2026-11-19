@@ -691,3 +691,178 @@ fn angular_leading_zeros_are_an_explicit_grammar_exception() {
         );
     }
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn codec_errors_keep_the_public_category_without_codec_details() {
+    use plenora_kernels_geo::{
+        coordinate_mgrs::MgrsError, coordinate_text::CoordinateTextError,
+        coordinate_usng::UsngError, coordinate_utm::UtmError, grid_text::GridTextError,
+    };
+    use CoordinateErrorKind as Kind;
+    // GOP-025, contratto coordinate_api: errori grammaticali entro 256 byte
+    // sono data_mapping; la proiezione e' execution, mai unsupported o CRS.
+    for (actual, expected) in [
+        (
+            Kind::from(CoordinateTextError::Precision),
+            Kind::InvalidConfiguration,
+        ),
+        (Kind::from(CoordinateTextError::Domain), Kind::DataMapping),
+        (Kind::from(CoordinateTextError::Syntax), Kind::DataMapping),
+        (Kind::from(CoordinateTextError::Length), Kind::DataMapping),
+        (Kind::from(UtmError::Precision), Kind::InvalidConfiguration),
+        (Kind::from(UtmError::Projection), Kind::Execution),
+        (Kind::from(UtmError::Domain), Kind::DataMapping),
+        (Kind::from(UtmError::Syntax), Kind::DataMapping),
+        (Kind::from(UtmError::Zone), Kind::DataMapping),
+        (Kind::from(UtmError::Hemisphere), Kind::DataMapping),
+        (Kind::from(UtmError::Length), Kind::DataMapping),
+        (
+            Kind::from(MgrsError::InvalidConfiguration),
+            Kind::InvalidConfiguration,
+        ),
+        (Kind::from(MgrsError::Execution), Kind::Execution),
+        (Kind::from(MgrsError::DataMapping), Kind::DataMapping),
+        (Kind::from(MgrsError::ResourceLimit), Kind::DataMapping),
+        (
+            Kind::from(UsngError::InvalidConfiguration),
+            Kind::InvalidConfiguration,
+        ),
+        (Kind::from(UsngError::Execution), Kind::Execution),
+        (Kind::from(UsngError::Unsupported), Kind::Unsupported),
+        (Kind::from(UsngError::DataMapping), Kind::DataMapping),
+        (Kind::from(UsngError::ResourceLimit), Kind::DataMapping),
+        (
+            Kind::from(GridTextError::InvalidConfiguration),
+            Kind::InvalidConfiguration,
+        ),
+        (Kind::from(GridTextError::DataMapping), Kind::DataMapping),
+        (
+            Kind::from(GridTextError::ResourceLimit),
+            Kind::ResourceLimit,
+        ),
+    ] {
+        assert_eq!(actual, expected);
+        assert_eq!(CoordinateApiError::from(actual).index, None);
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn custom_batch_limit_is_inclusive_in_both_directions() {
+    let enc = options(CoordinateFormat::Dd, CoordinateDirection::Encode);
+    let dec = options(CoordinateFormat::Dd, CoordinateDirection::Decode);
+    let points = [point(3.0, 0.0), point(-3.0, 0.0)];
+    let texts = ["0.00N 3.00E", "0.00N 3.00W"];
+    for max_items in [0, 1, 2, MAX_BATCH_ITEMS + 1] {
+        let limits = CoordinateLimits {
+            max_items,
+            deadline: None,
+        };
+        let encoded = encode_coordinates_with_limits(
+            request(CoordinateFormat::Dd, &enc),
+            &points,
+            limits,
+            None,
+        );
+        let decoded = decode_coordinates_with_limits(
+            request(CoordinateFormat::Dd, &dec),
+            &texts,
+            limits,
+            None,
+        );
+        // GOP-025: il limite riguarda l'intero batch, quindi nessun indice.
+        if max_items < points.len() {
+            assert_eq!(encoded, Err(CoordinateErrorKind::ResourceLimit.into()));
+            assert_eq!(decoded, Err(CoordinateErrorKind::ResourceLimit.into()));
+        } else {
+            // NGA cap.5: zero latitudine, tre gradi est/ovest, ordine invariato.
+            assert_eq!(encoded.unwrap(), texts);
+            assert_eq!(
+                decoded
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.point)
+                    .collect::<Vec<_>>(),
+                points
+            );
+        }
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn public_names_are_case_sensitive_and_do_not_infer_aliases() {
+    // GOP-021/025, standard_v1: nomi espliciti, nessun alias o normalizzazione.
+    for (name, expected) in [
+        ("WGS84", CoordinateDatum::Wgs84),
+        ("NAD83", CoordinateDatum::Nad83),
+        ("NAD27", CoordinateDatum::Nad27),
+    ] {
+        assert_eq!(name.parse::<CoordinateDatum>(), Ok(expected));
+    }
+    for (name, expected) in [
+        ("precision", CoordinateOptionKind::Precision),
+        ("resolution", CoordinateOptionKind::Resolution),
+        ("representative", CoordinateOptionKind::Representative),
+        ("datum", CoordinateOptionKind::Datum),
+    ] {
+        assert_eq!(name.parse::<CoordinateOptionKind>(), Ok(expected));
+    }
+    for name in ["wgs84", "WGS84 ", " NAD83"] {
+        assert_eq!(
+            name.parse::<CoordinateDatum>(),
+            Err(CoordinateErrorKind::Crs.into())
+        );
+    }
+    for name in ["Precision", "resolution ", ""] {
+        assert_eq!(
+            name.parse::<CoordinateOptionKind>(),
+            Err(CoordinateErrorKind::InvalidConfiguration.into())
+        );
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn utm_and_usng_do_not_silently_switch_to_polar_grids() {
+    // GOP-023/024 e FGDC figura 1: dominio UTM inclusivo [-80,84],
+    // nessuna selezione automatica UPS. Coordinate globalmente invalide
+    // restano data_mapping; coordinate polari valide sono unsupported.
+    for format in [CoordinateFormat::Utm, CoordinateFormat::Usng] {
+        let enc = options(format, CoordinateDirection::Encode);
+        for (latitude, kind) in [
+            (84.0_f64.next_up(), CoordinateErrorKind::Unsupported),
+            ((-80.0_f64).next_down(), CoordinateErrorKind::Unsupported),
+            (91.0, CoordinateErrorKind::DataMapping),
+        ] {
+            assert_eq!(
+                encode_coordinate(request(format, &enc), point(3.0, latitude)),
+                Err(kind.into())
+            );
+            assert_eq!(
+                encode_coordinates(
+                    request(format, &enc),
+                    &[point(3.0, 0.0), point(3.0, latitude)]
+                ),
+                Err(CoordinateApiError {
+                    kind,
+                    index: Some(1)
+                })
+            );
+        }
+    }
+    let enc = options(CoordinateFormat::Utm, CoordinateDirection::Encode);
+    let dec = options(CoordinateFormat::Utm, CoordinateDirection::Decode);
+    for latitude in [-80.0, 84.0] {
+        let text =
+            encode_coordinate(request(CoordinateFormat::Utm, &enc), point(3.0, latitude)).unwrap();
+        let result = decode_coordinate(request(CoordinateFormat::Utm, &dec), &text).unwrap();
+        // Il meridiano centrale resta 3 gradi; la quantizzazione a metri
+        // e il collare GOP-024 ammettono <0.722 m, quindi <1e-5 gradi lat.
+        assert!((result.point.longitude - 3.0).abs() < 1e-9);
+        assert!((result.point.latitude - latitude).abs() < 1e-5);
+        assert_eq!(result.cell, None);
+        assert_eq!(result.datum, CoordinateDatum::Wgs84);
+    }
+}

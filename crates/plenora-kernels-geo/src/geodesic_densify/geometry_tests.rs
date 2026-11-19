@@ -414,3 +414,41 @@ fn close_edges_and_uncertifiable_area_have_distinct_categories() {
         Err(GeodesicDensifyError::UnsupportedSurface)
     );
 }
+
+#[test]
+fn resource_prefixes_preserve_polygon_vertices_and_roles() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let input = Geometry::Polygon(Polygon::new(rectangle(0.0, 0.0, 2.0, 2.0), vec![]));
+    // GOP-007: ogni lato e' minore di 1000 km, quindi nessun vertice
+    // aggiunto; GOP-005 conserva guscio, chiusura e verso.
+    for memory in [false, true] {
+        let mut succeeded = false;
+        for budget in (0..128).chain((7..=23).map(|power| 1_u64 << power)) {
+            let mut bounded = limits();
+            if memory {
+                bounded.output.max_reserved_bytes = budget;
+            } else {
+                bounded.max_validation_work = budget;
+            }
+            match geodesic_densify_geometry_with_limits(&input, &crs, 1_000_000.0, bounded, None) {
+                Ok(actual) => {
+                    assert_eq!(actual, input);
+                    succeeded = true;
+                }
+                Err(error) => {
+                    // GOP-026: include anche la validazione dell'output.
+                    assert!(!succeeded);
+                    assert_eq!(
+                        error,
+                        if memory {
+                            GeodesicDensifyError::MemoryLimit
+                        } else {
+                            GeodesicDensifyError::WorkLimit
+                        }
+                    );
+                }
+            }
+        }
+        assert!(succeeded);
+    }
+}

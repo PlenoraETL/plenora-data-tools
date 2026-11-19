@@ -373,3 +373,46 @@ fn pinwheel_large_denominators_do_not_accumulate_ring_area() {
     assert_eq!(polygons[0].exterior().0.len(), 69);
     assert!(polygons[0].interiors().is_empty());
 }
+
+#[test]
+fn resource_prefixes_are_atomic_and_monotone() {
+    // SFA 6.1.11: il ciclo semplice quadrato delimita una sola faccia.
+    let source = input(vec![square(0.0, 2.0)]);
+    let expected = vec![Polygon::new(square(0.0, 2.0), vec![])];
+    // GOP-026/027: esaurimento durante raccolta, noding o pubblicazione
+    // non restituisce un prefisso; budget maggiori conservano l'esito.
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = RelateLimits::default();
+            match resource {
+                0 => limits.max_steps = budget,
+                1 => limits.max_reserved_bytes = budget,
+                2 => limits.max_nodes = budget,
+                _ => limits.max_segment_pairs = budget,
+            }
+            match polygonize_with_limits(&source, limits, None) {
+                Ok(actual) => {
+                    assert_eq!(polygon_keys(&actual), polygon_keys(&expected));
+                    succeeded = true;
+                }
+                Err(error) => {
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+            }
+        }
+        assert!(succeeded);
+    }
+}

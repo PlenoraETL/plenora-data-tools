@@ -27,13 +27,12 @@ pub fn check_interruption<E>(
 ) -> Result<(), E> {
     #[cfg(test)]
     let deadline = gop028::checkpoint(deadline, cancelled);
-    if deadline.is_some_and(|end| std::time::Instant::now() >= end) {
-        return Err(deadline_error);
-    }
-    if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
-        return Err(cancelled_error);
-    }
-    Ok(())
+    plenora_core::tempo::verifica_interruzione(
+        deadline,
+        cancelled,
+        || deadline_error,
+        || cancelled_error,
+    )
 }
 
 /// Checkpoint esterni entro 256 primitive Q; ogni gcd ha meno di

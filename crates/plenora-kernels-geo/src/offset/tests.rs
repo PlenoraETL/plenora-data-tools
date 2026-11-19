@@ -677,3 +677,188 @@ fn lens_bounds_match_generic_separating_sides() {
         }
     }
 }
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn resource_prefixes_are_atomic_and_monotone() {
+    // GOP-017: normali destre e raccordo bevel del gomito retto.
+    let input = line(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]);
+    let expected = LineString::from(vec![(0.0, -2.0), (10.0, -2.0), (12.0, 0.0), (12.0, 10.0)]);
+    // GOP-026/027: nessun prefisso pubblicato; aumentare un budget
+    // sufficiente conserva il risultato analitico, anche alla pubblicazione.
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = RelateLimits::default();
+            match resource {
+                0 => limits.max_steps = budget,
+                1 => limits.max_reserved_bytes = budget,
+                2 => limits.max_nodes = budget,
+                _ => limits.max_segment_pairs = budget,
+            }
+            match offset_with_limits(&input, options(2.0, OffsetJoin::Bevelled), limits, None) {
+                Ok(actual) => {
+                    assert_eq!(actual.line, expected);
+                    succeeded = true;
+                }
+                Err(OffsetError::Predicate(error)) => {
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+                Err(error) => panic!("categoria inattesa: {error:?}"),
+            }
+        }
+        assert!(succeeded);
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn enclosure_rejects_uncertainty_and_binary64_overflow() {
+    let mut work = Work::new(RelateLimits::default(), None);
+    let interval = |low, high, work: &Work<'_>| Enclosure {
+        low: rational(low, work).unwrap(),
+        high: rational(high, work).unwrap(),
+    };
+    // Aritmetica degli intervalli chiusi: un intervallo che contiene zero
+    // non certifica ne' il segno ne' un divisore. Nessuna scelta del midpoint.
+    let uncertain = interval(-1.0, 1.0, &work);
+    assert!(matches!(
+        uncertain.sign(),
+        Err(OffsetError::AccuracyUnproven)
+    ));
+    let one = interval(1.0, 1.0, &work);
+    assert!(matches!(
+        one.div(&uncertain, &work),
+        Err(OffsetError::AccuracyUnproven)
+    ));
+    // Due estremi arrotondati distinti non certificano un'unica coordinata.
+    assert!(matches!(
+        interval(1.0, 2.0, &work).rounded(&mut work),
+        Err(OffsetError::AccuracyUnproven)
+    ));
+    // IEEE-754 binary64: 2*MAX e -2*MAX non hanno rappresentazione finita.
+    for sign in [-1.0, 1.0] {
+        let beyond = rational(sign * f64::MAX, &work)
+            .unwrap()
+            .try_mul(&work.integer(2).unwrap())
+            .unwrap();
+        assert!(matches!(
+            Enclosure::exact(beyond).unwrap().rounded(&mut work),
+            Err(OffsetError::CoordinateOutOfRange)
+        ));
+    }
+    // Un estremo finito e uno oltre il dominio indicano incertezza, non
+    // overflow certo dell'intero intervallo: le categorie restano distinte.
+    let maximum = rational(f64::MAX, &work).unwrap();
+    let beyond = maximum.try_mul(&work.integer(2).unwrap()).unwrap();
+    assert!(matches!(
+        Enclosure {
+            low: maximum,
+            high: beyond
+        }
+        .rounded(&mut work),
+        Err(OffsetError::AccuracyUnproven)
+    ));
+    // [-4,-2] / [-2,-1] = [1,4], tutti gli estremi sono razionali esatti.
+    let quotient = interval(-4.0, -2.0, &work)
+        .div(&interval(-2.0, -1.0, &work), &work)
+        .unwrap();
+    assert_eq!(quotient.low, work.integer(1).unwrap());
+    assert_eq!(quotient.high, work.integer(4).unwrap());
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn offset_invalid_structure_is_distinct_from_unsupported_type() {
+    // GOP-017: solo percorsi lineari; un percorso deve avere due XY finiti.
+    let config = options(1.0, OffsetJoin::Rounded);
+    assert!(matches!(
+        offset_with_limits(
+            &Geometry::Point(geo::Point::new(0.0, 0.0)),
+            config,
+            RelateLimits::default(),
+            None
+        ),
+        Err(OffsetError::Unsupported)
+    ));
+    for input in [
+        line(&[]),
+        line(&[(0.0, 0.0)]),
+        line(&[(0.0, 0.0), (f64::NAN, 1.0)]),
+        line(&[(0.0, f64::INFINITY), (1.0, 1.0)]),
+    ] {
+        assert!(matches!(
+            offset_with_limits(&input, config, RelateLimits::default(), None),
+            Err(OffsetError::InvalidGeometry)
+        ));
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn resource_prefixes_rounded_arc_keeps_the_circle() {
+    // GOP-017: arco di raggio 1, centro (10,0). Con tan(theta/2)=1/2
+    // il nodo intermedio e' (10+4/5,-3/5), sul cerchio esatto.
+    let input = line(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]);
+    let expected = LineString::from(vec![
+        (0.0, -1.0),
+        (10.0, -1.0),
+        (10.8, -0.6),
+        (11.0, 0.0),
+        (11.0, 10.0),
+    ]);
+    let config = OffsetOptions {
+        distance: 1.0,
+        join: OffsetJoin::Rounded,
+        arc_tolerance: 0.25,
+    };
+    // GOP-026/027: nessun prefisso pubblicato; aumentare un budget
+    // sufficiente conserva il risultato analitico, anche alla pubblicazione.
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = RelateLimits::default();
+            match resource {
+                0 => limits.max_steps = budget,
+                1 => limits.max_reserved_bytes = budget,
+                2 => limits.max_nodes = budget,
+                _ => limits.max_segment_pairs = budget,
+            }
+            match offset_with_limits(&input, config, limits, None) {
+                Ok(actual) => {
+                    assert_eq!(actual.line, expected);
+                    succeeded = true;
+                }
+                Err(OffsetError::Predicate(error)) => {
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+                Err(error) => panic!("categoria inattesa: {error:?}"),
+            }
+        }
+        assert!(succeeded);
+    }
+}

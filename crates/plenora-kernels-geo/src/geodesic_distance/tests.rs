@@ -589,3 +589,45 @@ fn direct_failure_is_accuracy_and_tiny_area_is_explicit() {
         geodesic_distance_with_limits(&point(1., 1.), &tiny, &crs, limits(), None).unwrap();
     assert!(distance.metres > 150_000.0 && distance.metres < 160_000.0);
 }
+
+#[test]
+fn resource_prefixes_preserve_the_equatorial_distance() {
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let a = point(0.0, 0.0);
+    let b = point(1.0, 0.0);
+    // G1, metrica equatoriale WGS84: lunghezza a * delta_lambda.
+    let expected = 6_378_137.0 * 1.0_f64.to_radians();
+    for memory in [false, true] {
+        let mut succeeded = false;
+        for budget in (0..128).chain((7..=20).map(|power| 1_u64 << power)) {
+            let mut bounded = limits();
+            if memory {
+                bounded.max_reserved_bytes = budget;
+            } else {
+                bounded.max_work = budget;
+            }
+            match geodesic_distance_with_limits(&a, &b, &crs, bounded, None) {
+                Ok(actual) => {
+                    close(actual.metres, expected);
+                    assert!(actual.work <= bounded.max_work);
+                    assert!(actual.peak_reserved_bytes <= bounded.max_reserved_bytes);
+                    succeeded = true;
+                }
+                Err(error) => {
+                    // GOP-026: errore atomico, nessuna distanza approssimata
+                    // quando la validazione o la ricerca esaurisce il budget.
+                    assert!(!succeeded);
+                    assert_eq!(
+                        error,
+                        if memory {
+                            GeodesicDistanceError::MemoryLimit
+                        } else {
+                            GeodesicDistanceError::WorkLimit
+                        }
+                    );
+                }
+            }
+        }
+        assert!(succeeded);
+    }
+}

@@ -390,3 +390,52 @@ fn rounded_isolated_point_cannot_enter_surface() {
         Err(GeneralBooleanError::InvalidRoundedTopology)
     ));
 }
+
+#[test]
+fn resource_prefixes_keep_array_intersection_atomic() {
+    let inputs = [point(1.0, 1.0), rect(0.0, 0.0, 2.0, 2.0)];
+    let right = rect(1.0, 0.0, 3.0, 2.0);
+    // O1 SFA 6.1.15: il punto e' sul bordo; la superficie comune
+    // e' [1,2]x[0,2]. GOP-015 preserva l'ordine dell'array.
+    let expected = [point(1.0, 1.0), rect(1.0, 0.0, 2.0, 2.0)];
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = GeneralBooleanLimits::default();
+            match resource {
+                0 => limits.work.max_steps = budget,
+                1 => limits.work.max_reserved_bytes = budget,
+                2 => limits.work.max_nodes = budget,
+                _ => limits.work.max_segment_pairs = budget,
+            }
+            match intersection_with_limits(&inputs, &right, None, limits, None) {
+                Ok(actual) => {
+                    assert_eq!(actual.len(), expected.len());
+                    for (a, b) in actual.iter().zip(&expected) {
+                        equivalent(a, b);
+                    }
+                    succeeded = true;
+                }
+                Err(GeneralBooleanError::Predicate(error)) => {
+                    // GOP-026/027: il primo risultato resta contabilizzato
+                    // durante il secondo; nessun prefisso viene restituito.
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+                Err(error) => panic!("categoria inattesa: {error:?}"),
+            }
+        }
+        assert!(succeeded);
+    }
+}

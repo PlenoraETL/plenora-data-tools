@@ -795,3 +795,59 @@ fn indexed_successor_matches_exhaustive_rays() {
         edges.pop();
     }
 }
+
+#[test]
+fn resource_prefixes_cannot_fill_a_difference_hole() {
+    use geo::Relate;
+    let a = rect(0.0, 0.0, 4.0, 4.0);
+    let b = rect(1.0, 1.0, 3.0, 3.0);
+    let expected = Geometry::Polygon(Polygon::new(
+        Rect::new((0.0, 0.0), (4.0, 4.0))
+            .to_polygon()
+            .exterior()
+            .clone(),
+        vec![Rect::new((1.0, 1.0), (3.0, 3.0))
+            .to_polygon()
+            .exterior()
+            .clone()],
+    ));
+    // O1 SFA 6.1.15: differenza di quadrati annidati, area 16-4=12,
+    // stesso interno/bordo dell'anello quadrato (oracolo geo::Relate).
+    for resource in 0..4 {
+        let memory = resource == 1;
+        let mut succeeded = false;
+        for budget in (0..=4096)
+            .map(|value| if memory { value * 16 } else { value })
+            .chain((17..=26).map(|power| 1_u64 << power))
+        {
+            if succeeded && budget < (1_u64 << 26) {
+                continue;
+            }
+            let mut limits = PolygonBooleanLimits::default();
+            match resource {
+                0 => limits.work.max_steps = budget,
+                1 => limits.work.max_reserved_bytes = budget,
+                2 => limits.work.max_nodes = budget,
+                _ => limits.work.max_segment_pairs = budget,
+            }
+            match boolean_with_limits(&a, &b, PolygonBooleanOp::Difference, None, limits, None) {
+                Ok(actual) => {
+                    assert_eq!(actual.unsigned_area(), 12.0);
+                    assert!(actual.relate(&expected).matches("**F**FFF*").unwrap());
+                    succeeded = true;
+                }
+                Err(PolygonBooleanError::Predicate(error)) => {
+                    // GOP-026/027: anche l'assemblaggio dei buchi e' atomico.
+                    assert!(!succeeded);
+                    if memory {
+                        assert!(matches!(error, PredicateError::ReservationLimit));
+                    } else {
+                        assert!(matches!(error, PredicateError::WorkLimit));
+                    }
+                }
+                Err(error) => panic!("categoria inattesa: {error:?}"),
+            }
+        }
+        assert!(succeeded);
+    }
+}

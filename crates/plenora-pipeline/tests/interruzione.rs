@@ -113,13 +113,19 @@ fn l_annullamento_ferma_prima_del_passo() {
 }
 
 #[test]
-fn l_annullamento_prevale_sulla_scadenza() {
+fn la_scadenza_prevale_sull_annullamento() {
     let entrambe = Interruzione {
         scadenza: Some(Instant::now()),
         annullamento: Some(Arc::new(AtomicBool::new(true))),
     };
-    let errore = esegui(true, &entrambe).expect_err("interrotta");
-    assert_eq!(errore.category(), ErrorCategory::Cancelled, "{errore}");
+    for con_passo in [false, true] {
+        let errore = esegui(con_passo, &entrambe).expect_err("interrotta");
+        assert_eq!(errore.category(), ErrorCategory::Timeout);
+        assert_eq!(
+            errore.public_projection().code(),
+            Some(CODE_DEADLINE_EXCEEDED)
+        );
+    }
 }
 
 #[test]

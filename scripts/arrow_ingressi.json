@@ -557,6 +557,11 @@
       "classification": "non riceve dati Arrow esterni",
       "reason": "Sonda privata di test: registra callback dei controlli, non importa dati Arrow.",
       "signature": "pyfunction"
+    },
+    "crates/plenora-data-py/src/lib.rs::_interruzione_consegna": {
+      "signature": "pyfunction",
+      "classification": "non riceve dati Arrow esterni",
+      "reason": "Checkpoint GOP-028 alla consegna asincrona: solo scadenze, token ed effetto del lavoro."
     }
   },
   "rust": {
@@ -9373,6 +9378,60 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
+    },
+    "crates/plenora-core/src/tempo.rs::verifica_interruzione": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Controllo GOP-028 condiviso: clock monotono, token atomico e costruttori di errori; nessun dato Arrow.",
+      "signature": "pub fn verifica_interruzione<E>( scadenza: Option<Instant>, annullamento: Option<&std::sync::atomic::AtomicBool>, errore_scadenza: impl FnOnce() -> E, errore_annullamento: impl FnOnce() -> E, ) -> std::result::Result<(), E>"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#13": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#14": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#15": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#16": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#17": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#18": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#19": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#20": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
     }
   },
   "rust_variants": {

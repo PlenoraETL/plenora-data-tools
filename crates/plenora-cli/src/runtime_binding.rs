@@ -429,10 +429,6 @@ fn utc_deadline(text: &str) -> bool {
 fn deadline_instant(text: &str) -> Result<Instant> {
     plenora_core::tempo::frazione_rfc3339_esatta(text)
         .map_err(|_| protocol("deadline fuori precisione"))?;
-    let expired = || {
-        PlenoraError::Timeout("deadline runtime gia trascorsa".into())
-            .with_phase(ErrorPhase::Validate)
-    };
     let parsed =
         chrono::DateTime::parse_from_rfc3339(text).map_err(|_| protocol("deadline non valida"))?;
     let now = Instant::now();
@@ -443,9 +439,12 @@ fn deadline_instant(text: &str) -> Result<Instant> {
         now,
     )
     .map_err(|_| protocol("deadline fuori intervallo"))?;
-    if deadline <= now {
-        return Err(expired());
+    Interruzione {
+        scadenza: Some(deadline),
+        annullamento: None,
     }
+    .verifica("prima dell'invocazione runtime")
+    .map_err(|errore| errore.with_phase(ErrorPhase::Validate))?;
     Ok(deadline)
 }
 
