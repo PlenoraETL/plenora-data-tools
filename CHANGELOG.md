@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [6.1.0] - non rilasciata
+## [6.1.0] - 2026-11-19
 
 ### Correzioni
 
@@ -23,6 +23,21 @@ la cui versione non ha qui una voce datata.
   all'annullamento e classificava `DeadlineExceeded` come `ResourceLimit`.
 
 ### Aggiunte
+
+- API Rust `general_boolean`: booleane binarie XY su punti, linee, poligoni
+  e collezioni anche annidate, unione molti-a-uno e filtro di dimensione.
+  Un unico grafo razionale, pubblicazione GOP-015A verificata, ordine canonico
+  e limiti cumulativi; nessuna riparazione implicita delle geometrie.
+- Densificazione geodetica estesa a Polygon e MultiPolygon, oltre alle linee:
+  validazione delle superfici, conservazione dei ruoli degli anelli e budget
+  cumulativi per output e validazione.
+- API Rust `geodesic_distance`: distanza fra insiemi sull'ellissoide del CRS
+  geografico, inclusi gli interni dei poligoni, con errore assoluto certificato
+  di 1 cm e limiti espliciti di lavoro, memoria e scadenza.
+- API Rust `preserve_shape_measure` per misure ellissoidiche preserveShape
+  del percorso rettilineo nello SR originale: lunghezza e area con tolleranze
+  esplicite e certificato d'errore, senza cambi di datum. Dominio e limiti
+  in `docs/misure-forma-conservata.md`.
 
 - API comune `coordinate_api`, profilo esplicito `standard_v1`: DD, DMS,
   DDM, UTM, MGRS, USNG, GARS e GeoRef sopra i codec esistenti. Datum
@@ -97,7 +112,7 @@ la cui versione non ha qui una voce datata.
 
 - Migrazione DE-9IM al noder razionale comune: eventi senza grafo,
   sweep con filtri inclusivi X/Y e oracolo esaustivo della 1a nei test.
-  La 6.1.0 non e' rilasciata: `RelateLimits` conta ora i test esatti dopo
+  `RelateLimits` conta ora i test esatti dopo
   entrambi i filtri, le capacita' strutturali vive e aggiunge `max_nodes`
   (duplicati intermedi inclusi, default 10 milioni) e `deadline` (default
   nessuna). Errore distinto `DeadlineExceeded`, categoria Timeout
