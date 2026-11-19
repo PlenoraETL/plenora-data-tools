@@ -1561,6 +1561,61 @@
       "shared_paths_rejects_non_polygonal_inputs_and_encodes_rows",
       "coppie_candidate_a_capacita_esatta"
     ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs": [
+      "zero_points_lines_poles_and_seam",
+      "empty_inputs_multiple_radii_and_union",
+      "rejects_non_degenerate_and_negative_point_line",
+      "invalid_geometry_and_ambiguous_path",
+      "exact_limits_and_zero_work",
+      "deadline_precedes_cancel_and_invalid_radii"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/tests.rs": [
+      "primitive_against_equator_and_published_vector",
+      "karney_vertices_dense_boundary_and_reverse_edges",
+      "model_change_bound_against_dense_karney_arc",
+      "model_change_controls_planning_and_rejects_invalid_bounds",
+      "planar_fan_rejects_folded_and_multiple_winding_rings",
+      "refinement_duplicates_and_distance_major",
+      "rejects_surface_profile_and_precision_domains",
+      "exact_vertex_memory_work_thresholds_and_atomic_batch",
+      "cancellation_and_deadline_inside_generation"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union/tests.rs": [
+      "disjoint_overlap_and_three_centers",
+      "distance_major_nested_radii_and_union_per_distance",
+      "near_tangency_is_certified_or_typed_rejection",
+      "cumulative_exact_budget_and_interruptions_inside_union",
+      "global_surface_is_rejected_before_generation"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer/projected/erosion.rs": [
+      "interval_signed_distance_against_square_and_subnormal_rejection",
+      "acute_sector_has_a_continuous_common_witness"
+    ],
+    "crates/plenora-kernels-geo/src/geodesic_buffer/projected/tests.rs": [
+      "equatorial_width_and_dense_boundary",
+      "metric_matrix_and_typed_accuracy_rejections",
+      "angles_multiline_distance_major_and_zero",
+      "cumulative_budget_and_interruptions",
+      "resource_rejections_and_deadline_precedence",
+      "local_scale_central_identity_and_domain_edges",
+      "equatorial_input_sampling_against_analytic_positions",
+      "surface_hole_zero_multipart_and_certified_collapse",
+      "surface_metric_matrix",
+      "surface_work_interruptions_and_explicit_limits",
+      "surface_zero_union_and_domain_limits",
+      "surface_rejects_orphan_and_empty_holes",
+      "erosion_square_and_hole_karney_width",
+      "erosion_partial_and_total_collapse",
+      "erosion_hole_reaches_shell",
+      "zero_union_touching_surfaces",
+      "erosion_difference_thresholds_and_interruptions",
+      "erosion_union_is_union_of_individual_erosions",
+      "zero_union_meridian_t_contact_and_multiple_point_contacts",
+      "many_corridors_exact_topology_and_publication_after_overlay",
+      "published_topology_rejects_crossings_orientation_and_lost_input",
+      "zero_orients_rings_without_moving_vertices",
+      "primitive_lattice_ties_and_geodesic_displacement"
+    ],
     "crates/plenora-kernels-geo/src/geodesic_densify/geometry_tests.rs": [
       "polygon_holes_and_multipart_keep_roles_and_order",
       "seam_polar_caps_and_traversal_select_the_minor_region",
@@ -3113,7 +3168,8 @@
       "interruzioni_annidate_e_limiti_mantengono_categoria",
       "de9im_resource_and_cancellation_categories",
       "unsupported_and_accuracy_categories",
-      "le_categorie_seguono_la_regola_dei_kernel"
+      "le_categorie_seguono_la_regola_dei_kernel",
+      "buffer_deadline_maps_to_timeout"
     ],
     "crates/plenora-pipeline/src/geo/mod.rs": [
       "la_config_rifiutata_non_cita_i_valori_scritti",

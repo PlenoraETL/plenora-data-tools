@@ -12,7 +12,7 @@ pub(super) use azimuthal::AzimuthalCertificate;
 mod lambert;
 pub(super) use lambert::LambertCertificate;
 mod transverse;
-pub(super) use transverse::TransverseCertificate;
+pub use transverse::TransverseCertificate;
 
 #[derive(Clone, Copy)]
 struct ShapeInterval {

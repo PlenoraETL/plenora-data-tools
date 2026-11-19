@@ -43,6 +43,7 @@ pub mod extended_algorithms;
 pub mod extensions;
 pub mod extensions2;
 pub mod extensions3;
+pub mod geodesic_buffer;
 pub mod geodesic_densify;
 pub mod geodesic_distance;
 pub(crate) mod geodesic_surface;
@@ -51,15 +52,12 @@ pub mod geometry_contract;
 pub mod grid_text;
 pub mod margine;
 pub mod memory_estimate;
+mod noding;
 pub mod offset;
 pub mod operations;
 pub mod predicates;
 pub mod preserve_shape_measure;
 pub mod reshape;
-pub use polygon_completion::polygon_completion_with_limits;
-pub use predicates::arrangement_indexed::{
-    general_boolean, line_boolean, point_boolean, polygon_boolean, polygon_completion,
-};
 pub mod riproiezione;
 pub mod rust_backend;
 pub mod spatial_join;
@@ -70,7 +68,13 @@ pub mod topology;
 mod triangolazione;
 pub mod trim_extend;
 mod validazione_ogc;
+pub mod valori_arrow;
 pub mod wkb_decoder;
+
+pub use polygon_completion::polygon_completion_with_limits;
+pub use predicates::arrangement_indexed::{
+    general_boolean, line_boolean, point_boolean, polygon_boolean, polygon_completion,
+};
 
 use geo::{
     BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,
@@ -2523,7 +2527,3 @@ mod tests {
         }
     }
 }
-
-pub mod valori_arrow;
-
-mod noding;

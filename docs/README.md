@@ -16,6 +16,8 @@ cronologia delle modifiche si consulta in Git.
 | [`offset.md`](offset.md) | Offset planare orientato GOP-017: API, precisione, prove e limiti |
 | [`polygon-completion.md`](polygon-completion.md) | completamento planare GOP-020: API Rust, facce, precisione e limiti di qualifica |
 | [`topologia.md`](topologia.md) | `geo.make_valid`, `geo.polygonize` e `geo.split` in Rust puro; API diretta DE-9IM, prove e limiti |
+| [`buffer-punto.md`](buffer-punto.md) | disco geodetico di un punto: dominio locale, maggiorante di Hausdorff, certificato e risorse |
+| [`buffer-proiezione.md`](buffer-proiezione.md) | buffer di linee e superfici con TM locale: certificato, zero, collasso e limiti dell'erosione |
 | [`errori.md`](errori.md) | categorie d'errore ed effetto di un errore a metà della scrittura |
 | [`runner.md`](runner.md) | il piano, validazione, esecuzione, scadenza, diagnostica, operazioni geo, budget di memoria e limiti del runner |
 | [`metadati-arrow.md`](metadati-arrow.md) | metadati Arrow in uscita e in ingresso, identità dei campi, versioni del catalogo |

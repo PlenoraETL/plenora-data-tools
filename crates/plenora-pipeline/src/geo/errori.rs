@@ -631,3 +631,55 @@ mod tests {
         assert_eq!(celle.category(), ErrorCategory::InvalidPlan, "{celle}");
     }
 }
+
+impl ErroreKernel for plenora_kernels_geo::geodesic_buffer::DegenerateBufferError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::DeadlineExceeded => Classe::Scaduta,
+            Self::Cancelled => Classe::Annullata,
+            Self::GeographicRequired => Classe::Crs,
+            Self::InvalidRadius | Self::InvalidTolerance => Classe::Configurazione,
+            Self::InvalidGeometry => Classe::Dati,
+            Self::UnsupportedEllipsoid
+            | Self::UnsupportedProfile
+            | Self::UnsupportedSurface
+            | Self::AmbiguousGeodesic => Classe::Precisione,
+            Self::AccuracyUnproven | Self::InvalidTopology => Classe::Esecuzione,
+            Self::VertexLimit
+            | Self::MemoryLimit
+            | Self::Allocation
+            | Self::WorkLimit
+            | Self::OutputLimit => Classe::Limite,
+        }
+    }
+}
+impl ErroreKernel for plenora_kernels_geo::geodesic_buffer::point::union::UnionBufferError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Disk(error) => error.classe(),
+            Self::Overlay(error) => error.classe(),
+        }
+    }
+}
+
+/// GOP-028: errori diretti e annidati del buffer mantengono Timeout.
+#[cfg(test)]
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn buffer_deadline_maps_to_timeout() {
+    use plenora_kernels_geo::geodesic_buffer::{
+        point::union::UnionBufferError, DegenerateBufferError,
+    };
+    use plenora_kernels_geo::polygon_boolean::PolygonBooleanError;
+    for error in [
+        UnionBufferError::Disk(DegenerateBufferError::DeadlineExceeded),
+        UnionBufferError::Overlay(PolygonBooleanError::Predicate(
+            PredicateError::DeadlineExceeded,
+        )),
+    ] {
+        assert_eq!(
+            del_kernel("geo.buffer", &error).category(),
+            plenora_core::ErrorCategory::Timeout
+        );
+    }
+}
