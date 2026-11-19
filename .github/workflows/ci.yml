@@ -9,6 +9,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Sola lettura: nessun job scrive sul repository, pubblica o commenta.
 permissions:
@@ -103,11 +104,10 @@ jobs:
           -D unsafe-code
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
-      - name: cargo test (suite lunga)
+      - name: cargo test (suite ordinaria)
         if: ${{ !cancelled() }}
-        env:
-          PLENORA_TEST_LUNGHI: '1'
-        run: cargo test --workspace --locked --no-fail-fast
+        # Matrice massiva di round-trip: eseguita dal job manuale suite-lunga.
+        run: cargo test --workspace --locked --no-fail-fast -- --skip matrice_metadati::catalogo_chiavi_trasporti
       # Le sonde delle prove (feature `sonde-di-prova`, disattivata per
       # default e assente dalle build di rilascio) si compilano solo con la
       # feature: lint, anti-panic e la prova dei loro punti a parte.
@@ -184,3 +184,25 @@ jobs:
           name: dipendenze-report
           path: dipendenze-report.json
           if-no-files-found: error
+
+  suite-lunga:
+    name: suite lunga (${{ matrix.os }})
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PLENORA_TEST_LUNGHI: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: '.python-version'
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # 1.98.1
+        with:
+          toolchain: '1.98.1'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: cargo test (suite lunga su richiesta)
+        run: cargo test --workspace --locked --no-fail-fast

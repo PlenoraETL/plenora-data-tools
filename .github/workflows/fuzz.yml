@@ -1,7 +1,7 @@
 name: fuzz
 
 # Campagne dei target di fuzz (`fuzz/`): un job per target, su Linux, con i
-# corpus iniziali di scripts/genera_corpus_fuzz.py. Gira ogni domenica e a
+# corpus iniziali di scripts/genera_corpus_fuzz.py. Gira soltanto a
 # mano per 10 minuti a target; sulle PR che toccano i target o i corpus, un
 # minuto a target (le altre PR li compilano soltanto, in ci.yml). Un crash, un
 # timeout o un'uscita non nulla fanno fallire il job e i reperti restano come
@@ -23,9 +23,6 @@ on:
       - 'crates/plenora-core/src/crs.rs'
       - 'crates/plenora-io/data/projjson_integrati.json'
       - '.github/workflows/fuzz.yml'
-  schedule:
-    # Domenica 03:41 UTC. Minuto non tondo, come supply-chain.yml.
-    - cron: '41 3 * * 0'
   workflow_dispatch:
     inputs:
       secondi:

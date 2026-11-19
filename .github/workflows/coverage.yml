@@ -8,10 +8,6 @@ name: coverage
 # nasconde la regressione di un'altra.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
