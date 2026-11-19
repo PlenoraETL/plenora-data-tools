@@ -153,49 +153,6 @@ impl IntervalIndex {
         Ok(Some(id))
     }
 
-    /// Intervalli che intersecano [low, high], inclusi i contatti.
-    pub fn overlapping(
-        &self,
-        low: &Q,
-        high: &Q,
-        work: &mut Work<'_>,
-    ) -> Result<CountedVec<usize>, PredicateError> {
-        let mut pending = CountedVec::new();
-        let mut result = CountedVec::new();
-        if let Some(root) = self.root {
-            work.push(&mut pending, root)?;
-        }
-        while let Some(id) = pending.pop() {
-            work.step()?;
-            let branch = &self.branches[id];
-            let center = &self.intervals[branch.center].low;
-            let left = low.try_cmp(center)?.is_le();
-            let right = high.try_cmp(center)?.is_ge();
-            let entries = if left { &branch.lower } else { &branch.upper };
-            for &entry in entries {
-                work.step()?;
-                let span = &self.intervals[entry];
-                if (left && span.low.try_cmp(high)?.is_gt())
-                    || (!left && span.high.try_cmp(low)?.is_lt())
-                {
-                    break;
-                }
-                work.push(&mut result, entry)?;
-            }
-            if left {
-                if let Some(id) = branch.left {
-                    work.push(&mut pending, id)?;
-                }
-            }
-            if right {
-                if let Some(id) = branch.right {
-                    work.push(&mut pending, id)?;
-                }
-            }
-        }
-        Ok(result)
-    }
-
     pub fn candidates(
         &self,
         value: &Q,
@@ -232,6 +189,32 @@ impl IntervalIndex {
     }
 }
 
+pub use crate::segment_index::SegmentIndex as BoxIndex;
+
+pub fn geometry_bounds(
+    geometry: &geo::Geometry<f64>,
+    work: &mut Work<'_>,
+) -> Result<[Q; 4], PredicateError> {
+    use geo::CoordsIter;
+    let mut bounds = [0.0_f64; 4];
+    for (i, c) in geometry.coords_iter().enumerate() {
+        work.step()?;
+        if i == 0 {
+            bounds = [c.x, c.x, c.y, c.y];
+        } else {
+            bounds = [
+                bounds[0].min(c.x),
+                bounds[1].max(c.x),
+                bounds[2].min(c.y),
+                bounds[3].max(c.y),
+            ];
+        }
+    }
+    let a = crate::noding::P::of_in((bounds[0], bounds[2]).into(), work)?;
+    let b = crate::noding::P::of_in((bounds[1], bounds[3]).into(), work)?;
+    Ok([a.x, b.x, a.y, b.y])
+}
+
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests {
@@ -253,6 +236,7 @@ mod tests {
                 work.push(&mut bounds, b).expect("bounds");
             }
         }
+        let count = bounds.len();
         let index = BoxIndex::new(bounds, &mut work).expect("index");
         for x in -6..=6 {
             for y in -5..=5 {
@@ -268,10 +252,8 @@ mod tests {
                     .into_iter()
                     .collect();
                 actual.sort_unstable();
-                let expected: Vec<_> = index
-                    .bounds
-                    .iter()
-                    .enumerate()
+                let expected: Vec<_> = (0..count)
+                    .map(|i| (i, index.at(i)))
                     .filter(|(_, b)| {
                         b[0].try_cmp(&q[1]).expect("cmp").is_le()
                             && b[1].try_cmp(&q[0]).expect("cmp").is_ge()
@@ -390,74 +372,4 @@ mod tests {
             assert_eq!(actual, expected);
         }
     }
-}
-
-/// Inviluppi razionali chiusi; il filtro Y non introduce arrotondamenti.
-#[derive(Default)]
-pub struct BoxIndex {
-    bounds: CountedVec<[Q; 4]>,
-    x: IntervalIndex,
-}
-impl BoxIndex {
-    pub fn new(bounds: CountedVec<[Q; 4]>, work: &mut Work<'_>) -> Result<Self, PredicateError> {
-        let x = IntervalIndex::new(bounds.iter().map(|b| (&b[0], &b[1])), work)?;
-        Ok(Self { bounds, x })
-    }
-    pub fn candidates(
-        &self,
-        bounds: &[Q; 4],
-        work: &mut Work<'_>,
-    ) -> Result<CountedVec<usize>, PredicateError> {
-        let mut result = CountedVec::new();
-        for id in self.x.overlapping(&bounds[0], &bounds[1], work)? {
-            work.step()?;
-            let b = &self.bounds[id];
-            if b[2].try_cmp(&bounds[3])?.is_le() && b[3].try_cmp(&bounds[2])?.is_ge() {
-                work.push(&mut result, id)?;
-            }
-        }
-        Ok(result)
-    }
-    pub fn point_candidates(
-        &self,
-        p: &crate::noding::P,
-        work: &mut Work<'_>,
-    ) -> Result<CountedVec<usize>, PredicateError> {
-        let mut result = CountedVec::new();
-        for id in self.x.candidates(&p.x, work)? {
-            work.step()?;
-            let b = &self.bounds[id];
-            if b[2].try_cmp(&p.y)?.is_le() && b[3].try_cmp(&p.y)?.is_ge() {
-                work.push(&mut result, id)?;
-            }
-        }
-        Ok(result)
-    }
-    pub fn at(&self, id: usize) -> &[Q; 4] {
-        &self.bounds[id]
-    }
-}
-
-pub fn geometry_bounds(
-    geometry: &geo::Geometry<f64>,
-    work: &mut Work<'_>,
-) -> Result<[Q; 4], PredicateError> {
-    use geo::CoordsIter;
-    let mut bounds = [0.0_f64; 4];
-    for (i, c) in geometry.coords_iter().enumerate() {
-        work.step()?;
-        if i == 0 {
-            bounds = [c.x, c.x, c.y, c.y];
-        } else {
-            bounds = [
-                bounds[0].min(c.x),
-                bounds[1].max(c.x),
-                bounds[2].min(c.y),
-                bounds[3].max(c.y),
-            ];
-        }
-    }
-    let a = crate::noding::P::of_in((bounds[0], bounds[2]).into(), work)?;
-    let b = crate::noding::P::of_in((bounds[1], bounds[3]).into(), work)?;
-    Ok([a.x, b.x, a.y, b.y])
 }

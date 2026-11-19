@@ -12,6 +12,7 @@ use super::interval_index::{BoxIndex, IntervalIndex};
 use super::{De9imMatrix, PredicateError};
 pub(super) use crate::noding::Work;
 use crate::noding::{between, sorted, CountedVec, Edge, P, Q};
+use crate::segment_index::SegmentIndex;
 use geo::{Coord, CoordsIter, Geometry, LineString, Polygon};
 use std::cmp::Ordering;
 
@@ -25,10 +26,10 @@ fn invalid(side: &'static str) -> PredicateError {
 #[derive(Default)]
 struct Shape {
     polygon_index: BoxIndex,
-    line_index: IntervalIndex,
-    end_index: IntervalIndex,
-    point_index: IntervalIndex,
-    ring_indices: CountedVec<CountedVec<IntervalIndex>>,
+    line_index: SegmentIndex,
+    end_index: SegmentIndex,
+    point_index: SegmentIndex,
+    ring_indices: CountedVec<CountedVec<SegmentIndex>>,
     points: CountedVec<P>,
     lines: CountedVec<Edge>,
     ends: CountedVec<P>,
@@ -67,9 +68,9 @@ fn ring(line: &[Coord<f64>], work: &mut Work<'_>) -> Result<CountedVec<Edge>, Pr
 }
 impl Shape {
     fn build_indices(&mut self, work: &mut Work<'_>) -> Result<(), PredicateError> {
-        self.line_index = IntervalIndex::new(self.lines.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
-        self.end_index = IntervalIndex::new(self.ends.iter().map(|p| (&p.x, &p.x)), work)?;
-        self.point_index = IntervalIndex::new(self.points.iter().map(|p| (&p.x, &p.x)), work)?;
+        self.line_index = SegmentIndex::edges(self.lines.iter(), work)?;
+        self.end_index = SegmentIndex::points(self.ends.iter(), work)?;
+        self.point_index = SegmentIndex::points(self.points.iter(), work)?;
         let mut bounds = CountedVec::new();
         for rings in &self.polygons {
             let mut bb = [
@@ -100,7 +101,7 @@ impl Shape {
         for rings in &self.polygons {
             let mut indices = CountedVec::new();
             for ring in rings {
-                let index = IntervalIndex::new(ring.iter().map(|e| (&e.a.y, &e.b.y)), work)?;
+                let index = SegmentIndex::edges(ring.iter(), work)?;
                 work.push(&mut indices, index)?;
             }
             work.push(&mut self.ring_indices, indices)?;
@@ -118,7 +119,7 @@ impl Shape {
             let (rings, indices) = (&self.polygons[id], &self.ring_indices[id]);
             for (ring, index) in rings.iter().zip(indices) {
                 work.step()?;
-                for id in index.candidates(&p.y, work)? {
+                for id in index.point_candidates(p, work)? {
                     work.push(&mut edges, &ring[id])?;
                 }
             }
@@ -168,7 +169,7 @@ impl Shape {
             let mut statuses = CountedVec::new();
             for (ring, index) in rings.iter().zip(&self.ring_indices[polygon_index]) {
                 let mut boundary = false;
-                for id in index.candidates(&p.y, work)? {
+                for id in index.point_candidates(p, work)? {
                     work.step()?;
                     if ring[id].contains(p)? {
                         boundary = true;
@@ -457,12 +458,12 @@ impl Shape {
         if self.area_contains(p, None, work)? {
             return Ok(0);
         }
-        for id in self.line_index.candidates(&p.x, work)? {
+        for id in self.line_index.point_candidates(p, work)? {
             let e = &self.lines[id];
             work.step()?;
             if e.contains(p)? {
                 let mut odd = false;
-                for id in self.end_index.candidates(&p.x, work)? {
+                for id in self.end_index.point_candidates(p, work)? {
                     let q = &self.ends[id];
                     work.step()?;
                     if q == p {
@@ -472,7 +473,7 @@ impl Shape {
                 return Ok(usize::from(odd));
             }
         }
-        for id in self.point_index.candidates(&p.x, work)? {
+        for id in self.point_index.point_candidates(p, work)? {
             let q = &self.points[id];
             work.step()?;
             if q == p {
@@ -504,7 +505,7 @@ fn perturbed_sign(value: &Q, delta: &Q) -> Ordering {
 }
 fn ring_contains(
     ring: &[Edge],
-    index: &IntervalIndex,
+    index: &SegmentIndex,
     p: &P,
     direction: Option<&P>,
     work: &mut Work<'_>,
@@ -516,7 +517,7 @@ fn ring_contains(
     };
     let d = direction.unwrap_or(&zero);
     let mut inside = false;
-    for id in index.candidates(&p.y, work)? {
+    for id in index.ray_candidates(p, work)? {
         let e = &ring[id];
         work.step()?;
         let above = |y: &Q| -> Result<bool, PredicateError> {
@@ -871,6 +872,34 @@ mod tests {
                     RelateLimits::default().max_steps
                 );
             }
+        }
+    }
+
+    #[test]
+    fn sparse_vertical_relate_growth() {
+        let left = geometry("LINESTRING(0 -4,1 -3)");
+        let mut previous = None;
+        for count in [1024, 2048, 4096] {
+            let right = Geometry::MultiLineString(geo::MultiLineString(
+                (0..count)
+                    .map(|i| {
+                        let y = f64::from(i) * 4.;
+                        line_string![(x:0., y:y), (x:1., y:y+1.)]
+                    })
+                    .collect(),
+            ));
+            let mut work = Work::new(RelateLimits::default(), None);
+            let matrix = relate(&left, &right, &mut work).expect("limiti predefiniti");
+            assert_eq!(matrix.to_string(), "FF1FF0102");
+            println!(
+                "relate verticale n={count} steps={} peak={}",
+                work.steps,
+                work.peak_bytes()
+            );
+            if let Some(before) = previous {
+                assert!(work.steps < before * 5 / 2);
+            }
+            previous = Some(work.steps);
         }
     }
 

@@ -10,6 +10,18 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Prestazioni
+
+- Indice bidimensionale condiviso di inviluppi razionali per il noding e
+  la classificazione dei campioni DE-9IM: costruzione O(n log n), memoria
+  O(n), lavoro e prenotazioni conteggiati dal contesto comune. I filtri
+  inclusivi conservano contatti e perturbazioni infinitesime; le query
+  restituiscono gli ID in ordine deterministico. Prove differenziali
+  contro scansioni esaustive, estremi e subnormali, e crescita su segmenti
+  sparsi anche con lo stesso intervallo X.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

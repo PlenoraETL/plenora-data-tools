@@ -1818,6 +1818,7 @@
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs": [
       "sparse_work_and_exact_public_threshold",
+      "sparse_vertical_relate_growth",
       "unreleased_limits_may_change_without_changing_the_matrix",
       "rational_intersection_and_full_finite_exponent_range",
       "actual_work_and_reservation_thresholds",
