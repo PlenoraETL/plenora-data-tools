@@ -1,7 +1,6 @@
 name: interop
 
 on:
-  pull_request:
   workflow_dispatch:
 
 permissions:

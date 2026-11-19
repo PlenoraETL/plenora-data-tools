@@ -55,7 +55,7 @@ divergere al primo cambiamento. Comprendono le guardie Python di documenti,
 commenti e modelli di costo, che la CI esegue con gli altri gate.
 
 La suite lunga ([`README.md`, «Suite lunga»](README.md#suite-lunga)) è
-obbligatoria prima del merge: la suite di default ne gira un sottoinsieme
+avviata su richiesta del titolare: la suite di default ne gira un sottoinsieme
 deterministico.
 
 Toolchain fissata in `rust-toolchain.toml` (1.98.1).

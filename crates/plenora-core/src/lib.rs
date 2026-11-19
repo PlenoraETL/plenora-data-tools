@@ -27,6 +27,9 @@
 //! - [`memoria`]: byte Arrow di tabelle (per allocazione) e colonne (per
 //!   vista), la misura unica di runner e kernel.
 
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+compile_error!("Plenora supporta esclusivamente Linux e Windows");
+
 #[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 #[macro_use]

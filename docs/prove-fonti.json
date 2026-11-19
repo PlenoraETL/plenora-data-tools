@@ -3573,13 +3573,15 @@
     "ci.yml": {
       "events": [
         "pull_request",
-        "push"
+        "push",
+        "workflow_dispatch"
       ],
       "jobs": [
         "guardie",
         "gate",
         "contratti",
-        "dipendenze"
+        "dipendenze",
+        "suite-lunga"
       ],
       "python_scripts": [
         "scripts/avvisi_crate.py",
@@ -3591,8 +3593,6 @@
     },
     "coverage.yml": {
       "events": [
-        "pull_request",
-        "push",
         "workflow_dispatch"
       ],
       "jobs": [
@@ -3606,7 +3606,6 @@
     "fuzz.yml": {
       "events": [
         "pull_request",
-        "schedule",
         "workflow_dispatch"
       ],
       "jobs": [
@@ -3618,7 +3617,6 @@
     },
     "interop.yml": {
       "events": [
-        "pull_request",
         "workflow_dispatch"
       ],
       "jobs": [

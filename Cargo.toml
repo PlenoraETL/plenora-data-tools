@@ -164,9 +164,9 @@ tempfile = "=3.27.0"
 # libreria standard non ha un'API per i segnali, e scriverla qui vorrebbe
 # FFI (`unsafe`, vietato nel workspace): `ctrlc` contiene quell'`unsafe`, in
 # un crate piccolo e diffuso. Pacchetti nuovi nel lockfile (7): `ctrlc`
-# 3.5.2; per Unix `nix` 0.31.3 con `cfg_aliases` 0.2.2 (build); per Apple
-# `dispatch2` 0.3.1, `block2` 0.6.2, `objc2` 0.6.4, `objc2-encode` 4.1.0
-# (target non compilati qui, ma nel lockfile). Su Windows usa il
+# 3.5.2; per Linux `nix` 0.31.3 con `cfg_aliases` 0.2.2 (build). Le
+# dipendenze transitive di target non supportati restano nel lockfile.
+# Su Windows usa il
 # `windows-sys` 0.61.2 gia' nel lockfile; `libc` e `bitflags` c'erano gia'.
 ctrlc = { version = "=3.5.2", features = ["termination"] }
 # SDK Python `plenora-data` (crates/plenora-data-py): il modulo nativo
