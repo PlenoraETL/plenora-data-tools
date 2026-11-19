@@ -11,7 +11,7 @@
 //! Work e prenotazioni sono quelli di `RelateLimits`, incluse le esclusioni degli
 //! scratch aritmetici e dell'allocatore. Ogni ciclo ha checkpoint; fra due check
 //! si esegue un numero costante di operazioni su interi limitati da noding.
-//! Cancellazione precede deadline, come nelle altre API con `RelateLimits`.
+//! Deadline precede cancellazione in tutte le API con `RelateLimits`.
 //! La raffinazione ha al massimo 2560 bisezioni per radice e tentativo; un caso
 //! non certificabile restituisce `AccuracyUnproven`, mai coordinate approssimate
 //! senza certificato. Nessun limite di risorse cambia la tolleranza.

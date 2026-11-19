@@ -59,7 +59,7 @@ la cui versione non ha qui una voce datata.
   Certificati di precisione e rifiuti conservativi descritti in `docs/offset.md`.
 - API Rust `polygon_completion_with_limits`: facce non occupate con provenienza
   nuova/esistente, noding comune e pubblicazione nearest-even verificata.
-  Errori tipizzati, ordine canonico e deadline prioritaria opt-in; dominio
+  Errori tipizzati, ordine canonico e deadline sempre prioritaria sulla cancellazione; dominio
   e limiti di qualifica in [completamento](docs/polygon-completion.md).
 - API Rust `polygon_boolean`: union, intersection e difference binarie XY
   per Polygon e MultiPolygon con parti disgiunte, con noder ed enumeratore

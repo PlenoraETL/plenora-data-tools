@@ -19,7 +19,7 @@ use std::cmp::Ordering;
 /// Usa il noder comune e [`RelateLimits`], senza ammissione quadratica.
 /// Coppie e nodi includono anche gli incontri fra primitive dello stesso
 /// operando; passi, memoria contabile e controlli cooperativi includono
-/// validazione e costruzione dell'output. Il flag precede la deadline.
+/// validazione e costruzione dell'output. La deadline precede il flag.
 /// La memoria ha gli stessi limiti contabili (non heap fisico) di `RelateLimits`.
 ///
 /// XY planari, stesso CRS e unita' per entrambi gli operandi. Ordinamento

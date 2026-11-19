@@ -1697,7 +1697,9 @@
       "deadline_is_checked_next_to_cancellation",
       "noding_live_arithmetic_and_exact_resource_thresholds",
       "foreign_edge_budget_is_rejected",
-      "indexed_intersections_match_exhaustive_pairs"
+      "indexed_intersections_match_exhaustive_pairs",
+      "all_public_limits_deadline_precedence",
+      "public_limits_registry_is_complete"
     ],
     "crates/plenora-kernels-geo/src/noding/bounds.rs": [
       "formula_envelopes_cover_the_entire_classification_dag",
@@ -1799,7 +1801,8 @@
       "empty_members_cannot_bypass_the_work_limit",
       "invalid_polygon_topology_is_not_silently_classified",
       "every_named_predicate_on_the_cartesian_corpus",
-      "nested_members_and_permutations_preserve_cells"
+      "nested_members_and_permutations_preserve_cells",
+      "oracle_deadline_precedence_at_entry_and_during_work"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs": [
       "sparse_work_and_exact_public_threshold",

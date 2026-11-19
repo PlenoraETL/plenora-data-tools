@@ -65,12 +65,11 @@ impl From<LineBooleanError> for PolygonCompletionError {
 /// intere rifiutano prima di superare 145173 bit. I confronti d'area usano
 /// somme a punto fisso con resto certificato, senza denominatori cumulativi;
 /// il massimo sforamento contabile resta `RelateLimits::MAX_VALUE_BYTES`.
-/// Deadline precede cancellazione, senza modificare le altre API.
+/// Deadline precede cancellazione, come in tutte le API con limiti.
 /// Checkpoint nei cicli, nei confronti di ordinamento e alla pubblicazione.
-/// Ogni intero e' limitato a 145173 bit. Qualifica integrale GOP-028 aperta:
-/// mancano audit numerico dell'intervallo massimo e prove di interruzione
-/// black-box isolate per ciascuna fase; `Polygon::new` visita i buchi senza
-/// callback. Nessuna garanzia di latenza temporale.
+/// Ogni intero e' limitato a 145173 bit. La prova tabellare GOP-028 verifica
+/// tutte le API con limiti all'ingresso e durante il calcolo.
+/// `Polygon::new` visita i buchi senza callback: nessuna garanzia di latenza temporale.
 ///
 /// # Errors
 /// Errori tipizzati per dominio escluso, geometria invalida/non finita,

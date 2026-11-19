@@ -482,13 +482,12 @@ impl Q {
         };
         let mut b = d.copy()?;
         while b.value.sign() != Sign::NoSign {
-            if a.lease
-                .budget()
-                .deadline
-                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
-            {
-                return Err(PredicateError::DeadlineExceeded);
-            }
+            crate::noding::check_interruption(
+                a.lease.budget().deadline,
+                None,
+                PredicateError::DeadlineExceeded,
+                PredicateError::Cancelled,
+            )?;
             let r = a.rem(&b)?;
             a = b;
             b = r;

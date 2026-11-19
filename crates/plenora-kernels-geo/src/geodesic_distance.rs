@@ -23,7 +23,7 @@ use thiserror::Error;
 use crate::geodetica::EllissoideGeodetico;
 
 use crate::geodesic_surface as surface;
-use crate::geodesic_surface::metric::{minimum, GeometryIndex, Work, ROUND_M};
+use crate::geodesic_surface::metric::{minimum, GeometryIndex, Work};
 
 /// Budget finiti, cumulativi; zero ammette zero lavoro.
 #[derive(Clone, Copy, Debug)]
@@ -143,12 +143,12 @@ pub fn geodesic_distance_with_limits(
     cancelled: Option<&AtomicBool>,
 ) -> Result<GeodesicDistanceResult, GeodesicDistanceError> {
     // Il checkpoint precede la validazione del CRS anche se manca l'ellissoide.
-    if limits.deadline.is_some_and(|end| Instant::now() >= end) {
-        return Err(GeodesicDistanceError::DeadlineExceeded);
-    }
-    if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
-        return Err(GeodesicDistanceError::Cancelled);
-    }
+    crate::noding::check_interruption(
+        limits.deadline,
+        cancelled,
+        GeodesicDistanceError::DeadlineExceeded,
+        GeodesicDistanceError::Cancelled,
+    )?;
     if crs.kind() != CrsKind::Geographic {
         return Err(GeodesicDistanceError::GeographicRequired);
     }
@@ -160,16 +160,7 @@ pub fn geodesic_distance_with_limits(
     {
         return Err(GeodesicDistanceError::UnsupportedEllipsoid);
     }
-    let mut work = Work {
-        limits,
-        cancel: cancelled,
-        count: 0,
-        bytes: 0,
-        peak: 0,
-        ellipsoid,
-        taylor: true,
-        position_margin: ROUND_M,
-    };
+    let mut work = Work::new(limits, cancelled, &ellipsoid);
     let left = GeometryIndex::new(a, &mut work)?;
     let right = GeometryIndex::new(b, &mut work)?;
     let mut metres = minimum(

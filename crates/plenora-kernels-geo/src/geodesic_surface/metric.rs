@@ -16,7 +16,6 @@ use geographiclib_rs::{DirectGeodesic, InverseGeodesic};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
 pub(crate) const GAP_M: f64 = 0.004;
 // G2, Additional properties e Background:
 // https://geographiclib.sourceforge.io/html/python/geodesics.html
@@ -28,8 +27,8 @@ pub(crate) const GAP_M: f64 = 0.004;
 pub(crate) const ROUND_M: f64 = 1e-6;
 
 pub(crate) struct Work<'a> {
-    pub(crate) limits: GeodesicDistanceLimits,
-    pub(crate) cancel: Option<&'a AtomicBool>,
+    limits: GeodesicDistanceLimits,
+    cancel: Option<&'a AtomicBool>,
     pub(crate) count: u64,
     pub(crate) bytes: u64,
     pub(crate) peak: u64,
@@ -38,21 +37,31 @@ pub(crate) struct Work<'a> {
     pub(crate) position_margin: f64,
 }
 
-impl Work<'_> {
+impl<'a> Work<'a> {
+    pub(crate) const fn new(
+        limits: GeodesicDistanceLimits,
+        cancel: Option<&'a AtomicBool>,
+        ellipsoid: &EllissoideGeodetico,
+    ) -> Self {
+        Self {
+            limits,
+            cancel,
+            count: 0,
+            bytes: 0,
+            peak: 0,
+            ellipsoid: *ellipsoid,
+            taylor: true,
+            position_margin: ROUND_M,
+        }
+    }
+
     pub(crate) fn checkpoint(&self) -> Result<(), GeodesicDistanceError> {
-        if self
-            .limits
-            .deadline
-            .is_some_and(|end| Instant::now() >= end)
-        {
-            return Err(GeodesicDistanceError::DeadlineExceeded);
-        }
-        if self
-            .cancel
-            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
-        {
-            return Err(GeodesicDistanceError::Cancelled);
-        }
+        crate::noding::check_interruption(
+            self.limits.deadline,
+            self.cancel,
+            GeodesicDistanceError::DeadlineExceeded,
+            GeodesicDistanceError::Cancelled,
+        )?;
         Ok(())
     }
 

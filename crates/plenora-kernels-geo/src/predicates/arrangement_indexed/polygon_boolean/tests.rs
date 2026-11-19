@@ -224,7 +224,7 @@ fn exact_resource_thresholds() {
         }
     }
 }
-/// GOP-028: timeout prevale sul token nello stesso checkpoint; API vecchia invariata.
+/// GOP-028: timeout prevale sul token nello stesso checkpoint; regola condivisa da tutte le API con limiti.
 #[test]
 fn deadline_precedes_cancellation_and_invalid_inputs_are_typed() {
     let flag = AtomicBool::new(true);

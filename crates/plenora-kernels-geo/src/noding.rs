@@ -18,6 +18,24 @@ mod oracle;
 mod storage;
 pub use storage::CountedVec;
 
+/// GOP-028: un solo ordine di osservazione per tutti i checkpoint.
+pub fn check_interruption<E>(
+    deadline: Option<std::time::Instant>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+    deadline_error: E,
+    cancelled_error: E,
+) -> Result<(), E> {
+    #[cfg(test)]
+    let deadline = gop028::checkpoint(deadline, cancelled);
+    if deadline.is_some_and(|end| std::time::Instant::now() >= end) {
+        return Err(deadline_error);
+    }
+    if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+        return Err(cancelled_error);
+    }
+    Ok(())
+}
+
 /// Checkpoint esterni entro 256 primitive Q; ogni gcd ha meno di
 /// 290346 resti su interi di al massimo 145173 bit e controlla la deadline
 /// a ogni resto. Il flag e' osservato dal checkpoint esterno.
@@ -63,19 +81,12 @@ impl<'a> Work<'a> {
                 }
             }
         }
-        if self
-            .limits
-            .deadline
-            .is_some_and(|d| std::time::Instant::now() >= d)
-        {
-            return Err(PredicateError::DeadlineExceeded);
-        }
-        if self
-            .cancelled
-            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
-        {
-            return Err(PredicateError::Cancelled);
-        }
+        crate::noding::check_interruption(
+            self.limits.deadline,
+            self.cancelled,
+            PredicateError::DeadlineExceeded,
+            PredicateError::Cancelled,
+        )?;
         self.steps = self
             .steps
             .checked_add(1)
@@ -879,5 +890,639 @@ mod tests {
             indexed.sort_by_key(|(i, j, _)| (*i, *j));
             assert_eq!(indexed, exhaustive);
         }
+    }
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod gop028 {
+    use super::*;
+    use crate::coordinate_api::*;
+    use crate::geodesic_densify::*;
+    use crate::geodesic_distance::*;
+    use crate::preserve_shape_measure::*;
+    use crate::{general_boolean, line_boolean, point_boolean, polygon_boolean};
+    use geo::{Geometry, LineString, Point, Polygon};
+    use std::cell::Cell;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    use std::time::Instant;
+
+    // Sonda locale al thread, assente in produzione. Simula il trascorrere
+    // del tempo al checkpoint k e alza il vero token prima del controllo.
+    thread_local! {
+        static PROBE: Cell<Option<(usize, Option<usize>)>> = const { Cell::new(None) };
+    }
+    pub(super) fn checkpoint(
+        deadline: Option<Instant>,
+        flag: Option<&AtomicBool>,
+    ) -> Option<Instant> {
+        let Some(flag) = flag else {
+            return deadline;
+        };
+        PROBE.with(|probe| {
+            let Some((count, at)) = probe.get() else {
+                return deadline;
+            };
+            probe.set(Some((count + 1, at)));
+            if at == Some(count) {
+                flag.store(true, AtomicOrdering::Relaxed);
+                Some(Instant::now())
+            } else {
+                deadline
+            }
+        })
+    }
+    struct Probe;
+    impl Probe {
+        fn start(at: Option<usize>) -> Self {
+            PROBE.with(|probe| {
+                assert!(probe.get().is_none());
+                probe.set(Some((0, at)));
+            });
+            Self
+        }
+        fn count() -> usize {
+            probe_count()
+        }
+    }
+    fn probe_count() -> usize {
+        PROBE.with(|probe| probe.get().unwrap().0)
+    }
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            PROBE.with(|probe| probe.set(None));
+        }
+    }
+    struct Fixture {
+        line: LineString,
+        line_geometry: Geometry,
+        guide: Geometry,
+        reshaper: Geometry,
+        point: Geometry,
+        polygon: Polygon,
+        polygon_geometry: Geometry,
+        crs: plenora_core::crs::ResolvedCrs,
+        options: Vec<CoordinateOption>,
+    }
+    impl Fixture {
+        fn new(reverse: bool) -> Self {
+            let line = LineString::from(vec![(0., 0.), (10., 0.)]);
+            let polygon = Polygon::new(
+                LineString::from(vec![(0., 0.), (1., 0.), (1., 1.), (0., 1.), (0., 0.)]),
+                vec![],
+            );
+            let mut options = vec![
+                CoordinateOption::Precision(4),
+                CoordinateOption::Datum(CoordinateDatum::Wgs84),
+            ];
+            if reverse {
+                options.reverse();
+            }
+            Self {
+                line_geometry: line.clone().into(),
+                line,
+                guide: LineString::from(vec![(2., 10.), (2., 11.)]).into(),
+                reshaper: LineString::from(vec![(2., -2.), (2., 2.), (8., 2.), (8., -2.)]).into(),
+                point: Point::new(0., 0.).into(),
+                polygon_geometry: polygon.clone().into(),
+                polygon,
+                crs: plenora_core::crs::resolve_crs("EPSG:4326", "crs").unwrap(),
+                options,
+            }
+        }
+        fn request(&self) -> CoordinateRequest<'_> {
+            CoordinateRequest {
+                profile: STANDARD_V1,
+                format: CoordinateFormat::Dd,
+                options: &self.options,
+            }
+        }
+    }
+    fn limits(deadline: Option<Instant>) -> RelateLimits {
+        RelateLimits {
+            deadline,
+            ..RelateLimits::default()
+        }
+    }
+    fn polygons(deadline: Option<Instant>) -> polygon_boolean::PolygonBooleanLimits {
+        polygon_boolean::PolygonBooleanLimits {
+            work: limits(deadline),
+            ..Default::default()
+        }
+    }
+    fn densify(deadline: Option<Instant>) -> GeodesicDensifyLimits {
+        GeodesicDensifyLimits {
+            max_points: 100_000,
+            max_reserved_bytes: 10_000_000,
+            deadline,
+        }
+    }
+    fn measure(deadline: Option<Instant>) -> ShapeMeasureLimits {
+        ShapeMeasureLimits {
+            max_work: 1_000_000,
+            deadline,
+        }
+    }
+    fn tolerance() -> ShapeTolerance {
+        ShapeTolerance {
+            absolute: 1.,
+            relative: 0.0001,
+        }
+    }
+    struct Case {
+        source: &'static str,
+        name: &'static str,
+        run: fn(&Fixture, Option<Instant>, &AtomicBool, bool),
+    }
+    macro_rules! case {
+        ($source:literal, $name:ident, |$f:ident, $d:ident, $t:ident| $call:expr, $error:pat) => {
+            Case {
+                source: $source,
+                name: stringify!($name),
+                run: |$f, $d, $t, interrupted| {
+                    let result = $call;
+                    if interrupted {
+                        assert!(
+                            matches!(result, Err($error)),
+                            "{}: {result:?}",
+                            stringify!($name)
+                        );
+                    } else {
+                        result.unwrap();
+                    }
+                },
+            }
+        };
+    }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Registro unico eseguibile delle API GOP-028"
+    )]
+    fn cases() -> Vec<Case> {
+        vec![
+            case!(
+                "predicates.rs",
+                relate_matrix_with_limits,
+                |f, d, t| crate::predicates::relate_matrix_with_limits(
+                    &f.line_geometry,
+                    &f.point,
+                    limits(d),
+                    Some(t)
+                ),
+                PredicateError::DeadlineExceeded
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs",
+                boolean_with_limits,
+                |f, d, t| point_boolean::boolean_with_limits(
+                    &f.point,
+                    &f.point,
+                    point_boolean::PointBooleanOp::Union,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs",
+                union_with_limits,
+                |f, d, t| point_boolean::union_with_limits(
+                    &f.point,
+                    &f.point,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs",
+                intersection_with_limits,
+                |f, d, t| point_boolean::intersection_with_limits(
+                    &f.point,
+                    &f.point,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs",
+                difference_with_limits,
+                |f, d, t| point_boolean::difference_with_limits(
+                    &f.point,
+                    &f.point,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs",
+                boolean_with_limits,
+                |f, d, t| line_boolean::boolean_with_limits(
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    line_boolean::LineBooleanOp::Union,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs",
+                union_with_limits,
+                |f, d, t| line_boolean::union_with_limits(
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs",
+                intersection_with_limits,
+                |f, d, t| line_boolean::intersection_with_limits(
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs",
+                difference_with_limits,
+                |f, d, t| line_boolean::difference_with_limits(
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs",
+                boolean_with_limits,
+                |f, d, t| polygon_boolean::boolean_with_limits(
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygon_boolean::PolygonBooleanOp::Union,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs",
+                union_with_limits,
+                |f, d, t| polygon_boolean::union_with_limits(
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygons(d),
+                    Some(t)
+                ),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs",
+                intersection_with_limits,
+                |f, d, t| polygon_boolean::intersection_with_limits(
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygons(d),
+                    Some(t)
+                ),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs",
+                difference_with_limits,
+                |f, d, t| polygon_boolean::difference_with_limits(
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygons(d),
+                    Some(t)
+                ),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs",
+                boolean_with_limits,
+                |f, d, t| general_boolean::boolean_with_limits(
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    general_boolean::GeneralBooleanOp::Union,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs",
+                union_with_limits,
+                |f, d, t| general_boolean::union_with_limits(
+                    std::slice::from_ref(&f.polygon_geometry),
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs",
+                intersection_with_limits,
+                |f, d, t| general_boolean::intersection_with_limits(
+                    std::slice::from_ref(&f.polygon_geometry),
+                    &f.polygon_geometry,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs",
+                difference_with_limits,
+                |f, d, t| general_boolean::difference_with_limits(
+                    std::slice::from_ref(&f.polygon_geometry),
+                    &f.polygon_geometry,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_completion.rs",
+                polygon_completion_with_limits,
+                |f, d, t| crate::polygon_completion_with_limits(
+                    std::slice::from_ref(&f.polygon),
+                    &LineString::from(vec![(1., 0.), (2., 0.), (2., 1.), (1., 1.)]).into(),
+                    limits(d),
+                    Some(t)
+                ),
+                crate::polygon_completion::PolygonCompletionError::Predicate(
+                    PredicateError::DeadlineExceeded
+                )
+            ),
+            case!(
+                "extended_algorithms/split_limited.rs",
+                split_line_with_limits,
+                |f, d, t| crate::extended_algorithms::split_line_with_limits(
+                    &f.line,
+                    &f.point,
+                    limits(d),
+                    Some(t)
+                ),
+                PredicateError::DeadlineExceeded
+            ),
+            case!(
+                "extended_algorithms/polygonize_limited.rs",
+                polygonize_with_limits,
+                |f, d, t| crate::extended_algorithms::polygonize_with_limits(
+                    &f.line_geometry,
+                    limits(d),
+                    Some(t)
+                ),
+                PredicateError::DeadlineExceeded
+            ),
+            case!(
+                "offset.rs",
+                offset_with_limits,
+                |f, d, t| crate::offset::offset_with_limits(
+                    &f.line_geometry,
+                    crate::offset::OffsetOptions::new(1., 0.01),
+                    limits(d),
+                    Some(t)
+                ),
+                crate::offset::OffsetError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "trim_extend.rs",
+                trim_extend_with_limits,
+                |f, d, t| crate::trim_extend::trim_extend_with_limits(
+                    &f.line_geometry,
+                    &f.guide,
+                    crate::trim_extend::TrimExtendOptions::default(),
+                    limits(d),
+                    Some(t)
+                ),
+                crate::trim_extend::TrimExtendError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "reshape.rs",
+                reshape_with_limits,
+                |f, d, t| crate::reshape::reshape_with_limits(
+                    &f.line_geometry,
+                    &f.reshaper,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::reshape::ReshapeError::Predicate(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "coordinate_api.rs",
+                encode_coordinates_with_limits,
+                |f, d, t| encode_coordinates_with_limits(
+                    f.request(),
+                    &[CoordinatePoint {
+                        longitude: 1.,
+                        latitude: 1.
+                    }; 3],
+                    CoordinateLimits {
+                        deadline: d,
+                        ..Default::default()
+                    },
+                    Some(t)
+                ),
+                CoordinateApiError {
+                    kind: CoordinateErrorKind::DeadlineExceeded,
+                    ..
+                }
+            ),
+            case!(
+                "coordinate_api.rs",
+                decode_coordinates_with_limits,
+                |f, d, t| decode_coordinates_with_limits(
+                    CoordinateRequest {
+                        options: &[CoordinateOption::Datum(CoordinateDatum::Wgs84)],
+                        ..f.request()
+                    },
+                    &["1.0000N 1.0000E"; 3],
+                    CoordinateLimits {
+                        deadline: d,
+                        ..Default::default()
+                    },
+                    Some(t)
+                ),
+                CoordinateApiError {
+                    kind: CoordinateErrorKind::DeadlineExceeded,
+                    ..
+                }
+            ),
+            case!(
+                "preserve_shape_measure.rs",
+                preserve_shape_length_with_limits,
+                |f, d, t| preserve_shape_length_with_limits(
+                    std::slice::from_ref(&f.line),
+                    &f.crs,
+                    tolerance(),
+                    measure(d),
+                    Some(t)
+                ),
+                ShapeMeasureError::DeadlineExceeded
+            ),
+            case!(
+                "preserve_shape_measure.rs",
+                preserve_shape_area_with_limits,
+                |f, d, t| preserve_shape_area_with_limits(
+                    std::slice::from_ref(&f.polygon),
+                    &f.crs,
+                    tolerance(),
+                    measure(d),
+                    Some(t)
+                ),
+                ShapeMeasureError::DeadlineExceeded
+            ),
+            case!(
+                "geodesic_densify.rs",
+                geodesic_densify_with_limits,
+                |f, d, t| geodesic_densify_with_limits(
+                    std::slice::from_ref(&f.line),
+                    &f.crs,
+                    100_000.,
+                    densify(d),
+                    Some(t)
+                ),
+                GeodesicDensifyError::DeadlineExceeded
+            ),
+            case!(
+                "geodesic_densify/geometry.rs",
+                geodesic_densify_geometry_with_limits,
+                |f, d, t| geodesic_densify_geometry_with_limits(
+                    &f.polygon_geometry,
+                    &f.crs,
+                    100_000.,
+                    GeodesicGeometryDensifyLimits {
+                        output: densify(d),
+                        max_validation_work: 1_000_000
+                    },
+                    Some(t)
+                ),
+                GeodesicDensifyError::DeadlineExceeded
+            ),
+            case!(
+                "geodesic_distance.rs",
+                geodesic_distance_with_limits,
+                |f, d, t| geodesic_distance_with_limits(
+                    &f.line_geometry,
+                    &f.point,
+                    &f.crs,
+                    GeodesicDistanceLimits {
+                        max_work: 1_000_000,
+                        max_reserved_bytes: 10_000_000,
+                        deadline: d
+                    },
+                    Some(t)
+                ),
+                GeodesicDistanceError::DeadlineExceeded
+            ),
+        ]
+    }
+    /// Fonte GOP-028: stesso esito pubblico all'ingresso e dopo lavoro reale.
+    #[test]
+    fn all_public_limits_deadline_precedence() {
+        for case in cases() {
+            for reverse in [false, true] {
+                let fixture = Fixture::new(reverse);
+                let flag = AtomicBool::new(false);
+                let probe = Probe::start(None);
+                (case.run)(&fixture, None, &flag, false);
+                let total = Probe::count();
+                drop(probe);
+                assert!(total > 2, "{}: {}", case.source, case.name);
+                // Deadline reale scaduta e token gia' alzato all'ingresso.
+                flag.store(true, AtomicOrdering::Relaxed);
+                (case.run)(&fixture, Some(Instant::now()), &flag, true);
+                // Primo checkpoint interno, centro e ultima pubblicazione.
+                for at in [1, total / 2, total - 1] {
+                    flag.store(false, AtomicOrdering::Relaxed);
+                    let _probe = Probe::start(Some(at));
+                    (case.run)(&fixture, None, &flag, true);
+                    assert_eq!(Probe::count(), at + 1, "{}: {}", case.source, case.name);
+                    assert!(flag.load(AtomicOrdering::Relaxed));
+                }
+            }
+        }
+    }
+    // Anche API prive di token/deadline devono essere censite esplicitamente.
+    const BUDGET_ONLY: &[(&str, &str)] = &[
+        ("rust_backend/mod.rs", "make_valid_wkb_with_limits"),
+        (
+            "rust_backend/make_valid.rs",
+            "make_valid_geometry_rust_with_limits",
+        ),
+    ];
+    fn discover(directory: &Path, root: &Path, found: &mut BTreeSet<(String, String)>) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                discover(&path, root, found);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                // Tokenizzazione minima: whitespace e punteggiatura, firme multilinea incluse.
+                let tokens: Vec<_> = source
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                for triple in tokens.windows(3) {
+                    if triple[0] == "pub"
+                        && triple[1] == "fn"
+                        && triple[2].ends_with("_with_limits")
+                    {
+                        assert!(found.insert((
+                            path.strip_prefix(root)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .replace('\\', "/"),
+                            triple[2].to_owned()
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    /// Fonte GOP-028: ogni nuova firma pubblica deve avere una riga eseguibile.
+    #[test]
+    fn public_limits_registry_is_complete() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = BTreeSet::new();
+        discover(&root, &root, &mut found);
+        let cases = cases();
+        let mut registered: BTreeSet<_> = cases
+            .iter()
+            .map(|case| (case.source.to_owned(), case.name.to_owned()))
+            .collect();
+        assert_eq!(registered.len(), cases.len());
+        registered.extend(
+            BUDGET_ONLY
+                .iter()
+                .map(|(source, name)| ((*source).to_owned(), (*name).to_owned())),
+        );
+        assert_eq!(found, registered);
     }
 }

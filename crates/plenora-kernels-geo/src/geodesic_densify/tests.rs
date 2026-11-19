@@ -245,19 +245,18 @@ fn ambiguities_domains_and_controls() {
         geodesic_densify_with_limits(&parts, &crs, 1e6, expired, Some(&AtomicBool::new(true))),
         Err(GeodesicDensifyError::DeadlineExceeded)
     );
-    let mut work = DensifyWork {
-        limits: limits(),
-        cancelled: None,
-        points: 0,
-        bytes: 0,
-    };
     let flag = AtomicBool::new(false);
-    work.cancelled = Some(&flag);
+    let mut work = DensifyWork::new(limits(), Some(&flag));
     work.checkpoint().unwrap();
     flag.store(true, Ordering::Relaxed);
     assert_eq!(work.checkpoint(), Err(GeodesicDensifyError::Cancelled));
-    work.cancelled = None;
-    work.limits.deadline = Some(Instant::now());
+    work = DensifyWork::new(
+        GeodesicDensifyLimits {
+            deadline: Some(Instant::now()),
+            ..limits()
+        },
+        None,
+    );
     assert_eq!(
         work.checkpoint(),
         Err(GeodesicDensifyError::DeadlineExceeded)

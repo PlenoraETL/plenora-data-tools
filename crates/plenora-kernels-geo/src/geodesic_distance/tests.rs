@@ -335,16 +335,8 @@ fn taylor_matches_metric_oracle() {
                 (1.00005, latitude + 0.0001),
                 (1.00015, latitude + 0.0001 + skew),
             ]);
-            let mut work = Work {
-                limits: limits(),
-                cancel: None,
-                count: 0,
-                bytes: 0,
-                peak: 0,
-                ellipsoid: EllissoideGeodetico::da_crs(&crs).unwrap(),
-                taylor: false,
-                position_margin: ROUND_M,
-            };
+            let mut work = Work::new(limits(), None, &EllissoideGeodetico::da_crs(&crs).unwrap());
+            work.taylor = false;
             let left = GeometryIndex::new(&a, &mut work).unwrap();
             let right = GeometryIndex::new(&b, &mut work).unwrap();
             let expected = minimum(
@@ -573,16 +565,7 @@ fn conjugate_path_guard_preserves_point_distance() {
 #[test]
 fn direct_failure_is_accuracy_and_tiny_area_is_explicit() {
     let crs = resolve_crs("EPSG:4326", "crs").unwrap();
-    let mut work = Work {
-        limits: limits(),
-        cancel: None,
-        count: 0,
-        bytes: 0,
-        peak: 0,
-        ellipsoid: EllissoideGeodetico::da_crs(&crs).unwrap(),
-        taylor: true,
-        position_margin: ROUND_M,
-    };
+    let mut work = Work::new(limits(), None, &EllissoideGeodetico::da_crs(&crs).unwrap());
     let arc = ArcPiece {
         origin: Coord { x: 0., y: 0. },
         end: Coord { x: 0., y: 1. },

@@ -3,7 +3,7 @@ use super::{GeodesicDensifyError, GeodesicGeometryDensifyLimits};
 use crate::geodesic_distance::{GeodesicDistanceError, GeodesicDistanceLimits};
 use crate::geodesic_surface::{
     self as surface,
-    metric::{GeometryIndex, Work, ROUND_M},
+    metric::{GeometryIndex, Work},
 };
 use crate::geodetica::EllissoideGeodetico;
 use geo::Geometry;
@@ -51,16 +51,7 @@ fn validate_surface(
     limits: GeodesicGeometryDensifyLimits,
     cancel: Option<&AtomicBool>,
 ) -> Result<u64, GeodesicDistanceError> {
-    let mut work = Work {
-        limits: metric_limits(limits),
-        cancel,
-        count: 0,
-        bytes: 0,
-        peak: 0,
-        ellipsoid: *ellipsoid,
-        taylor: true,
-        position_margin: ROUND_M,
-    };
+    let mut work = Work::new(metric_limits(limits), cancel, ellipsoid);
     let mut index = GeometryIndex {
         nodes: Vec::new(),
         rings: Vec::new(),
@@ -124,16 +115,7 @@ mod tests {
             },
             max_validation_work: 1_000_000,
         };
-        let mut work = Work {
-            limits: metric_limits(limits),
-            cancel: None,
-            count: 0,
-            bytes: 0,
-            peak: 0,
-            ellipsoid,
-            taylor: true,
-            position_margin: ROUND_M,
-        };
+        let mut work = Work::new(metric_limits(limits), None, &ellipsoid);
         let mut index = GeometryIndex {
             nodes: Vec::new(),
             rings: Vec::new(),

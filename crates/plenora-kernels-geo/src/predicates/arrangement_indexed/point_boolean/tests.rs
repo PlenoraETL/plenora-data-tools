@@ -181,7 +181,7 @@ fn exact_limits_and_interruptions() {
         deadline: Some(std::time::Instant::now()),
         ..RelateLimits::default()
     };
-    // Fonte: contratto pubblico relate_matrix_with_limits, precedenza cancellazione.
+    // Fonte: contratto pubblico relate_matrix_with_limits, precedenza deadline sulla cancellazione.
     assert!(matches!(
         boolean_with_limits(
             &a,

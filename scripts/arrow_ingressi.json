@@ -4471,6 +4471,12 @@
       "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn between(x: &Q, a: &Q, b: &Q) -> Result<bool, PredicateError>"
     },
+    "crates/plenora-kernels-geo/src/noding.rs::check_interruption": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Controllo GOP-028 interno: deadline monotona, token atomico e categorie di errore; nessun dato Arrow.",
+      "signature": "pub fn check_interruption<E>( deadline: Option<std::time::Instant>, cancelled: Option<&std::sync::atomic::AtomicBool>, deadline_error: E, cancelled_error: E, ) -> Result<(), E>"
+    },
     "crates/plenora-kernels-geo/src/noding.rs::contains": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",

@@ -588,20 +588,15 @@ mod tests {
                     polygon.add_point(point.y, point.x);
                 }
                 let (_, area, _) = polygon.compute(true);
-                let mut work = Work {
-                    limits: GeodesicDistanceLimits {
+                let mut work = Work::new(
+                    GeodesicDistanceLimits {
                         max_work: 1_000_000,
                         max_reserved_bytes: 10_000_000,
                         deadline: None,
                     },
-                    cancel: None,
-                    count: 0,
-                    bytes: 0,
-                    peak: 0,
-                    ellipsoid,
-                    taylor: true,
-                    position_margin: metric::ROUND_M,
-                };
+                    None,
+                    &ellipsoid,
+                );
                 assert_eq!(
                     local_orientation(&ring, &mut work).unwrap(),
                     Some(area.signum())

@@ -5,7 +5,9 @@
     reason = "Identita geometrica e casi di simmetria esatti G2"
 )]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use geo::{Coord, LineString};
@@ -85,47 +87,63 @@ pub enum GeodesicDensifyError {
 // Un micrometro copre anche conversioni angolari e composizione direct/inverse.
 const ROUND_OFF_M: f64 = 1e-6;
 
-struct DensifyWork<'a> {
-    limits: GeodesicDensifyLimits,
-    cancelled: Option<&'a AtomicBool>,
-    points: u64,
-    bytes: u64,
-}
-
-impl DensifyWork<'_> {
-    fn checkpoint(&self) -> Result<(), GeodesicDensifyError> {
-        if self
-            .limits
-            .deadline
-            .is_some_and(|end| Instant::now() >= end)
-        {
-            return Err(GeodesicDensifyError::DeadlineExceeded);
-        }
-        if self
-            .cancelled
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
-        {
-            return Err(GeodesicDensifyError::Cancelled);
-        }
-        Ok(())
+use work::DensifyWork;
+mod work {
+    use super::{AtomicBool, GeodesicDensifyError, GeodesicDensifyLimits};
+    pub(super) struct DensifyWork<'a> {
+        limits: GeodesicDensifyLimits,
+        cancelled: Option<&'a AtomicBool>,
+        points: u64,
+        bytes: u64,
     }
 
-    fn charge(&mut self, points: u64, bytes: u64) -> Result<(), GeodesicDensifyError> {
-        self.points = self
-            .points
-            .checked_add(points)
-            .ok_or(GeodesicDensifyError::PointLimit)?;
-        if self.points > self.limits.max_points {
-            return Err(GeodesicDensifyError::PointLimit);
+    impl<'a> DensifyWork<'a> {
+        pub(super) const fn new(
+            limits: GeodesicDensifyLimits,
+            cancelled: Option<&'a AtomicBool>,
+        ) -> Self {
+            Self {
+                limits,
+                cancelled,
+                points: 0,
+                bytes: 0,
+            }
         }
-        self.bytes = self
-            .bytes
-            .checked_add(bytes)
-            .ok_or(GeodesicDensifyError::MemoryLimit)?;
-        if self.bytes > self.limits.max_reserved_bytes {
-            return Err(GeodesicDensifyError::MemoryLimit);
+        pub(super) const fn bytes(&self) -> u64 {
+            self.bytes
         }
-        Ok(())
+
+        pub(super) fn checkpoint(&self) -> Result<(), GeodesicDensifyError> {
+            crate::noding::check_interruption(
+                self.limits.deadline,
+                self.cancelled,
+                GeodesicDensifyError::DeadlineExceeded,
+                GeodesicDensifyError::Cancelled,
+            )?;
+            Ok(())
+        }
+
+        pub(super) fn charge(
+            &mut self,
+            points: u64,
+            bytes: u64,
+        ) -> Result<(), GeodesicDensifyError> {
+            self.points = self
+                .points
+                .checked_add(points)
+                .ok_or(GeodesicDensifyError::PointLimit)?;
+            if self.points > self.limits.max_points {
+                return Err(GeodesicDensifyError::PointLimit);
+            }
+            self.bytes = self
+                .bytes
+                .checked_add(bytes)
+                .ok_or(GeodesicDensifyError::MemoryLimit)?;
+            if self.bytes > self.limits.max_reserved_bytes {
+                return Err(GeodesicDensifyError::MemoryLimit);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -269,12 +287,7 @@ pub fn geodesic_densify_with_limits(
     limits: GeodesicDensifyLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError> {
-    let mut work = DensifyWork {
-        limits,
-        cancelled,
-        points: 0,
-        bytes: 0,
-    };
+    let mut work = DensifyWork::new(limits, cancelled);
     work.checkpoint()?;
     if crs.kind() != CrsKind::Geographic {
         return Err(GeodesicDensifyError::GeographicRequired);

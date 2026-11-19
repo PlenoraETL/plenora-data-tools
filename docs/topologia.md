@@ -149,7 +149,7 @@ Il drop rilascia il budget; pop e dedup mantengono la capacita'. Il fallback
 aritmetico e le esclusioni fisiche sono specificati sopra: questo conteggio
 non costituisce un tetto all'heap totale. `RelateLimits::deadline` e'
 opzionale (default `None`) e produce `PredicateError::DeadlineExceeded`;
-se anche il token e' alzato prevale `Cancelled`.
+se anche il token e' alzato prevale sempre `DeadlineExceeded`.
 Nessun maggiorante anticipato decide il rifiuto. Validazione e calcolo
 condividono i contatori; cancellazione, scadenza, lavoro esaurito e prenotazione
 esaurita producono varianti tipizzate di `PredicateError`.
@@ -394,7 +394,7 @@ Per decidere il verso non si accumulano aree con denominatori crescenti.
 Ogni ciclo controlla lavoro, deadline e cancellazione; una primitiva razionale
 ha dimensione massima finita indipendente dal numero di elementi. Nei confronti
 si elaborano al massimo due punti o raggi fra checkpoint. GOP-028: deadline
-scaduta prima del token; la politica delle API precedenti non cambia. Il limite
+scaduta prima del token, in tutte le API con limiti. Il limite
 non promette una latenza a tempo reale. Ricostruzione dei successori e verifica
 della corrispondenza dei lati possono richiedere lavoro quadratico, interrotto
 dai contatori reali; non viene promesso un algoritmo subquadratico.

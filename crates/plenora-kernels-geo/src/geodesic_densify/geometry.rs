@@ -123,12 +123,7 @@ pub fn geodesic_densify_geometry_with_limits(
     limits: GeodesicGeometryDensifyLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Geometry, GeodesicDensifyError> {
-    let mut work = DensifyWork {
-        limits: limits.output,
-        cancelled,
-        points: 0,
-        bytes: 0,
-    };
+    let mut work = DensifyWork::new(limits.output, cancelled);
     work.checkpoint()?;
     if !matches!(
         geometry,
@@ -205,7 +200,7 @@ pub fn geodesic_densify_geometry_with_limits(
     work.checkpoint()?;
     let remaining = GeodesicGeometryDensifyLimits {
         output: GeodesicDensifyLimits {
-            max_reserved_bytes: limits.output.max_reserved_bytes - work.bytes,
+            max_reserved_bytes: limits.output.max_reserved_bytes - work.bytes(),
             ..limits.output
         },
         max_validation_work: limits.max_validation_work - validation_work,
