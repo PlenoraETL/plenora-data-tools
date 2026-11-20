@@ -1385,6 +1385,23 @@ mod gop028 {
                 PredicateError::DeadlineExceeded
             ),
             case!(
+                "extended_algorithms/split_limited/tolerances.rs",
+                split_line_with_tolerances_with_limits,
+                |f, d, t| crate::extended_algorithms::split_line_with_tolerances_with_limits(
+                    &f.line,
+                    &f.point,
+                    crate::extended_algorithms::SplitLineTolerances {
+                        snap_distance: 60.0,
+                        merge_distance: 1.0
+                    },
+                    limits(d),
+                    Some(t)
+                ),
+                crate::extended_algorithms::SplitLineError::Predicate(
+                    PredicateError::DeadlineExceeded
+                )
+            ),
+            case!(
                 "extended_algorithms/polygonize_limited.rs",
                 polygonize_with_limits,
                 |f, d, t| crate::extended_algorithms::polygonize_with_limits(
