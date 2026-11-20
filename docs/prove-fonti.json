@@ -1497,6 +1497,14 @@
       "all_bits_and_order",
       "degenerate_and_extreme_bits"
     ],
+    "crates/plenora-kernels-geo/src/extended_algorithms/delaunay_limited/tests.rs": [
+      "generic_validation_cannot_use_rational_relate_as_a_gate",
+      "bounded_order_and_bits",
+      "bounded_degenerate_and_extreme",
+      "bounded_scale_and_exact_limits",
+      "bounded_midpoint_and_empty_interruption",
+      "bounded_preserves_triangle_constructor_order"
+    ],
     "crates/plenora-kernels-geo/src/extended_algorithms/polygonize_limited/tests.rs": [
       "rectangular_grids_have_exact_faces",
       "nested_rings_holes_overlaps_and_dangles",
@@ -2221,7 +2229,8 @@
       "dedup_preserves_total_order",
       "zero_bits_through_collinear_transition",
       "voronoi_baseline_bits_and_errors",
-      "distinct_cells_scale_with_sites_not_input_copies"
+      "distinct_cells_scale_with_sites_not_input_copies",
+      "clipping_publication_requires_a_compatibility_adapter"
     ],
     "crates/plenora-kernels-geo/src/trim_extend/tests.rs": [
       "resource_prefixes_never_publish_a_partial_trim",

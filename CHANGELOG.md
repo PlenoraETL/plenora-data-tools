@@ -28,6 +28,14 @@ la cui versione non ha qui una voce datata.
   Il limite copre la materializzazione da celle gia' costruite, non la
   triangolazione, il clipping o la serializzazione.
 
+### Prove
+
+- Triangolazioni: controprove di compatibilita' per clipping Voronoi e
+  validazione Delaunay generica. I backend razionali con limiti non sono
+  sostituti diretti dei percorsi storici: differiscono pubblicazione e
+  accettazione degli anelli vuoti. Nessuna nuova API di costruzione con
+  limiti per queste fasi e' introdotta da queste prove.
+
 ### Ottimizzazioni
 
 - Triangolazioni: deduplicazione con riuso degli indici, facce Delaunay

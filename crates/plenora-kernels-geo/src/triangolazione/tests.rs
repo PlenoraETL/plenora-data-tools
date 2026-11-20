@@ -177,3 +177,29 @@ fn exact_voronoi_delaunay_duality_square_and_center() {
             .all(|p| (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) == 4.0)));
     }
 }
+
+/// Il clipping storico e quello razionale hanno contratti di pubblicazione
+/// diversi: una differenza nella sequenza dei bit vieta la sostituzione
+/// diretta. Questa prova non qualifica un adapter di compatibilita'.
+#[test]
+fn clipping_publication_requires_a_compatibility_adapter() {
+    use crate::polygon_boolean::{intersection_with_limits, PolygonBooleanLimits};
+    use geo::{BooleanOps, Polygon, Rect};
+
+    let cell = Polygon::new(
+        geo::LineString::from(vec![(0., 0.), (7., 2.), (1., 9.), (0., 0.)]),
+        vec![],
+    );
+    let clip = Rect::new((0., 0.), (4., 4.)).to_polygon();
+    let historic = Geometry::MultiPolygon(cell.intersection(&clip));
+    let rational = intersection_with_limits(
+        &Geometry::Polygon(cell),
+        &Geometry::Polygon(clip),
+        PolygonBooleanLimits::default(),
+        None,
+    )
+    .unwrap();
+    let historic_bits = bits(&historic.coords_iter().collect::<Vec<_>>());
+    let rational_bits = bits(&rational.coords_iter().collect::<Vec<_>>());
+    assert_ne!(historic_bits, rational_bits);
+}

@@ -22,6 +22,45 @@ fn compare(points: &[Coord<f64>]) {
     assert_eq!(bits(&new), bits(&old));
 }
 
+/// La validazione del motore razionale ha un contratto diverso da quella
+/// storica: non puo' sostituirla in un adapter Delaunay compatibile.
+#[test]
+fn generic_validation_cannot_use_rational_relate_as_a_gate() {
+    let geometries = [
+        Geometry::Polygon(Polygon::new(
+            LineString::from(vec![(0., 0.), (4., 0.), (4., 4.), (0., 4.), (0., 0.)]),
+            vec![LineString::new(Vec::new())],
+        )),
+        Geometry::Polygon(Polygon::new(
+            LineString::new(Vec::new()),
+            vec![LineString::from(vec![
+                (0., 0.),
+                (4., 0.),
+                (4., 4.),
+                (0., 4.),
+                (0., 0.),
+            ])],
+        )),
+    ];
+    let empty = Geometry::GeometryCollection(geo::GeometryCollection::default());
+    for geometry in geometries {
+        let old = crate::extended_algorithms::delaunay(&geometry, u64::MAX, u64::MAX).unwrap();
+        assert!(!old.is_empty());
+        let points: Vec<_> = geometry.coords_iter().collect();
+        let bounded =
+            delaunay_points_with_limits(&points, u64::MAX, RelateLimits::default(), None).unwrap();
+        assert_eq!(bits(&old), bits(&bounded));
+        assert!(matches!(
+            crate::predicates::arrangement_indexed::relate(
+                &geometry,
+                &empty,
+                &mut Work::new(RelateLimits::default(), None),
+            ),
+            Err(PredicateError::InvalidGeometry { .. })
+        ));
+    }
+}
+
 proptest! {
     #[test]
     fn bounded_order_and_bits(points in prop::collection::vec((-20i32..20, -20i32..20, any::<bool>()), 0..200)) {
