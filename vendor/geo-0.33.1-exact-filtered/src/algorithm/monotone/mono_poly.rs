@@ -1,4 +1,5 @@
-use geo_types::{Line, private_utils::get_bounding_rect};
+use geo_types::Line;
+use rstar::private_utils::get_bounding_rect;
 
 use crate::{
     BoundingRect, Coord, CoordinatePosition, GeoNum, Intersects, Kernel, LineString, Orientation,

@@ -208,7 +208,7 @@ fn collinear_intersection<F: GeoFloat>(p: Line<F>, q: Line<F>) -> Option<LineInt
 ///
 /// `returns` the nearest endpoint to the other segment
 fn nearest_endpoint<F: GeoFloat>(p: Line<F>, q: Line<F>) -> Coord<F> {
-    use geo_types::private_utils::point_line_euclidean_distance;
+    use rstar::private_utils::point_line_euclidean_distance;
 
     let mut nearest_pt = p.start;
     let mut min_dist = point_line_euclidean_distance(p.start, q);

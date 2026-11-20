@@ -111,7 +111,8 @@ wkt = { package = "plenora-wkt", path = "vendor/wkt-0.14.0-v2", version = "=0.14
 # Parallelismo dati nei kernel (raccolta posizionale: uscita identica al sequenziale).
 rayon = "=1.12.0"
 # R-tree degli indici spaziali di plenora-kernels-geo (join, cluster, vicini).
-rstar = "=0.12.2"
+# Fork con heapless corretto, stessa API e algoritmi R-tree; provenienza in vendor/.
+rstar = { package = "plenora-rstar", path = "vendor/rstar-0.12.2-heapless", version = "=0.12.2" }
 # Triangolazione di Delaunay di `geo.delaunay` e `geo.voronoi` con il
 # caricamento in blocco (`bulk_load`): `geo` 0.33.1 inserisce i punti uno
 # alla volta (100k punti in ~0,65 s, 1M in ~83 s). Non e' una dipendenza

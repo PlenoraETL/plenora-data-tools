@@ -118,3 +118,11 @@ punti prima di calcolarne l'area; i test dei componenti vuoti
 archive`) piu' `git apply -p1 patches/geo-i-overlay-9.patch` coincide con
 questa cartella (`diff -r`, a meno dei fine riga). SHA-256 della patch:
 `6a98fdcddb79013ba29d3a6b12d055a1c3dc8c76fa2dff62fcca0121a311b6a7`.
+
+## Heapless corretto
+
+Il fork usa `plenora-rstar` 0.12.2 con heapless =0.9.4; disattiva
+`rstar_0_12` di geo-types e importa gli stessi helper da rstar.
+Provenienza e motivazione: [fork R-tree](../rstar-0.12.2-heapless/PROVENANCE.md).
+
+Patch del collegamento: `patches/geo-rstar-heapless.patch` dalla radice.

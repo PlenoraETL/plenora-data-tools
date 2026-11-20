@@ -163,7 +163,13 @@
     ],
     "scripts/strict_json.py": [],
     "scripts/test_allineamento_dipendenze.py": [
+      "test_aggiunge_qualifiche_mancanti",
       "test_minimo_arrow_del_fork",
+      "test_qualifica_idempotente_e_senza_nuove_eccezioni",
+      "test_rifiuta_devizioni_attive_altri_repo_e_chiavi_assenti",
+      "test_rifiuta_heapless_non_qualificata",
+      "test_rimozione_conservativa",
+      "test_snapshot_corrotto_non_scrive",
       "test_versioni_comuni_nei_tre_lock"
     ],
     "scripts/test_arrow_ingressi.py": [
@@ -322,10 +328,16 @@
       "test_metodi_risolti_e_produzione_esente"
     ],
     "scripts/test_fuzz_crs.py": [
+      "test_contesti_tutti_workflow_e_mutazioni",
       "test_corpus_riproducibile_e_limiti",
       "test_elenchi_target_allineati",
       "test_interop_decimali_esatti_e_duplicati",
-      "test_interop_rifiuta_crs_assi_e_coordinate_mutati"
+      "test_interop_rifiuta_crs_assi_e_coordinate_mutati",
+      "test_multigeometria_errore_io_conserva_pin_e_bloccati",
+      "test_multigeometria_oracolo_indipendente",
+      "test_multigeometria_preparazione_fallita_scrive_report",
+      "test_release_corrente_tag_leggero_annotato_e_major_successiva",
+      "test_release_rifiuta_ambiguita_e_nessun_fallback"
     ],
     "scripts/test_genera_inventario.py": [
       "test_an_unclosed_bracket_is_an_error",

@@ -11,18 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_BUILD_JOBS: '2'
-      # Toolchain privata del job: non eredita componenti preinstallati.
-      RUSTUP_HOME: ${{ runner.temp }}/rustup-interop
     steps:
+      - name: toolchain privata del job
+        run: echo "RUSTUP_HOME=$RUNNER_TEMP/rustup-interop" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version-file: '.python-version'
-      # Il produttore storico della fixture resta fissato alla provenienza:
-      # questa prova attesta la compatibilita' di data corrente con IO 7.0.0.
-      - name: revisione del produttore della fixture
+      - name: release IO corrente risolta a tag e commit
         id: fonte
-        run: python scripts/interop_pin.py >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/interop_pin.py --report target/interop-pin.json >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: PlenoraETL/plenora-IO-tools
@@ -43,6 +43,7 @@ jobs:
           --io-tools target/io-source/target/debug/plenora-io
           --data-tools target/debug/plenora-data
           --lavoro target/interop-crs
+          --pin target/interop-pin.json
       - name: catena multigeometria
         if: ${{ !cancelled() && steps.crs.outcome != 'skipped' }}
         run: >-
@@ -50,11 +51,13 @@ jobs:
           --io target/io-source/target/debug/plenora-io
           --data target/debug/plenora-data
           --work target/interop-multigeometria
+          --pin target/interop-pin.json
       - name: rapporti anche in caso di errore
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: interop
           path: |
+            target/interop-pin.json
             target/interop-crs/rapporto.json
             target/interop-multigeometria/report.json

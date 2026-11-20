@@ -220,8 +220,16 @@ collegamenti dei runner. Soglie, pin storici e oracoli indipendenti non si
 rigenerano dall'output del prodotto.
 
 `interop.yml` esegue su richiesta (`workflow_dispatch`) le sonde CRS e multigeometria contro il
-produttore IO storico fissato nella provenienza della fixture: verifica
-la compatibilita' con quel produttore, non con tutte le release IO.
+produttore IO dell'ultima release stabile pubblicata (`releases/latest`).
+La risoluzione avviene una sola volta per corsa: tag e SHA del commit
+(tag annotati dereferenziati) sono salvati in `target/interop-pin.json`
+e nei rapporti; il checkout usa soltanto lo SHA. Non si usa un branch mobile.
+La catena multigeometria genera un ingresso Arrow indipendente e lo fa
+scrivere dalla IO corrente prima di passarlo a data. Le fixture storiche
+restano soltanto vettori del contratto attuale (primaria, metadati per
+colonna e rifiuto di CRS ridotti), non una promessa di retrocompatibilita'.
+Il controllo YAML/contesti e i self-test del risolutore girano nelle PR
+tramite `scripts/esegui_guardie.py`, senza scaricare o compilare IO.
 I rapporti restano artefatti anche in caso di fallimento; ogni catena CRS
 indipendente viene tentata, mentre un passo dipendente senza ingresso e'
 dichiarato bloccato.
@@ -302,8 +310,9 @@ python scripts/verifica_parita_superfici.py target/parita
 
 ### Catena delle dipendenze
 
-La politica comune approvata e il checker sono copiati senza modifiche in
-`.ci/plenora-dependencies/`. Il job Linux `dipendenze` di `ci.yml` verifica
+La politica comune approvata e il checker sono in
+`.ci/plenora-dependencies/`; il checker resta quello dello snapshot comune.
+Il job Linux `dipendenze` di `ci.yml` verifica
 il digest dello snapshot e tutti i lock, inclusi fuzz e Parquet vendorizzato:
 
 ```sh
@@ -316,6 +325,14 @@ un repository non censito con `input_schema_o_digest_non_valido`.
 
 Le eccezioni sono solo quelle dello snapshot: nuovi archi o versioni dei
 genitori richiedono revisione della politica comune, non una deroga locale.
+
+La migrazione qualificata a heapless 0.9.4 tramite il fork di famiglia
+`plenora-rstar` si riconcilia con `python .ci/aggiorna_dependency_policy.py`.
+Lo script verifica le identita approvate nei lock, elimina solo eccezioni
+orfane di questo repository e aggiorna manifesto, digest, snapshot e pin
+del workflow. Rifiuta nuove deviazioni; non viene eseguito automaticamente
+in CI. Il fork si ritira quando rstar pubblica una versione con heapless
+corretta.
 
 
 `deny.toml` è la policy di cargo-deny: advisory rifiutate senza eccezioni,

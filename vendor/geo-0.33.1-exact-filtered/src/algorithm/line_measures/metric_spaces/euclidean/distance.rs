@@ -37,7 +37,7 @@ impl<F: CoordFloat> Distance<F, Coord<F>, Coord<F>> for Euclidean {
 }
 impl<F: CoordFloat> Distance<F, Coord<F>, &Line<F>> for Euclidean {
     fn distance(&self, coord: Coord<F>, line: &Line<F>) -> F {
-        ::geo_types::private_utils::point_line_euclidean_distance(Point(coord), *line)
+        ::rstar::private_utils::point_line_euclidean_distance(Point(coord), *line)
     }
 }
 
@@ -87,13 +87,13 @@ impl<F: CoordFloat> Distance<F, &Point<F>, &Point<F>> for Euclidean {
 
 impl<F: CoordFloat> Distance<F, &Point<F>, &Line<F>> for Euclidean {
     fn distance(&self, origin: &Point<F>, destination: &Line<F>) -> F {
-        geo_types::private_utils::point_line_euclidean_distance(*origin, *destination)
+        rstar::private_utils::point_line_euclidean_distance(*origin, *destination)
     }
 }
 
 impl<F: CoordFloat> Distance<F, &Point<F>, &LineString<F>> for Euclidean {
     fn distance(&self, origin: &Point<F>, destination: &LineString<F>) -> F {
-        geo_types::private_utils::point_line_string_euclidean_distance(*origin, destination)
+        rstar::private_utils::point_line_string_euclidean_distance(*origin, destination)
     }
 }
 
@@ -115,7 +115,7 @@ impl<F: GeoFloat> Distance<F, &Point<F>, &Polygon<F>> for Euclidean {
                     .exterior()
                     .lines()
                     .map(|line| {
-                        ::geo_types::private_utils::line_segment_distance(
+                        ::rstar::private_utils::line_segment_distance(
                             point.0, line.start, line.end,
                         )
                     })
@@ -837,7 +837,8 @@ mod test {
     use super::*;
     use crate::orient::{Direction, Orient};
     use crate::{Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
-    use geo_types::{coord, polygon, private_utils::line_segment_distance};
+    use geo_types::{coord, polygon};
+    use rstar::private_utils::line_segment_distance;
 
     #[test]
     fn line_segment_distance_test() {

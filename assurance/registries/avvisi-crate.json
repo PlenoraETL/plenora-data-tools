@@ -48,7 +48,7 @@
       "hash32-0.3.1",
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
-      "heapless-0.8.0",
+      "heapless-0.9.4",
       "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
@@ -79,6 +79,7 @@
       "plenora-kernels-table-6.1.0",
       "plenora-parquet-60.0.0",
       "plenora-pipeline-6.1.0",
+      "plenora-rstar-0.12.2",
       "plenora-wkt-0.14.0",
       "rand-0.10.2",
       "rand_core-0.10.1",
@@ -89,7 +90,6 @@
       "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
-      "rstar-0.12.2",
       "rustix-1.1.6",
       "scroll-0.13.0",
       "serde-1.0.229",
@@ -164,7 +164,7 @@
       "hash32-0.3.1",
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
-      "heapless-0.8.0",
+      "heapless-0.9.4",
       "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
@@ -196,6 +196,7 @@
       "plenora-kernels-table-6.1.0",
       "plenora-parquet-60.0.0",
       "plenora-pipeline-6.1.0",
+      "plenora-rstar-0.12.2",
       "plenora-wkt-0.14.0",
       "pyo3-0.29.2",
       "pyo3-ffi-0.29.2",
@@ -208,7 +209,6 @@
       "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
-      "rstar-0.12.2",
       "rustix-1.1.6",
       "scroll-0.13.0",
       "serde-1.0.229",
@@ -282,7 +282,7 @@
       "hash32-0.3.1",
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
-      "heapless-0.8.0",
+      "heapless-0.9.4",
       "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
@@ -309,6 +309,7 @@
       "plenora-kernels-table-6.1.0",
       "plenora-parquet-60.0.0",
       "plenora-pipeline-6.1.0",
+      "plenora-rstar-0.12.2",
       "plenora-wkt-0.14.0",
       "rand-0.10.2",
       "rand_core-0.10.1",
@@ -319,7 +320,6 @@
       "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
-      "rstar-0.12.2",
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
@@ -395,7 +395,7 @@
       "hash32-0.3.1",
       "hashbrown-0.16.1",
       "hashbrown-0.17.1",
-      "heapless-0.8.0",
+      "heapless-0.9.4",
       "hybrid-array-0.4.15",
       "i_float-5.0.0",
       "i_key_sort-0.11.0",
@@ -424,6 +424,7 @@
       "plenora-kernels-table-6.1.0",
       "plenora-parquet-60.0.0",
       "plenora-pipeline-6.1.0",
+      "plenora-rstar-0.12.2",
       "plenora-wkt-0.14.0",
       "pyo3-0.29.2",
       "pyo3-ffi-0.29.2",
@@ -436,7 +437,6 @@
       "regex-automata-0.4.18",
       "regex-syntax-0.8.11",
       "robust-1.2.0",
-      "rstar-0.12.2",
       "scroll-0.13.0",
       "serde-1.0.229",
       "serde_core-1.0.229",
@@ -1447,9 +1447,9 @@
         }
       ]
     },
-    "heapless-0.8.0": {
+    "heapless-0.9.4": {
       "nome": "heapless",
-      "versione": "0.8.0",
+      "versione": "0.9.4",
       "licenza": "MIT OR Apache-2.0",
       "repository": "https://github.com/rust-embedded/heapless",
       "autori": [
@@ -2080,6 +2080,39 @@
         }
       ]
     },
+    "plenora-rstar-0.12.2": {
+      "nome": "plenora-rstar",
+      "versione": "0.12.2",
+      "licenza": "MIT OR Apache-2.0",
+      "repository": "https://github.com/georust/rstar",
+      "autori": [
+        "Stefan Altmayer <stoeoef@gmail.com>",
+        "The Georust Developers <mods@georust.org>"
+      ],
+      "nostro": false,
+      "avvisi": [
+        {
+          "file": "LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-APACHE-GEO-TYPES",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT",
+          "sha256": "9b3a76c27bac8f3e0ff2d1f64f65941c50310ae3ff69318cea230bd4a36822c5",
+          "origine": "pacchetto"
+        },
+        {
+          "file": "LICENSE-MIT-GEO-TYPES",
+          "sha256": "2f8267b247fd81e9555a2e196e119a5b341bcae21011cd93985c312f1312f727",
+          "origine": "pacchetto"
+        }
+      ]
+    },
     "plenora-wkt-0.14.0": {
       "nome": "plenora-wkt",
       "versione": "0.14.0",
@@ -2370,35 +2403,6 @@
           "file": "LICENSE-MIT",
           "sha256": "ddb606a4226673241b8dedb155a25b271178d028a2bf74c90ee47fe495f4d9bc",
           "origine": "pacchetto"
-        }
-      ]
-    },
-    "rstar-0.12.2": {
-      "nome": "rstar",
-      "versione": "0.12.2",
-      "licenza": "MIT OR Apache-2.0",
-      "repository": "https://github.com/georust/rstar",
-      "autori": [
-        "Stefan Altmayer <stoeoef@gmail.com>",
-        "The Georust Developers <mods@georust.org>"
-      ],
-      "nostro": false,
-      "avvisi": [
-        {
-          "file": "LICENSE-APACHE",
-          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-          "origine": "https://github.com/georust/rstar/blob/c8c5bf9e41468281d030869d409e3f67f1aaf5b7/LICENSE-APACHE",
-          "blob_git": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
-          "recupero": "plenora-IO-tools@9795e7984542c2664c07b9314fd7bceab6e42a83:assurance/licenze-crate/rstar-0.12.2/LICENSE-APACHE",
-          "git_blob": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
-        },
-        {
-          "file": "LICENSE-MIT",
-          "sha256": "9b3a76c27bac8f3e0ff2d1f64f65941c50310ae3ff69318cea230bd4a36822c5",
-          "origine": "https://github.com/georust/rstar/blob/c8c5bf9e41468281d030869d409e3f67f1aaf5b7/LICENSE-MIT",
-          "blob_git": "c2ddafbb7dbb8d8d667ef6acb0c38cda8f03fbd4",
-          "recupero": "plenora-IO-tools@9795e7984542c2664c07b9314fd7bceab6e42a83:assurance/licenze-crate/rstar-0.12.2/LICENSE-MIT",
-          "git_blob": "c2ddafbb7dbb8d8d667ef6acb0c38cda8f03fbd4"
         }
       ]
     },
