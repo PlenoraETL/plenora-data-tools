@@ -638,3 +638,26 @@ fn resource_prefixes_terminal_extensions_are_atomic() {
         }
     }
 }
+
+/// O-M4: stessa quantificazione e short-circuit di `Iterator::all` in 6.1.0.
+#[test]
+fn checkpoint620_degeneracy_matches_generic_all() {
+    for n in 0_usize..=8 {
+        for bits in 0..(1_usize << n) {
+            let line = LineString::from(
+                (0..n)
+                    .map(|i| (if bits & (1 << i) == 0 { 0. } else { 1. }, 0.))
+                    .collect::<Vec<_>>(),
+            );
+            let expected = line.0.windows(2).all(|pair| pair[0] == pair[1]);
+            let visits = line
+                .0
+                .windows(2)
+                .position(|pair| pair[0] != pair[1])
+                .map_or_else(|| n.saturating_sub(1), |i| i + 1);
+            let mut work = Work::new(RelateLimits::default(), None);
+            assert_eq!(degenerate_guide(&line, &mut work).unwrap(), expected);
+            assert_eq!(work.steps, u64::try_from(visits).unwrap());
+        }
+    }
+}

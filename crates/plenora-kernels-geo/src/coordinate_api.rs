@@ -558,6 +558,8 @@ fn batch<T, U>(
         .try_reserve_exact(input.len())
         .map_err(|_| CoordinateErrorKind::ResourceLimit)?;
     for (index, value) in input.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::unit();
         checkpoint(work)?;
         output.push(convert(value).map_err(|kind| CoordinateApiError {
             kind,

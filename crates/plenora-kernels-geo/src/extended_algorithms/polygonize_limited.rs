@@ -75,6 +75,9 @@ fn add_line(
     edges: &mut CountedVec<Edge>,
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
+    #[cfg(test)]
+    crate::noding::gop028::unit();
+    work.step()?;
     if line.0.len() == 1 {
         return Err(PredicateError::InvalidGeometry {
             side: "linework",

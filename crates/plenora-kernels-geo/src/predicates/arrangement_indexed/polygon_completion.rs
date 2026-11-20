@@ -134,6 +134,7 @@ fn validate_polygons(
     let index = occupied_index(&copies, work)?;
     for (i, geometry) in copies.iter().enumerate() {
         for j in index.candidates(index.at(i), work)? {
+            work.step()?;
             if j < i && super::relate(&copies[j], geometry, work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::OverlappingInteriors);
             }
@@ -260,9 +261,25 @@ fn select(
 ) -> Result<CountedVec<OutputFace>, PolygonCompletionError> {
     for atom in &graph.atoms {
         work.step()?;
-        if atom.sources.iter().any(|&id| roles_by_source[id].is_none())
-            && atom.sources.iter().any(|&id| roles_by_source[id].is_some())
-        {
+        let mut has_new = false;
+        for &id in &atom.sources {
+            work.step()?;
+            if roles_by_source[id].is_none() {
+                has_new = true;
+                break;
+            }
+        }
+        let mut has_old = false;
+        if has_new {
+            for &id in &atom.sources {
+                work.step()?;
+                if roles_by_source[id].is_some() {
+                    has_old = true;
+                    break;
+                }
+            }
+        }
+        if has_old {
             return Err(PolygonCompletionError::AmbiguousProvenance);
         }
     }

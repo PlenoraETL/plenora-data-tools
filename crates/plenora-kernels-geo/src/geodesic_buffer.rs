@@ -197,6 +197,8 @@ impl<'a> BufferWork<'a> {
 
     fn coordinate(&mut self, point: Coord) -> Result<(), DegenerateBufferError> {
         self.step()?;
+        #[cfg(test)]
+        crate::noding::gop028::unit();
         if !((-180.0..=180.0).contains(&point.x) && (-90.0..=90.0).contains(&point.y)) {
             return Err(DegenerateBufferError::InvalidGeometry);
         }
@@ -404,10 +406,12 @@ fn verify_surface(
         }
     }
     for polygon in polygons {
+        work.step()?;
         for (index, ring) in std::iter::once(polygon.exterior())
             .chain(polygon.interiors())
             .enumerate()
         {
+            work.step()?;
             if ring.0.is_empty() {
                 continue;
             }

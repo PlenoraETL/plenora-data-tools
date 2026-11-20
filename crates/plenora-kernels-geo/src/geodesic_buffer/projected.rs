@@ -246,6 +246,7 @@ fn context(
     let mut west = f64::INFINITY;
     let mut east = f64::NEG_INFINITY;
     for input in inputs {
+        work.step()?;
         for line in parts(input)? {
             work.step()?;
             if line.0.len() == 1 {
@@ -422,6 +423,7 @@ fn build_local<'a>(
         return zero_surface(inputs, crs, &local.ellipsoid, limits, vertices, work);
     }
     for input in inputs {
+        work.step()?;
         if matches!(input, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
             surface::validate(input, &local.ellipsoid, work)?;
             polygon_boolean::execute(
@@ -445,6 +447,7 @@ fn build_local<'a>(
         y: f64::NEG_INFINITY,
     };
     for input in inputs {
+        work.step()?;
         for line in parts(input)? {
             let (projected, error) =
                 projected_line(line, local, tolerance.min(0.5), limits, vertices, work)?;
@@ -537,6 +540,7 @@ fn build_local<'a>(
     certify_total(&mut certificate, radius, tolerance)?;
     let mut accumulated = CountedVec::new();
     for line in &lines[..] {
+        work.step()?;
         for &p in &line.0 {
             let disk = disk(p, radius, n, limits, vertices, work)?;
             unite(
@@ -548,6 +552,7 @@ fn build_local<'a>(
             )?;
         }
         for pair in line.0.windows(2) {
+            work.step()?;
             if pair[0] == pair[1] {
                 continue;
             }
@@ -565,6 +570,7 @@ fn build_local<'a>(
     let mut operands = CountedVec::new();
     let mut index = 0;
     for input in inputs {
+        work.step()?;
         if polygons(input).is_empty() {
             index += parts(input)?.count();
             continue;
@@ -881,9 +887,11 @@ fn zero_union(
     // Una booleana a zero puo' eliminare lati, non sostituire geodetiche
     // con sottoarchi lon/lat: ogni lato pubblicato deve avere provenienza.
     for ring in parts(&normalized)? {
+        work.step()?;
         for edge in ring.0.windows(2) {
             let mut found = false;
             for original in parts(geometry)? {
+                work.step()?;
                 for source in original.0.windows(2) {
                     work.step()?;
                     if (edge[0] == source[0] && edge[1] == source[1])
@@ -1035,6 +1043,7 @@ fn rectangle(
 fn lattice(polygon: Polygon, work: &mut Work<'_>) -> Result<Polygon, UnionBufferError> {
     let (mut shell, mut holes) = polygon.into_inner();
     for ring in std::iter::once(&mut shell).chain(&mut holes) {
+        work.step()?;
         for point in &mut ring.0 {
             work.step()?;
             if !point.x.is_finite()

@@ -199,6 +199,8 @@ fn ring_shared<E: From<DegenerateBufferError>>(
         checkpoint()?;
         // Azimut da nord in senso orario: il segno meno rende l'esterno antiorario.
         let azimuth = -360.0 * f64::from(k) / f64::from(n);
+        #[cfg(test)]
+        crate::noding::gop028::unit();
         let (lat, lon): (f64, f64) = ellipsoid.geodetica().direct(p.y, p.x, azimuth, radius);
         if !(lat.is_finite() && lon.is_finite() && lat.abs() < 81.0 && lon.abs() < 180.0) {
             return Err(DegenerateBufferError::AccuracyUnproven.into());

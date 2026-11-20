@@ -30,7 +30,7 @@ fn count_line(
     }
     for pair in line.0.windows(2) {
         work.checkpoint()?;
-        let divisions = u64::from(edge(pair[0], pair[1], ellipsoid, maximum)?.divisions);
+        let divisions = u64::from(edge(pair[0], pair[1], ellipsoid, maximum, work)?.divisions);
         work.charge(divisions, divisions * size_of::<Coord>() as u64)?;
     }
     Ok(())

@@ -163,6 +163,7 @@ fn execute<'a>(
         let mut west = f64::INFINITY;
         let mut east = f64::NEG_INFINITY;
         for input in inputs {
+            work.step()?;
             for p in points(input)? {
                 work.step()?;
                 domain(p, radius)?;
@@ -194,6 +195,7 @@ fn execute<'a>(
         let mut accumulated = CountedVec::new();
         let mut error = 0.0;
         for input in inputs {
+            work.step()?;
             for p in points(input)? {
                 work.step()?;
                 let bytes = (u64::from(n) + 1)
@@ -239,6 +241,7 @@ fn execute<'a>(
             )?;
             if let Some(surface) = output.last() {
                 for input in inputs {
+                    work.step()?;
                     super::super::verify_coverage(&surface.geometry, input, work)?;
                 }
             }

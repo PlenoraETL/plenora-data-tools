@@ -118,6 +118,8 @@ impl<'a> Work<'a> {
         b: Coord,
     ) -> Result<(f64, f64, f64, f64), GeodesicDistanceError> {
         self.step()?;
+        #[cfg(test)]
+        crate::noding::gop028::unit();
         let result: (f64, f64, f64, f64) = self.ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);
         if !(result.0.is_finite()
             && result.1.is_finite()
@@ -141,6 +143,8 @@ impl<'a> Work<'a> {
             return Ok(arc.end);
         }
         self.step()?;
+        #[cfg(test)]
+        crate::noding::gop028::unit();
         let (lat, lon): (f64, f64) =
             self.ellipsoid
                 .geodetica()

@@ -477,3 +477,47 @@ fn resource_prefixes_are_atomic_and_monotone() {
         assert!(succeeded);
     }
 }
+
+/// O-M4: stesso short-circuit dei due any del percorso 6.1.0, su tutte
+/// le sequenze binarie fino a otto provenienze, incluso l'insieme vuoto.
+#[test]
+fn checkpoint620_provenance_matches_generic_any() {
+    for n in 0..=8 {
+        for bits in 0..(1_usize << n) {
+            let roles: Vec<_> = (0..n)
+                .map(|i| (bits & (1 << i) != 0).then_some(0))
+                .collect();
+            let expected = roles.iter().any(Option::is_none) && roles.iter().any(Option::is_some);
+            let mut work = Work::new(RelateLimits::default(), None);
+            let mut sources = CountedVec::new();
+            for id in 0..n {
+                work.push(&mut sources, id).unwrap();
+            }
+            let mut atoms = CountedVec::new();
+            work.push(
+                &mut atoms,
+                crate::noding::faces::FaceAtom {
+                    from: 0,
+                    to: 0,
+                    sources,
+                },
+            )
+            .unwrap();
+            let graph = FaceGraph {
+                points: CountedVec::new(),
+                atoms,
+                rings: CountedVec::new(),
+                holes: CountedVec::new(),
+            };
+            let selected = select(&graph, &roles, &Shape::default(), &mut work);
+            if expected {
+                assert!(matches!(
+                    selected,
+                    Err(PolygonCompletionError::AmbiguousProvenance)
+                ));
+            } else {
+                assert_eq!(selected.unwrap().len(), 0);
+            }
+        }
+    }
+}

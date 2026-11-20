@@ -264,6 +264,20 @@ pub(crate) fn append(
     Ok(())
 }
 
+fn degenerate_guide(line: &LineString<f64>, work: &mut Work<'_>) -> Result<bool, TrimExtendError> {
+    let mut degenerate = true;
+    for pair in line.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::unit();
+        work.step()?;
+        if pair[0] != pair[1] {
+            degenerate = false;
+            break;
+        }
+    }
+    Ok(degenerate)
+}
+
 fn execute(
     target: &Geometry<f64>,
     guide: &Geometry<f64>,
@@ -273,7 +287,7 @@ fn execute(
     work.step()?;
     let points = read(target, work)?;
     if let Geometry::LineString(line) = guide {
-        if line.0.windows(2).all(|pair| pair[0] == pair[1]) {
+        if degenerate_guide(line, work)? {
             return Err(TrimExtendError::InvalidGeometry);
         }
     }

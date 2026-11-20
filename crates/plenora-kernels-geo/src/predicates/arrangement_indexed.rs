@@ -208,6 +208,7 @@ impl Shape {
                 let parents = &mut connected[polygon_index];
                 let mut first_root = None;
                 for (ring_index, status) in statuses.iter().enumerate() {
+                    work.step()?;
                     if *status != 1 {
                         continue;
                     }
@@ -588,6 +589,7 @@ fn validate_structure(
     let mut pending = CountedVec::new();
     work.push(&mut pending, geometry)?;
     while let Some(geometry) = pending.pop() {
+        work.step()?;
         if let Geometry::GeometryCollection(gs) = geometry {
             for g in gs.0.iter().rev() {
                 work.push(&mut pending, g)?;

@@ -289,6 +289,8 @@ impl ShapeContext {
         work: &mut MeasureWork<'_>,
     ) -> Result<Coord<f64>, ShapeMeasureError> {
         work.charge()?;
+        #[cfg(test)]
+        crate::noding::gop028::unit();
         let (x, y) = self
             .projection
             .geografiche_sorgente(point.x, point.y)

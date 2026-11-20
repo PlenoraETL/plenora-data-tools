@@ -763,12 +763,15 @@ fn verify_surface_edges(
     let mut expected = CountedVec::new();
     let mut actual = CountedVec::new();
     for edge in edges {
+        work.step()?;
         if edge.surface {
             work.push(&mut expected, key(edge.coords))?;
         }
     }
     for polygon in polygons {
+        work.step()?;
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            work.step()?;
             for pair in ring.0.windows(2) {
                 work.push(&mut actual, key([pair[0], pair[1]]))?;
             }
@@ -961,7 +964,11 @@ pub(crate) fn verify_publication(
         let mut surface = super::Shape::default();
         surface.geometry(polygons, work)?;
         surface.build_indices(work)?;
-        for edge in edges.iter().filter(|edge| !edge.surface && edge.component) {
+        for edge in edges {
+            work.step()?;
+            if edge.surface || !edge.component {
+                continue;
+            }
             work.nodes(1)?;
             let middle = P {
                 x: edge.rounded.a.x.try_midpoint(&edge.rounded.b.x)?,
@@ -990,6 +997,7 @@ pub(crate) fn verify_publication(
             let index = BoxIndex::new(bounds, work)?;
             for (i, a) in gs.0.iter().enumerate() {
                 for j in index.candidates(index.at(i), work)? {
+                    work.step()?;
                     if j >= i {
                         continue;
                     }

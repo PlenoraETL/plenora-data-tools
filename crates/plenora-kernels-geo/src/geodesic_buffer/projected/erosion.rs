@@ -75,6 +75,7 @@ fn signed_distance(
     let mut inside = false;
     let mut uncertain = false;
     for ring in parts(geometry)? {
+        work.step()?;
         for edge in ring.0.windows(2) {
             work.step()?;
             let a = edge[0];
@@ -230,6 +231,7 @@ pub(super) fn certify(
     };
     for geometry in [operand, result] {
         for ring in parts(geometry)? {
+            work.step()?;
             for p in &ring.0 {
                 work.step()?;
                 root.low.x = root.low.x.min(p.x);

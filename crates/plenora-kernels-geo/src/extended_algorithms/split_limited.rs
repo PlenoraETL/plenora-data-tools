@@ -73,6 +73,9 @@ fn line_edges(
     edges: &mut CountedVec<Edge>,
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
+    #[cfg(test)]
+    crate::noding::gop028::unit();
+    work.step()?;
     let mut distinct = false;
     for p in &line.0 {
         work.step()?;

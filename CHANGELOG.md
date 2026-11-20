@@ -10,6 +10,22 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Correzioni
+
+- Checkpoint GOP-028 nelle scansioni di parti vuote di polygonize/split con
+  limiti, negli input vuoti dei buffer geodetici e nei rami scartati delle
+  scansioni topologiche e geodetiche. Riutilizzato il controllo condiviso;
+  scadenza prima dell'annullamento. Prove deterministiche delle parti vuote,
+  delle fasi del noder e della cancellazione sulle API censite. Controllate
+  anche le guide degeneri di trim/extend, le scansioni di provenienza,
+  gli ordinamenti vuoti e il raffinamento della densificazione geodetica.
+  Contatori delle primitive con maggioranti nel registro tabellare e prova
+  del codec testuale a meta batch, con golden identico senza interruzione.
+- Chiarito che il comportamento di cancellazione del catalogo proviene dal
+  progetto d'origine: il runner locale controlla solo i confini dei passi.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

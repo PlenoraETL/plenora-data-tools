@@ -527,6 +527,7 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
     let index = crate::predicates::interval_index::BoxIndex::new(bounds, work)?;
     for i in 0..points.len() - 1 {
         for j in index.candidates(index.at(i), work)? {
+            work.step()?;
             if j <= i {
                 continue;
             }

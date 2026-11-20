@@ -240,10 +240,12 @@ pub(crate) fn validate(
     }
     // Le componenti di MultiPolygon non possono avere interni sovrapposti.
     for (i, ring) in index.rings.iter().enumerate() {
+        work.step()?;
         if ring.shell != i {
             continue;
         }
         for (j, other) in index.rings.iter().enumerate().skip(i + 1) {
+            work.step()?;
             if other.shell != j {
                 continue;
             }
@@ -485,6 +487,7 @@ pub(crate) fn contains_any(
     work: &mut Work<'_>,
 ) -> Result<bool, GeodesicDistanceError> {
     for (i, ring) in surface.rings.iter().enumerate() {
+        work.step()?;
         if ring.shell != i {
             continue;
         }
