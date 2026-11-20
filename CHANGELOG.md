@@ -10,6 +10,21 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Aggiunte
+
+- API Rust `voronoi_cells_distinct`: celle condivise con indice per input,
+  visita senza copie e adapter per materializzare l'uscita 1:1.
+
+### Ottimizzazioni
+
+- Triangolazioni: deduplicazione con riuso degli indici, facce Delaunay
+  rappresentate da terne di ranghi, rilascio anticipato del grafo e rimozione
+  di copie delle celle Voronoi. Ordine e bit preservati contro la baseline
+  6.1.0, inclusi duplicati e siti cocircolari. Queste API non aggiungono
+  un limite globale di memoria o interruzioni cooperative.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

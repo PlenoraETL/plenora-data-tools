@@ -97,7 +97,9 @@ fn chiave(coordinata: Coord<f64>) -> (u64, u64) {
 /// `spade` la decide con il predicato esatto rispetto a un lato della retta.
 pub fn siti_distinti(coordinate: &[Coord<f64>]) -> Vec<Coord<f64>> {
     let mut ordine: Vec<usize> = (0..coordinate.len()).collect();
-    ordine.sort_by_key(|&indice| coordinate.get(indice).copied().map(chiave));
+    // Il secondo elemento rende totale l'ordine e riproduce la stabilita'
+    // del vecchio sort senza il suo buffer temporaneo.
+    ordine.sort_unstable_by_key(|&indice| (coordinate.get(indice).copied().map(chiave), indice));
     // gruppo[i]: il primo indice d'ingresso con la stessa posizione di i.
     let mut gruppo: Vec<usize> = vec![0; coordinate.len()];
     let mut precedente: Option<((u64, u64), usize)> = None;
@@ -116,11 +118,13 @@ pub fn siti_distinti(coordinate: &[Coord<f64>]) -> Vec<Coord<f64>> {
         }
     }
 
+    drop(ordine);
+
     // Rango del gruppo e bit del suo vertice, in ordine d'ingresso.
-    let mut rango_del_primo: Vec<usize> = vec![usize::MAX; coordinate.len()];
     let mut siti: Vec<Coord<f64>> = Vec::new();
     let mut collineari = true;
-    for (indice, (&coordinata, &primo)) in coordinate.iter().zip(&gruppo).enumerate() {
+    for (indice, &coordinata) in coordinate.iter().enumerate() {
+        let primo = gruppo[indice];
         if primo == indice {
             if collineari && siti.len() >= 2 {
                 if let (Some(&a), Some(&b)) = (siti.first(), siti.get(1)) {
@@ -128,15 +132,12 @@ pub fn siti_distinti(coordinate: &[Coord<f64>]) -> Vec<Coord<f64>> {
                         <f64 as GeoNum>::Ker::orient2d(a, b, coordinata) == Orientation::Collinear;
                 }
             }
-            if let Some(posto) = rango_del_primo.get_mut(indice) {
+            if let Some(posto) = gruppo.get_mut(indice) {
                 *posto = siti.len();
             }
             siti.push(coordinata);
         } else if siti.len() == 1 || !collineari {
-            if let Some(sito) = rango_del_primo
-                .get(primo)
-                .and_then(|&rango| siti.get_mut(rango))
-            {
+            if let Some(sito) = gruppo.get(primo).and_then(|&rango| siti.get_mut(rango)) {
                 *sito = coordinata;
             }
         }
@@ -182,3 +183,17 @@ pub fn triangola(coordinate: &[Coord<f64>]) -> Result<Triangolazione, ErroreTria
         siti,
     })
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[deny(clippy::disallowed_methods)]
+#[path = "triangolazione/test_baseline_610.rs"]
+pub mod baseline_610;
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod tests;
+#[cfg(test)]
+#[allow(dead_code)]
+#[deny(clippy::disallowed_methods)]
+#[path = "triangolazione/test_voronoi_610.rs"]
+mod voronoi_610;

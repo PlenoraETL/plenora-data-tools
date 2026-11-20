@@ -421,10 +421,10 @@ pub fn delaunay(
         });
     }
     let punti: Vec<Coord<f64>> = geometry.coords_iter().collect();
-    let triangoli = protetto(|| {
-        crate::triangolazione::triangola(&punti).map(|costruita| triangoli_canonici(&costruita))
-    })?
-    .map_err(errore_di_triangolazione)?;
+    let (siti, triangoli) =
+        protetto(|| crate::triangolazione::triangola(&punti).map(triangoli_canonici))?
+            .map_err(errore_di_triangolazione)?;
+    drop(punti);
     let actual =
         u64::try_from(triangoli.len()).map_err(|_| ExtendedAlgorithmError::IndexOverflow)?;
     if actual > max_triangles {
@@ -435,8 +435,8 @@ pub fn delaunay(
     }
     triangoli
         .into_iter()
-        .map(|triangle| {
-            let polygon = triangle.to_polygon();
+        .map(|[a, b, c]| {
+            let polygon = Triangle::new(siti[a], siti[b], siti[c]).to_polygon();
             validate_output(Geometry::Polygon(polygon.clone()))?;
             Ok(polygon)
         })
@@ -447,27 +447,27 @@ pub fn delaunay(
 /// ogni faccia antioraria (come `spade` la da') ruotata a partire dal
 /// vertice di rango minimo, le facce ordinate per i ranghi dei tre vertici.
 /// Due facce distinte non hanno la stessa terna, quindi l'ordine e' totale.
-fn triangoli_canonici(costruita: &crate::triangolazione::Triangolazione) -> Vec<Triangle<f64>> {
-    let mut facce: Vec<[crate::triangolazione::Sito; 3]> = costruita
+fn triangoli_canonici(
+    costruita: crate::triangolazione::Triangolazione,
+) -> (Vec<Coord<f64>>, Vec<[usize; 3]>) {
+    let mut facce: Vec<[usize; 3]> = costruita
         .triangolazione
         .inner_faces()
-        .map(|faccia| faccia.vertices().map(|vertice| *vertice.data()))
+        .map(|faccia| faccia.vertices().map(|vertice| vertice.data().rango))
         .collect();
     for faccia in &mut facce {
         let [a, b, c] = *faccia;
-        *faccia = if b.rango < a.rango && b.rango < c.rango {
+        *faccia = if b < a && b < c {
             [b, c, a]
-        } else if c.rango < a.rango && c.rango < b.rango {
+        } else if c < a && c < b {
             [c, a, b]
         } else {
             [a, b, c]
         };
     }
-    facce.sort_unstable_by_key(|faccia| faccia.map(|sito| sito.rango));
-    facce
-        .into_iter()
-        .map(|[a, b, c]| Triangle::new(a.coordinata, b.coordinata, c.coordinata))
-        .collect()
+    facce.sort_unstable();
+    // Il grafo muore qui: le facce compatte e i siti bastano per l'output.
+    (costruita.siti, facce)
 }
 
 /// Lo stesso messaggio che `geo` 0.33.1 dava da
@@ -2691,3 +2691,12 @@ pub use split_limited::split_line_with_limits;
 
 mod polygonize_limited;
 pub use polygonize_limited::polygonize_with_limits;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+#[path = "extended_algorithms/test_delaunay_610.rs"]
+mod delaunay_610;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod compatibility_620;

@@ -9522,6 +9522,38 @@
       "classification": "non riceve dati esterni",
       "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
       "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-kernels-geo/src/advanced.rs::cells": {
+      "classification": "non riceve dati esterni",
+      "reason": "Celle Voronoi e indici Rust, senza buffer Arrow o ingestione di dati Arrow.",
+      "signature": "pub fn cells(&self) -> &[Polygon<f64>]",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/advanced.rs::input_indices": {
+      "classification": "non riceve dati esterni",
+      "reason": "Celle Voronoi e indici Rust, senza buffer Arrow o ingestione di dati Arrow.",
+      "signature": "pub fn input_indices(&self) -> &[usize]",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/advanced.rs::materialize": {
+      "classification": "non riceve dati esterni",
+      "reason": "Celle Voronoi e indici Rust, senza buffer Arrow o ingestione di dati Arrow.",
+      "signature": "pub fn materialize(&self) -> Vec<Geometry<f64>>",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/advanced.rs::per_input": {
+      "classification": "non riceve dati esterni",
+      "reason": "Celle Voronoi e indici Rust, senza buffer Arrow o ingestione di dati Arrow.",
+      "signature": "pub fn per_input(&self) -> impl ExactSizeIterator<Item = &Polygon<f64>>",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/advanced.rs::voronoi_cells_distinct": {
+      "classification": "non riceve dati esterni",
+      "reason": "Celle Voronoi e indici Rust, senza buffer Arrow o ingestione di dati Arrow.",
+      "signature": "pub fn voronoi_cells_distinct( geometries: &[Geometry<f64>], max_points: usize, precision: Precision, ) -> Result<VoronoiCells, AdvancedError>",
+      "arrow_arguments": [
+        "Precision"
+      ]
     }
   },
   "rust_variants": {
@@ -9572,10 +9604,6 @@
     "crates/plenora-io/src/parquet_io.rs::use parquet::schema::types::Type as TipoParquet;": {
       "classification": "non riceve dati Arrow esterni",
       "reason": "Alias dei tipi di metadati Parquet usati solo in helper privati; le API pubbliche restano censite con RecordBatch esplicito."
-    },
-    "crates/plenora-kernels-geo/src/advanced.rs::type Associazione = fn(&[Polygon<f64>], &[Point<f64>]) -> Result<Vec<Geometry<f64>>, AdvancedError>;": {
-      "classification": "non riceve dati Arrow esterni",
-      "reason": "Alias del Result locale/std; omonimo nominale di un item upstream, senza tipo Arrow nel lato destro."
     },
     "crates/plenora-kernels-geo/src/advanced.rs::type Costruzione = fn(&[Point<f64>], Precision) -> Result<Vec<Polygon<f64>>, AdvancedError>;": {
       "classification": "non riceve dati Arrow esterni",

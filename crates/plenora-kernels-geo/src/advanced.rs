@@ -161,26 +161,86 @@ pub fn voronoi_cells(
         max_points,
         precision,
         costruisci_celle,
-        associa_celle,
+        |cells, points| associa_celle(&cells, points),
     )
 }
 
-/// Firma dell'associazione punto -> cella: separata perche' l'oracolo dei
-/// test possa far girare la stessa pipeline con la `find` lineare.
-type Associazione = fn(&[Polygon<f64>], &[Point<f64>]) -> Result<Vec<Geometry<f64>>, AdvancedError>;
+/// Celle condivise in ordine di costruzione e associazione in ordine d'ingresso.
+/// I campi privati impediscono indici estranei alla tabella delle celle.
+#[derive(Debug)]
+pub struct VoronoiCells {
+    cells: Vec<Polygon<f64>>,
+    input_indices: Vec<usize>,
+}
+
+impl VoronoiCells {
+    /// Celle distinte: nessuna copia per i siti duplicati.
+    #[must_use]
+    pub fn cells(&self) -> &[Polygon<f64>] {
+        &self.cells
+    }
+
+    /// Per ogni punto, indice della prima cella che lo interseca.
+    #[must_use]
+    pub fn input_indices(&self) -> &[usize] {
+        &self.input_indices
+    }
+
+    /// Visita in ordine d'ingresso, senza materializzare copie delle celle.
+    #[must_use]
+    pub fn per_input(&self) -> impl ExactSizeIterator<Item = &Polygon<f64>> {
+        self.input_indices.iter().map(|&index| &self.cells[index])
+    }
+
+    /// Adapter 1:1: materializza la stessa uscita di [`voronoi_cells`].
+    #[must_use]
+    pub fn materialize(&self) -> Vec<Geometry<f64>> {
+        self.per_input()
+            .map(|cell| Geometry::Polygon(cell.clone()))
+            .collect()
+    }
+}
+
+/// Costruisce una sola copia di ogni cella con l'indice per ciascun input.
+///
+/// Ordine, precisione e associazione sono quelli di [`voronoi_cells`].
+/// Non impone un nuovo tetto di memoria; l'adapter 1:1 resta proporzionale
+/// alla somma delle dimensioni delle celle ripetute.
+///
+/// # Errors
+/// Gli stessi errori di [`voronoi_cells`], nello stesso ordine.
+pub fn voronoi_cells_distinct(
+    geometries: &[Geometry<f64>],
+    max_points: usize,
+    precision: Precision,
+) -> Result<VoronoiCells, AdvancedError> {
+    voronoi_cells_con(
+        geometries,
+        max_points,
+        precision,
+        costruisci_celle,
+        |cells, points| {
+            let input_indices = associa_indici(&cells, points)?;
+            Ok(VoronoiCells {
+                cells,
+                input_indices,
+            })
+        },
+    )
+}
 
 /// Firma della costruzione delle celle: separata perche' l'oracolo dei test
 /// possa far girare la stessa pipeline con `voronoi_cells` di `geo`
 /// (inserimento incrementale).
 type Costruzione = fn(&[Point<f64>], Precision) -> Result<Vec<Polygon<f64>>, AdvancedError>;
 
-fn voronoi_cells_con(
+fn voronoi_cells_con<T>(
     geometries: &[Geometry<f64>],
     max_points: usize,
     precision: Precision,
     costruisci: Costruzione,
-    associa: Associazione,
-) -> Result<Vec<Geometry<f64>>, AdvancedError> {
+    associa: impl FnOnce(Vec<Polygon<f64>>, &[Point<f64>]) -> Result<T, AdvancedError>,
+) -> Result<T, AdvancedError> {
     if max_points < 2 {
         return Err(AdvancedError::InvalidPointLimit);
     }
@@ -215,7 +275,7 @@ fn voronoi_cells_con(
     for cell in &cells {
         cell.validazione_protetta().map_err(classifica_cella)?;
     }
-    associa(&cells, &points)
+    associa(cells, &points)
 }
 
 /// Le celle di `voronoi_cells` di `geo` 0.33.1 (parametri predefiniti:
@@ -330,11 +390,6 @@ fn celle_da_spade(
     let mut per_rango: Vec<Option<Polygon<f64>>> = vec![None; num_vertices];
 
     for face in triangolazione.voronoi_faces() {
-        let edges: Vec<_> = face.adjacent_edges().collect();
-        if edges.is_empty() {
-            continue;
-        }
-
         let sito = *face.as_delaunay_vertex().data();
         let site_coord = sito.coordinata;
 
@@ -342,7 +397,7 @@ fn celle_da_spade(
         let mut circumcenters: Vec<Coord<f64>> = Vec::new();
         let mut rays: Vec<(Coord<f64>, Coord<f64>)> = Vec::new(); // (origine, direzione)
 
-        for edge in &edges {
+        for edge in face.adjacent_edges() {
             let from_vertex = edge.from();
             let to_vertex = edge.to();
 
@@ -374,7 +429,7 @@ fn celle_da_spade(
         }
 
         // I vertici della cella.
-        let mut vertices: Vec<Coord<f64>> = circumcenters.clone();
+        let mut vertices: Vec<Coord<f64>> = circumcenters;
 
         if rays.is_empty() {
             // Cella interna: solo circocentri.
@@ -418,6 +473,9 @@ fn celle_da_spade(
             *posto = Some(poly);
         }
     }
+
+    drop(circocentri);
+    drop(costruita);
 
     let raw_cells: Vec<Polygon<f64>> = per_rango.into_iter().flatten().collect();
 
@@ -555,6 +613,18 @@ fn associa_celle(
     cells: &[Polygon<f64>],
     points: &[Point<f64>],
 ) -> Result<Vec<Geometry<f64>>, AdvancedError> {
+    associa_indici(cells, points).map(|indices| {
+        indices
+            .into_iter()
+            .map(|i| Geometry::Polygon(cells[i].clone()))
+            .collect()
+    })
+}
+
+fn associa_indici(
+    cells: &[Polygon<f64>],
+    points: &[Point<f64>],
+) -> Result<Vec<usize>, AdvancedError> {
     // Pre-filtro per bounding rect: il rect (min/max esatti, bordo incluso)
     // copre ogni punto della cella, quindi scartare le celle il cui rect non
     // interseca il punto non cambia l'esito di `Intersects` ed evita il
@@ -617,7 +687,7 @@ fn associa_celle(
                     continue;
                 };
                 if protetto(|| cella_accetta(cell, bounds.as_ref(), point))? {
-                    return Ok(Geometry::Polygon(cell.clone()));
+                    return Ok(candidato);
                 }
             }
             Err(AdvancedError::UnmatchedPoint(index))
@@ -849,7 +919,7 @@ mod tests {
             usize::MAX,
             prova(),
             costruisci_celle,
-            associa_lineare,
+            |cells, points| associa_lineare(&cells, points),
         );
         assert_eq!(
             impronta(&veloce),
@@ -1332,7 +1402,7 @@ mod tests {
             usize::MAX,
             precisione,
             costruisci_con_geo,
-            associa_celle,
+            |cells, points| associa_celle(&cells, points),
         );
         let mut scarti = Scarti::default();
         match (nuova, vecchia) {

@@ -1086,6 +1086,20 @@ punti casuali UTM al centimetro; prima -> dopo): `delaunay` 10k 27,5 ->
 28 ms, 100k 1.221 -> 253 ms, 1M 86,5 -> 3,9 s (a 1M il prima è una sola
 esecuzione; `examples/bench_delaunay_voronoi.rs`).
 
+La preparazione 6.2.0 conserva esattamente ordine e bit della baseline
+6.1.0, anche sui cocircolari: terne di ranghi per le facce Delaunay,
+riuso degli indici della deduplicazione e rilascio anticipato degli
+intermedi. `advanced::voronoi_cells_distinct` restituisce le celle una
+sola volta e un indice per input; `per_input` le visita senza clonarle,
+`materialize` ricostruisce l'uscita 1:1. L'adapter e la serializzazione
+materializzata restano proporzionali alle celle ripetute.
+
+Questi percorsi non offrono ancora un budget globale di memoria o
+checkpoint cooperativi: il caricamento Spade, il ritaglio e la validazione
+hanno temporanei interni non governati. Le prove dell'heap misurano il
+picco richiesto all'allocatore, non un tetto di ammissione n? RSS. Non ?
+una qualifica GOP-028. Le API esistenti conservano i propri limiti e rifiuti.
+
 **Ambito.** `plenora-kernels-geo`, `geo.delaunay` e `geo.voronoi`.
 
 **Hazard.**
