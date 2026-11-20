@@ -2499,5 +2499,28 @@
   ],
   "crates/plenora-kernels-geo/src/preserve_shape_measure.rs": [
     "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_buffer.rs": [
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"metre\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"ABSOLUTE_M\"],[\"token\",\":\"]]",
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"shortest_geodesic\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"UNIT\"],[\"token\",\":\"]]",
+    "[[\"token\",\",\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"error\"],[\"token\",\"(\"],[\"string\",\"GEOMETRY_ACCURACY_UNPROVEN\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"AccuracyUnproven\"],[\"token\",\",\"],[\"token\",\"#\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs": [
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"metre\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"TRANSFORMATION_M\"],[\"token\",\":\"]]",
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"shortest_geodesic\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"UNIT\"],[\"token\",\":\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_buffer/point/tests.rs": [
+    "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_buffer/point/union/tests.rs": [
+    "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_buffer/projected/tests.rs": [
+    "[[\"token\",\"let\"],[\"token\",\"crs\"],[\"token\",\"=\"],[\"token\",\"resolve_crs\"],[\"token\",\"(\"],[\"string\",\"EPSG:4326\"],[\"token\",\",\"],[\"string\",\"crs\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"unwrap\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/geodesic_buffer/projected.rs": [
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"shortest_geodesic\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"UNIT\"],[\"token\",\":\"]]",
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"metre\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"OUTPUT_MODEL\"],[\"token\",\":\"]]",
+    "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"linear_lonlat\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"]]"
   ]
 }

@@ -45,9 +45,12 @@ pub struct Work<'a> {
     pub pairs: u64,
     budget: Rc<storage::Budget>,
     pub nodes: u64,
+    pub polygon_counts: [u64; 3],
     exports: CountedVec<storage::Lease>,
     #[cfg(test)]
     pub interrupt_at: Option<(u64, bool)>,
+    #[cfg(test)]
+    pub polygon_active: bool,
 }
 impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
@@ -60,11 +63,22 @@ impl<'a> Work<'a> {
             pairs: 0,
             budget: Rc::new(budget),
             nodes: 0,
+            polygon_counts: [0; 3],
             exports: CountedVec::new(),
             #[cfg(test)]
             interrupt_at: None,
+            #[cfg(test)]
+            polygon_active: false,
         }
     }
+    /// Prenota un buffer esportato prima della sua allocazione.
+    /// La ricevuta resta viva fino al termine dell'intera operazione.
+    pub fn reserve_export(&mut self, bytes: u64) -> Result<(), PredicateError> {
+        self.step()?;
+        let lease = storage::Lease::created(&self.budget, bytes)?;
+        self.exports.push(lease, &self.budget)
+    }
+
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
         Q::int_in(value, &self.budget)
     }
@@ -111,8 +125,6 @@ impl<'a> Work<'a> {
             .ok_or(PredicateError::WorkLimit)?;
         Ok(())
     }
-    #[cfg(test)]
-    #[deny(clippy::disallowed_methods)]
     pub fn peak_bytes(&self) -> u64 {
         self.budget.peak()
     }
@@ -1055,12 +1067,96 @@ mod gop028 {
             }
         };
     }
+    fn buffer_limits(deadline: Option<Instant>) -> crate::geodesic_buffer::DegenerateBufferLimits {
+        crate::geodesic_buffer::DegenerateBufferLimits {
+            max_work: 100_000_000,
+            max_output_items: 10,
+            max_reserved_bytes: 100_000_000,
+            deadline,
+        }
+    }
+    fn buffer_union_limits(
+        deadline: Option<Instant>,
+    ) -> crate::geodesic_buffer::point::union::UnionBufferLimits {
+        crate::geodesic_buffer::point::union::UnionBufferLimits {
+            overlay: polygons(deadline),
+            max_results: 10,
+            max_vertices: 100_000,
+        }
+    }
     #[allow(
         clippy::too_many_lines,
         reason = "Registro unico eseguibile delle API GOP-028"
     )]
     fn cases() -> Vec<Case> {
         vec![
+            case!(
+                "geodesic_buffer.rs",
+                geodesic_empty_buffer_with_limits,
+                |f, d, t| crate::geodesic_buffer::geodesic_empty_buffer_with_limits(
+                    std::slice::from_ref(&f.point),
+                    &f.crs,
+                    &[0.0],
+                    false,
+                    buffer_limits(d),
+                    Some(t)
+                ),
+                crate::geodesic_buffer::DegenerateBufferError::DeadlineExceeded
+            ),
+            case!(
+                "geodesic_buffer/point.rs",
+                geodesic_point_buffer_with_limits,
+                |f, d, t| crate::geodesic_buffer::point::geodesic_point_buffer_with_limits(
+                    std::slice::from_ref(&f.point),
+                    &f.crs,
+                    &[1.0],
+                    0.01,
+                    crate::geodesic_buffer::point::PointBufferLimits {
+                        batch: buffer_limits(d),
+                        max_vertices: 100_000
+                    },
+                    Some(t)
+                ),
+                crate::geodesic_buffer::DegenerateBufferError::DeadlineExceeded
+            ),
+            case!(
+                "geodesic_buffer/point/union.rs",
+                geodesic_multipoint_buffer_with_limits,
+                |f, d, t| {
+                    crate::geodesic_buffer::point::union::geodesic_multipoint_buffer_with_limits(
+                        std::slice::from_ref(&f.point),
+                        &f.crs,
+                        &[1.0],
+                        0.01,
+                        false,
+                        buffer_union_limits(d),
+                        Some(t),
+                    )
+                },
+                crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                    polygon_boolean::PolygonBooleanError::Predicate(
+                        PredicateError::DeadlineExceeded
+                    )
+                )
+            ),
+            case!(
+                "geodesic_buffer/projected.rs",
+                geodesic_line_buffer_with_limits,
+                |f, d, t| crate::geodesic_buffer::projected::geodesic_line_buffer_with_limits(
+                    &[geo::LineString::from(vec![(0.0, 0.0), (0.00001, 0.0)]).into()],
+                    &f.crs,
+                    &[1.0],
+                    0.01,
+                    false,
+                    buffer_union_limits(d),
+                    Some(t)
+                ),
+                crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                    polygon_boolean::PolygonBooleanError::Predicate(
+                        PredicateError::DeadlineExceeded
+                    )
+                )
+            ),
             case!(
                 "predicates.rs",
                 relate_matrix_with_limits,

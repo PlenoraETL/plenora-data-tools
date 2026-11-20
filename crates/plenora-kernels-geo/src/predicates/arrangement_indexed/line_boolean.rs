@@ -220,7 +220,7 @@ fn execute(
             std::slice::from_ref(right),
             op,
             filter,
-            &mut PolygonBooleanLimits {
+            &PolygonBooleanLimits {
                 work: limits,
                 // Ogni elemento addebita almeno uno step: nessun tetto aggiunto.
                 max_edges: limits.max_steps,

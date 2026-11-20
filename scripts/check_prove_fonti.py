@@ -49,7 +49,7 @@ def normalizza_percorsi(names):
 
 def file_tracciati(root):
     raw = subprocess.check_output(
-        ["git", "ls-files", "--cached", "--full-name", "-z"], cwd=root,
+        ["git", "ls-files", "--cached", "--deduplicate", "--full-name", "-z"], cwd=root,
     )
     if not raw.endswith(b"\0"):
         raise ValueError("elenco Git vuoto o non terminato")

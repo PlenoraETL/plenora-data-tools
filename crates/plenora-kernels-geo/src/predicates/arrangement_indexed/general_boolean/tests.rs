@@ -257,7 +257,7 @@ fn measured_limits_and_interruptions() {
         &[],
         GeneralBooleanOp::Union,
         None,
-        &mut { limits },
+        &limits,
         &mut measure,
     )
     .unwrap();
@@ -317,7 +317,7 @@ fn measured_limits_and_interruptions() {
                 &[],
                 GeneralBooleanOp::Union,
                 None,
-                &mut { limits },
+                &limits,
                 &mut work,
             );
             if deadline {

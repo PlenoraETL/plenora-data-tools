@@ -39,7 +39,7 @@ pub fn boolean_with_limits(
     right: &Geometry<f64>,
     operation: GeneralBooleanOp,
     output_dimension: Option<u8>,
-    mut limits: GeneralBooleanLimits,
+    limits: GeneralBooleanLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Geometry<f64>, GeneralBooleanError> {
     let mut work = Work::new(limits.work, cancelled);
@@ -48,7 +48,7 @@ pub fn boolean_with_limits(
         std::slice::from_ref(right),
         operation,
         output_dimension,
-        &mut limits,
+        &limits,
         &mut work,
     )
 }
@@ -60,7 +60,7 @@ pub fn boolean_with_limits(
 pub fn union_with_limits(
     inputs: &[Geometry<f64>],
     output_dimension: Option<u8>,
-    mut limits: GeneralBooleanLimits,
+    limits: GeneralBooleanLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Geometry<f64>, GeneralBooleanError> {
     let mut work = Work::new(limits.work, cancelled);
@@ -69,7 +69,7 @@ pub fn union_with_limits(
         &[],
         GeneralBooleanOp::Union,
         output_dimension,
-        &mut limits,
+        &limits,
         &mut work,
     )
 }
@@ -79,7 +79,7 @@ fn array(
     right: &Geometry<f64>,
     op: GeneralBooleanOp,
     filter: Option<u8>,
-    mut limits: GeneralBooleanLimits,
+    limits: GeneralBooleanLimits,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<Geometry<f64>>, GeneralBooleanError> {
     let mut work = Work::new(limits.work, cancelled);
@@ -98,7 +98,7 @@ fn array(
             std::slice::from_ref(right),
             op,
             filter,
-            &mut limits,
+            &limits,
             &mut work,
         )?;
         work.push(&mut output, result)?;
