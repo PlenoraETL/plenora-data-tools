@@ -474,7 +474,6 @@ dependencies = [
  "approx",
  "num-traits",
  "rayon",
- "rstar",
  "serde",
  "spade",
  "thiserror 2.0.21",
@@ -577,9 +576,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "heapless"
-version = "0.8.0"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+checksum = "411fdef4df93751117bd9ef8caa0e7f99c65dafec5bd84313eb8e2fdd75e32f2"
 dependencies = [
  "hash32",
  "stable_deref_trait",
@@ -899,10 +898,10 @@ dependencies = [
  "i_overlay",
  "log",
  "num-traits",
+ "plenora-rstar",
  "rand",
  "rand_pcg",
  "robust",
- "rstar",
  "sif-itree",
  "spade",
 ]
@@ -931,9 +930,9 @@ dependencies = [
  "plenora-core",
  "plenora-geo",
  "plenora-kernels-table",
+ "plenora-rstar",
  "plenora-wkt",
  "rayon",
- "rstar",
  "serde",
  "serde_json",
  "spade",
@@ -994,6 +993,17 @@ dependencies = [
  "plenora-kernels-table",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "plenora-rstar"
+version = "0.12.2"
+dependencies = [
+ "approx",
+ "geo-types",
+ "heapless",
+ "num-traits",
+ "smallvec",
 ]
 
 [[package]]
@@ -1115,17 +1125,6 @@ name = "robust"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
-
-[[package]]
-name = "rstar"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "421400d13ccfd26dfa5858199c30a5d76f9c54e0dba7575273025b43c5175dbb"
-dependencies = [
- "heapless",
- "num-traits",
- "smallvec",
-]
 
 [[package]]
 name = "rustc_version"
@@ -1310,7 +1309,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",

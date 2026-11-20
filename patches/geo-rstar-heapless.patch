@@ -1,0 +1,111 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -88,7 +88,6 @@
+ version = "0.7.19"
+ features = [
+     "approx",
+-    "rstar_0_12",
+ ]
+ 
+ [dependencies.geographiclib-rs]
+@@ -121,7 +120,10 @@
+ version = "1.1.0"
+ 
+ [dependencies.rstar]
+-version = "0.12.0"
++# Stessi algoritmi, heapless corretto e integrazioni geo-types senza rstar upstream.
++package = "plenora-rstar"
++path = "../rstar-0.12.2-heapless"
++version = "=0.12.2"
+ 
+ [dependencies.serde]
+ version = "1.0"
+--- a/src/algorithm/bounding_rect.rs
++++ b/src/algorithm/bounding_rect.rs
+@@ -2,7 +2,7 @@
+ use crate::{
+     CoordNum, GeoNum, GeometryCow, MonotoneChains, coord, geometry::*, monotone_chain::geometry::*,
+ };
+-use geo_types::private_utils::{get_bounding_rect, line_string_bounding_rect};
++use rstar::private_utils::{get_bounding_rect, line_string_bounding_rect};
+ 
+ /// Calculation of the bounding rectangle of a geometry.
+ pub trait BoundingRect<T: CoordNum> {
+--- a/src/algorithm/euclidean_distance.rs
++++ b/src/algorithm/euclidean_distance.rs
+@@ -522,7 +522,8 @@
+     use crate::Orient;
+     use crate::orient::Direction;
+     use crate::{Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
+-    use geo_types::{coord, polygon, private_utils::line_segment_distance};
++    use geo_types::{coord, polygon};
++    use rstar::private_utils::line_segment_distance;
+ 
+     #[test]
+     fn line_segment_distance_test() {
+--- a/src/algorithm/line_intersection.rs
++++ b/src/algorithm/line_intersection.rs
+@@ -208,7 +208,7 @@
+ ///
+ /// `returns` the nearest endpoint to the other segment
+ fn nearest_endpoint<F: GeoFloat>(p: Line<F>, q: Line<F>) -> Coord<F> {
+-    use geo_types::private_utils::point_line_euclidean_distance;
++    use rstar::private_utils::point_line_euclidean_distance;
+ 
+     let mut nearest_pt = p.start;
+     let mut min_dist = point_line_euclidean_distance(p.start, q);
+--- a/src/algorithm/line_measures/metric_spaces/euclidean/distance.rs
++++ b/src/algorithm/line_measures/metric_spaces/euclidean/distance.rs
+@@ -37,7 +37,7 @@
+ }
+ impl<F: CoordFloat> Distance<F, Coord<F>, &Line<F>> for Euclidean {
+     fn distance(&self, coord: Coord<F>, line: &Line<F>) -> F {
+-        ::geo_types::private_utils::point_line_euclidean_distance(Point(coord), *line)
++        ::rstar::private_utils::point_line_euclidean_distance(Point(coord), *line)
+     }
+ }
+ 
+@@ -87,13 +87,13 @@
+ 
+ impl<F: CoordFloat> Distance<F, &Point<F>, &Line<F>> for Euclidean {
+     fn distance(&self, origin: &Point<F>, destination: &Line<F>) -> F {
+-        geo_types::private_utils::point_line_euclidean_distance(*origin, *destination)
++        rstar::private_utils::point_line_euclidean_distance(*origin, *destination)
+     }
+ }
+ 
+ impl<F: CoordFloat> Distance<F, &Point<F>, &LineString<F>> for Euclidean {
+     fn distance(&self, origin: &Point<F>, destination: &LineString<F>) -> F {
+-        geo_types::private_utils::point_line_string_euclidean_distance(*origin, destination)
++        rstar::private_utils::point_line_string_euclidean_distance(*origin, destination)
+     }
+ }
+ 
+@@ -115,7 +115,7 @@
+                     .exterior()
+                     .lines()
+                     .map(|line| {
+-                        ::geo_types::private_utils::line_segment_distance(
++                        ::rstar::private_utils::line_segment_distance(
+                             point.0, line.start, line.end,
+                         )
+                     })
+@@ -837,7 +837,8 @@
+     use super::*;
+     use crate::orient::{Direction, Orient};
+     use crate::{Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
+-    use geo_types::{coord, polygon, private_utils::line_segment_distance};
++    use geo_types::{coord, polygon};
++    use rstar::private_utils::line_segment_distance;
+ 
+     #[test]
+     fn line_segment_distance_test() {
+--- a/src/algorithm/monotone/mono_poly.rs
++++ b/src/algorithm/monotone/mono_poly.rs
+@@ -1,4 +1,5 @@
+-use geo_types::{Line, private_utils::get_bounding_rect};
++use geo_types::Line;
++use rstar::private_utils::get_bounding_rect;
+ 
+ use crate::{
+     BoundingRect, Coord, CoordinatePosition, GeoNum, Intersects, Kernel, LineString, Orientation,

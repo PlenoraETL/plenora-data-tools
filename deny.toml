@@ -65,7 +65,10 @@ multiple-versions = "warn"
 # wildcard verso dipendenze esterne restano rifiutate.
 wildcards = "deny"
 allow-wildcard-paths = true
-deny = []
+deny = [
+    # Nessuna versione vulnerabile o unsound di heapless puo rientrare.
+    { crate = "heapless:<0.9.4", reason = "RUSTSEC-2026-0574..0582: unsound" },
+]
 skip = []
 skip-tree = []
 
