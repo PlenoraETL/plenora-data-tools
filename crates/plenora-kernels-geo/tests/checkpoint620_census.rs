@@ -317,6 +317,8 @@ fn uncovered_cycles(records: &[serde_json::Value]) -> Vec<serde_json::Value> {
             serde_json::json!({
                 "file": record["file"],
                 "function": record["function"],
+                "line": record["line"],
+                "column": record["column"],
                 "source": record["source"],
             })
         })
@@ -324,10 +326,32 @@ fn uncovered_cycles(records: &[serde_json::Value]) -> Vec<serde_json::Value> {
 }
 
 fn verify_open_cycles(records: &[serde_json::Value], pending: &[serde_json::Value]) {
+    assert!(
+        pending.len() <= 338,
+        "registro chiuso 6.2.0: massimo 338 cicli residui"
+    );
+    for entry in pending {
+        assert!(
+            entry["previsto"] == "6.3.0"
+                && entry["motivo"]
+                    .as_str()
+                    .is_some_and(|reason| !reason.trim().is_empty())
+                && entry["line"].as_u64().is_some_and(|line| line > 0)
+                && entry["column"].as_u64().is_some(),
+            "voce dichiarata incompleta: posizione, motivo e previsto 6.3.0 obbligatori"
+        );
+    }
     // Multinsieme con sorgente esatto, non un nome/numero di riga o un hash.
     // Anche duplicare un ciclo aperto richiede una nuova voce esplicita.
     let key = |record: &serde_json::Value| {
-        serde_json::json!([record["file"], record["function"], record["source"]]).to_string()
+        serde_json::json!([
+            record["file"],
+            record["function"],
+            record["line"],
+            record["column"],
+            record["source"]
+        ])
+        .to_string()
     };
     let mut actual: Vec<_> = uncovered_cycles(records).iter().map(key).collect();
     let mut expected: Vec<_> = pending.iter().map(key).collect();
@@ -865,11 +889,37 @@ fn checkpoint620_entry_requires_unconditional_shared_call() {
 
 #[test]
 fn checkpoint620_new_cycles_cannot_hide_in_regeneration() {
-    let pending = serde_json::json!({"file": "open.rs", "function": "f", "source": "loop {}"});
-    let record = serde_json::json!({"file": "open.rs", "function": "f", "source": "loop {}", "body": [1, 1]});
+    let pending = serde_json::json!({"file": "open.rs", "function": "f", "source": "loop {}", "line": 1, "column": 0, "motivo": "prova locale assente", "previsto": "6.3.0"});
+    let record = serde_json::json!({"file": "open.rs", "function": "f", "source": "loop {}", "line": 1, "column": 0, "body": [1, 1]});
     verify_open_cycles(
         std::slice::from_ref(&record),
         std::slice::from_ref(&pending),
+    );
+    // Registro obsoleto e ciclo coperto ancora registrato devono fallire.
+    for records in [
+        vec![],
+        vec![{
+            let mut covered = record.clone();
+            covered["literal_iteration_bound"] = 1.into();
+            covered
+        }],
+    ] {
+        let failure = std::panic::catch_unwind(|| {
+            verify_open_cycles(&records, std::slice::from_ref(&pending));
+        })
+        .expect_err("il registro deve coincidere con i cicli ancora aperti");
+        assert_eq!(failure.downcast_ref::<&str>().copied(), Some("debito cicli modificato: registrare la prova o aggiornare esplicitamente il debito; PLENORA_RIGENERA_CICLI non lo modifica"));
+    }
+    verify_open_cycles(&[], &[]);
+    let mut incomplete = pending.clone();
+    incomplete["motivo"] = " ".into();
+    let failure = std::panic::catch_unwind(|| {
+        verify_open_cycles(std::slice::from_ref(&record), &[incomplete]);
+    })
+    .expect_err("la dichiarazione deve avere un motivo non vuoto");
+    assert_eq!(
+        failure.downcast_ref::<&str>().copied(),
+        Some("voce dichiarata incompleta: posizione, motivo e previsto 6.3.0 obbligatori")
     );
     // Copia identica, ciclo nuovo e corpo modificato: tutti debiti nuovi.
     for records in [

@@ -2283,6 +2283,9 @@
       "checkpoint620_callbacks_receivers_and_pipeline_require_propagation",
       "checkpoint620_coordinate_test_unit_is_not_production_work"
     ],
+    "crates/plenora-kernels-geo/tests/checkpoint620_census/rules.rs": [
+      "structural_rules_accept_only_proven_cardinality"
+    ],
     "crates/plenora-kernels-geo/tests/checkpoint620_census/static_proofs.rs": [
       "static_proofs_reject_changed_dependencies_and_comment_copies"
     ],

@@ -18,6 +18,14 @@ stanno nella sua guida:
 
 ## Interruzione cooperativa e lavoro esterno
 
+**Voce 23 — 6.2.0: CHIUSA PARZIALE DICHIARATA.** Decisione del titolare
+del 20 novembre 2026: entra nella 6.2.0 la copertura locale dimostrata di
+640 cicli su 978, mediante checkpoint condiviso o limite statico delle
+entrate. Restano 338 cicli dichiarati e i maggioranti composti delle 34 API:
+previsto **6.3.0**. La chiusura di release non certifica il lavoro totale
+fra checkpoint e non introduce una garanzia di latenza.
+
+
 **Regola (decisione del titolare del 20 novembre 2026, opzione A).** La
 qualifica dell'interruzione dentro le chiamate richiede un checkpoint
 condiviso o un limite statico dimostrato per ogni ciclo esplicito del nostro
@@ -84,14 +92,19 @@ scansioni delle quattro opzioni coordinate, le venti bande UTM, le nove
 celle DE-9IM, i due metadati di schema e le dieci colonne diagnostiche o
 sei accessori. Sono limiti delle entrate nei corpi, non maggioranti composti.
 Il batch coordinate e i quattro cicli di `noding::exact::sum_sign` hanno
-checkpoint condivisi gia' presenti e ora riconosciuti; il gcd resta aperto.
+checkpoint condivisi gia' presenti e ora riconosciuti. Il gcd ha ora un
+limite statico locale registrato, come i tredici cicli WKB del lotto finale.
 I moduli chiusi sono elencati in `CLOSED_MODULES` e `CLOSED_PIPELINE_MODULES` nel test: ogni loro ciclo
 deve superare una di queste verifiche, anche rigenerando la fixture.
 Il [debito esplicito](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json)
-conserva gli altri cicli con sorgente esatto e molteplicita'; non e' una
+e' un registro dichiarato chiuso di 338 voci: modulo (`file`), funzione,
+posizione (`line`, `column`), sorgente esatto, motivo della prova mancante
+e `previsto: 6.3.0`. Conserva la molteplicita'; non e' una
 prova e non viene aggiornato da `PLENORA_RIGENERA_CICLI`. Un ciclo nuovo,
 duplicato o modificato senza prova fa fallire il gate anche nei moduli
-aperti. Per chiudere un lotto si rimuovono dal debito solo le voci per cui
+aperti. Falliscono anche una voce assente dal sorgente o gia' coperta ma
+ancora registrata e metadati dichiarativi incompleti. Il tetto e' 338;
+non si aggiunge nuovo debito alla chiusura 6.2.0. Per chiudere un lotto si rimuovono dal debito solo le voci per cui
 il censimento riconosce la prova locale. Questi controlli non costituiscono ancora la prova
 composta richiesta per tutti i cicli e tutte le API. Il limite sul lavoro
 esterno cade solo sostituendo le chiamate opache con percorsi cooperativi

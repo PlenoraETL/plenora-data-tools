@@ -14,6 +14,14 @@ la cui versione non ha qui una voce datata.
 
 ### Correzioni
 
+- Voce 23, decisione del titolare del 20/11: **6.2.0: CHIUSA PARZIALE DICHIARATA**.
+  Copertura locale di 640 cicli su 978 con checkpoint o limite dimostrato.
+  Registro chiuso dei 338 residui, con posizione, motivo e previsto 6.3.0;
+  il censimento rifiuta nuovi cicli scoperti, voci obsolete e voci coperte
+  ancora registrate. I 338 cicli e i maggioranti composti delle 34 API
+  restano previsti per la 6.3.0. Opzione A invariata: lavoro esterno non
+  dimostrato, nessuna promessa di latenza o di lavoro totale fra checkpoint.
+
 - Copertura locale dei quattro moduli geo del runner: il dispatch propaga
   il controllo condiviso ai 21 cicli espliciti di validazione, unari,
   binari e collettivi. Cancellazione e timeout della verifica dei tipi
@@ -40,8 +48,8 @@ la cui versione non ha qui una voce datata.
   predicati, helper e misure di analisi, esecuzione pipeline. I tre helper
   del runner ricevono la stessa interruzione del chiamante. Le prove statiche vincolano anche
   le dipendenze AST e non vengono rigenerate dal censimento. Riconosciuti
-  inoltre i quattro checkpoint di `noding::exact::sum_sign`; il gcd e i
-  maggioranti composti delle 34 API restano da chiudere.
+  inoltre i quattro checkpoint di `noding::exact::sum_sign`; il gcd ha ora un limite statico locale; i
+  maggioranti composti delle 34 API restano previsti per la 6.3.0.
 - Regola di qualifica dell'interruzione secondo l'opzione A del 20/11:
   checkpoint condiviso o limite statico per i cicli espliciti del repository;
   lavoro interno di librerie esterne, iteratori standard, macro di terzi e
