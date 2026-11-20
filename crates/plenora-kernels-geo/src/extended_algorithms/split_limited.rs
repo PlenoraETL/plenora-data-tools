@@ -8,6 +8,9 @@ use crate::predicates::{PredicateError, RelateLimits};
 use geo::{Coord, Geometry, LineString};
 use std::cmp::Ordering;
 
+mod tolerances;
+pub use tolerances::{split_line_with_tolerances_with_limits, SplitLineError, SplitLineTolerances};
+
 /// Taglia la sorgente nei punti esatti di incontro con punti, linee e bordi
 /// di poligoni.
 ///
@@ -40,7 +43,7 @@ pub fn split_line_with_limits(
     limits: RelateLimits,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<Vec<LineString<f64>>, PredicateError> {
-    split(source, splitter, &mut Work::new(limits, cancelled))
+    split(source, splitter, None, &mut Work::new(limits, cancelled))
 }
 
 fn invalid(side: &'static str) -> PredicateError {
@@ -269,9 +272,47 @@ fn split_nodes(
     Ok(SplitNodes { cuts, topology })
 }
 
+fn tolerance_topology(
+    edges: &[Edge],
+    source_count: usize,
+    splitter: &Geometry<f64>,
+    cuts: &mut [CountedVec<P>],
+    options: SplitLineTolerances,
+    work: &mut Work<'_>,
+) -> Result<CountedVec<CountedVec<P>>, PredicateError> {
+    tolerances::prepare(&edges[..source_count], splitter, cuts, options, work)?;
+    let mut topology = split_nodes(&edges[..source_count], source_count, work)?.topology;
+    let mut retained = CountedVec::new();
+    for points in &*cuts {
+        work.step()?;
+        for p in points {
+            work.push(&mut retained, p)?;
+        }
+    }
+    for (index, edge) in edges[..source_count].iter().enumerate() {
+        work.step()?;
+        for p in &retained {
+            work.pair()?;
+            if edge.contains(p)? {
+                work.nodes(1)?;
+                work.push(&mut topology[index], p.try_clone()?)?;
+            }
+        }
+        let reverse = compare(&edges[index].a, &edges[index].b)?.is_gt();
+        sorted(
+            &mut topology[index],
+            |a, b| compare(a, b).map(|o| if reverse { o.reverse() } else { o }),
+            work,
+        )?;
+        topology[index].dedup_by(|a, b| Ok(a == b), work)?;
+    }
+    Ok(topology)
+}
+
 fn split(
     source: &LineString<f64>,
     splitter: &Geometry<f64>,
+    tolerances: Option<SplitLineTolerances>,
     work: &mut Work<'_>,
 ) -> Result<Vec<LineString<f64>>, PredicateError> {
     work.step()?;
@@ -280,7 +321,13 @@ fn split(
     let source_count = edges.len();
     cutters(splitter, &mut edges, work)?;
     let originals = Originals::for_editing(source.0.iter().copied(), splitter, work)?;
-    let SplitNodes { mut cuts, topology } = split_nodes(&edges, source_count, work)?;
+    let SplitNodes {
+        mut cuts,
+        mut topology,
+    } = split_nodes(&edges, source_count, work)?;
+    if let Some(options) = tolerances {
+        topology = tolerance_topology(&edges, source_count, splitter, &mut cuts, options, work)?;
+    }
     let mut last_nondegenerate = 0;
     for (i, e) in edges[..source_count].iter().enumerate() {
         work.step()?;

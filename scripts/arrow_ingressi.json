@@ -9522,6 +9522,12 @@
       "classification": "non riceve dati esterni",
       "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
       "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-kernels-geo/src/extended_algorithms/split_limited/tolerances.rs::split_line_with_tolerances_with_limits": {
+      "classification": "non riceve dati esterni",
+      "reason": "API geometrica diretta: coordinate geo, nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn split_line_with_tolerances_with_limits( source: &LineString<f64>, splitter: &Geometry<f64>, tolerances: SplitLineTolerances, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<LineString<f64>>, SplitLineError>"
     }
   },
   "rust_variants": {

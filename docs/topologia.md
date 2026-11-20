@@ -51,6 +51,49 @@ subnormali, collassi, facce collineari dopo rounding e limiti inclusivi.
 Questa garanzia riguarda le due API dirette: non modifica la precisione
 metrica degli adapter e dei kernel 6.0.0 descritti sotto.
 
+### SplitLine con due tolleranze: contratto 10
+
+Nella 6.2.0 `extended_algorithms::split_line_with_tolerances_with_limits`
+accetta `SplitLineTolerances { snap_distance, merge_distance }`, entrambe
+finite e non negative, nelle unita' XY del CRS planare del chiamante.
+La decisione del titolare e' opt-in: `split_line` conserva il doppio uso della sua
+tolleranza e `split_line_with_limits` conserva il taglio per incidenza esatta.
+Non esiste una nuova operazione di catalogo o una traduzione Esri nel kernel.
+
+Ogni Point/MultiPoint, anche dentro collezioni, viene proiettato su ciascun
+segmento sorgente; si ammette quando la distanza punto-segmento e' minore
+o uguale a `snap_distance`, senza slack proporzionale alle coordinate.
+Linee e bordi poligonali tagliano solo per incidenza, anche se hanno vertici
+ripetuti. Proiezione e confronto del quadrato della distanza sono razionali.
+
+I tagli vengono ordinati lungo la sequenza sorgente. Resta il primo taglio;
+un successivo taglio viene scartato se la distanza lungo la linea dall'ultimo
+conservato e' minore o uguale a `merge_distance`. Non si applica una fusione
+transitiva: a 20, 50, 80 con soglia 40 restano 20 e 80. Gli estremi globali
+non sono tagli e non assorbono quelli interni. Una soglia maggiore o uguale
+alla lunghezza conserva quindi il primo taglio interno, se presente.
+Sulle linee chiuse conta l'ordine dei vertici, senza fusione ciclica.
+Zero fonde soltanto tagli alla stessa ascissa curvilinea; il medesimo punto
+in due occorrenze distinte di una linea ripercorsa puo' tagliare due volte.
+La linea vuota restituisce un pezzo vuoto; una linea non vuota priva di
+due punti distinti viene rifiutata come geometria non valida.
+
+La lunghezza fra tagli e' una somma di radici di razionali non negativi.
+Radici razionali esatte e intervalli razionali inclusivi certificano il
+confronto. Dopo al massimo 4096 raffinamenti, oppure al tetto aritmetico
+condiviso, un confronto non concluso restituisce `AccuracyUnproven`;
+non si decide con una lunghezza floating point. `InvalidTolerance` distingue
+i parametri invalidi; gli altri errori sono `SplitLineError::Predicate`.
+
+Si applicano pubblicazione e certificato GOP-015A descritti sopra, anche
+sui tratti ripercorsi. I limiti sono quelli contabili di `RelateLimits`:
+validazione, proiezioni esaustive, fusione, noding e verifica condividono
+passi, coppie, nodi e prenotazioni. Si contano anche proiezioni rifiutate e
+copie conservate; nessuna ammissione basata su una stima quadratica.
+Deadline e cancellazione passano dal controllo unico GOP-028.
+Le prove C1 usano proiezioni cartesiane, distanze pitagoriche, percorsi
+rettangolari e un oracolo intero indipendente per i tagli su un asse.
+
 ### Noding comune: migrazione DE-9IM, tranche 1b incompleta
 
 `relate_matrix` e la variante con limiti usano ora

@@ -128,7 +128,7 @@ fn exact_thresholds_and_interruptions() {
     let source = line_string![(x:0.,y:0.),(x:2.,y:0.)];
     let cutter = transverse(1);
     let mut measured = Work::new(RelateLimits::default(), None);
-    let expected = split(&source, &cutter, &mut measured).expect("misura del consumo");
+    let expected = split(&source, &cutter, None, &mut measured).expect("misura del consumo");
     // Fonte: noding e certificato condividono il consumo misurato.
     assert!(measured.pairs > 1 && measured.nodes > 6);
     // Fonte memoria/passi: picco delle ricevute vive e checkpoint del percorso

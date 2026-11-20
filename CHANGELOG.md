@@ -10,6 +10,16 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Aggiunte
+
+- Contratto 10: API Rust `split_line_with_tolerances_with_limits`, con
+  distanze indipendenti di aggancio e fusione, confronti certificati,
+  pubblicazione GOP-015A e budget cumulativi. Tolleranze grandi, zero,
+  linee chiuse e punti coincidenti hanno semantica esplicita; le API
+  precedenti restano invariate. Nessuna modifica al FeatureServer.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

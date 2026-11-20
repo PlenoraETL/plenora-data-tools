@@ -2687,7 +2687,10 @@ mod baseline_600;
 mod compatibility_600;
 
 mod split_limited;
-pub use split_limited::split_line_with_limits;
+pub use split_limited::{
+    split_line_with_limits, split_line_with_tolerances_with_limits, SplitLineError,
+    SplitLineTolerances,
+};
 
 mod polygonize_limited;
 pub use polygonize_limited::polygonize_with_limits;
