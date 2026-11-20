@@ -27,7 +27,10 @@ fn ogni_chiave_per_ogni_operazione_e_fusione() {
                     }
                     Class::Types => effect != Effect::Types && (effect != Effect::Merge || equal),
                     Class::Representation => {
-                        matches!(effect, Effect::Unchanged | Effect::Rows)
+                        matches!(
+                            key,
+                            policy::REPROJECTION_CLAMP_KEY | policy::REPROJECTION_EXTRAPOLATION_KEY
+                        ) || matches!(effect, Effect::Unchanged | Effect::Rows)
                             || (effect == Effect::Merge && equal)
                     }
                 };
@@ -50,7 +53,14 @@ fn ogni_chiave_per_ogni_operazione_e_fusione() {
                 let expected = match class {
                     Class::Crs => true,
                     Class::Derived => false,
-                    Class::Representation | Class::Types => equal,
+                    Class::Representation | Class::Types => {
+                        equal
+                            || matches!(
+                                key,
+                                policy::REPROJECTION_CLAMP_KEY
+                                    | policy::REPROJECTION_EXTRAPOLATION_KEY
+                            )
+                    }
                 };
                 assert_eq!(
                     policy::keep(key, Effect::Merge, equal),

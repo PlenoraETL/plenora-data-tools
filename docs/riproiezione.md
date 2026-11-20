@@ -324,3 +324,74 @@ pyproj/PROJ/EPSG come `genera_crs_integrati.py`.
 - **Fuori ambito.** CRS fuori tabella, operazioni concatenate del registro,
   griglie non NTv2, percorsi di più di tre passi, CGCS2000 verso altri
   datum (nessuna trasformazione nel registro), coordinate Z/M.
+
+
+## Policy esplicite 6.2.0: clamp ed estrapolazione
+
+I default conservano i rifiuti precedenti. Nessuna riproiezione implicita,
+nessuna correzione in lettura e nessuna semantica Esri nel motore.
+
+- `clamp_web_mercator: true`, solo con target EPSG:3857: dopo il cambio di
+  datum taglia la latitudine a [-85.06, 85.06] gradi, limite incluso.
+  La soglia e' il dominio integrato, non il bordo tile 85.0511287798066.
+  Le coordinate sorgenti devono restare finite e nel loro dominio:
+  i poli geografici sono ammessi nell'ingresso e tagliati, latitudini oltre
+  +/-90 e longitudini oltre +/-180 sono sempre errori. Default: errore
+  `COORDINATE_OUT_OF_CRS_DOMAIN` oltre il dominio del target.
+- `estrapola_trasformazioni: true`: richiede `trasformazioni` non vuoto e
+  un percorso interamente parametrico, senza griglie (anche i percorsi misti
+  sono esclusi in questa versione). Applica gli stessi parametri in avanti
+  o indietro anche fuori dai riquadri EPSG; i bordi sono inclusi.
+  `accuratezza_accettata_m` resta necessaria quando richiesta dal percorso,
+  ma fuori area non e' una garanzia. I domini matematici dei CRS restano
+  obbligatori. Il default resta `REPROJECTION_OUTSIDE_TRANSFORMATION_AREA`.
+  Nessuna griglia fuori copertura viene estrapolata o sostituita.
+
+Entrambe sono booleane, assenti equivalgono a `false`; null e tipi diversi
+sono `InvalidPlan`. Policy incompatibili con CRS/percorso sono
+`REPROJECTION_CONFIG_INVALID`. Un clamp puo' far collassare una geometria:
+la validazione OGC d'uscita resta obbligatoria, senza riparazione implicita.
+
+L'API Rust additiva e' `PianoRiproiezione::nuovo_con_policy`, con
+`PolicyRiproiezione`; i campi delle struct preesistenti non cambiano.
+`Riproiettore::trasforma_esito` pubblica coordinate, `latitudine_tagliata`,
+`estrapolato` e `accuratezza_m: Option<f64>`: `None` quando il punto ha
+subito clamp o estrapolazione. Fuori area senza opt-in restituisce l'errore
+CRS tipizzato; le API storiche per tentativi conservano `Ok(None)`.
+Le API storiche `trasforma`, `trasforma_dettagli` e `riproietta_geometria`
+restituiscono solo coordinate/geometria: la policy si legge dal piano;
+per conoscere gli effetti puntuali usare `trasforma_esito`.
+Con una policy abilitata `accuratezza_garantita_m()` del piano vale infinito:
+nessun limite globale rispetto alle posizioni originali.
+
+Analisi e kernel Arrow pubblicano la stessa dichiarazione conservativa
+sul campo, anche senza righe o con soli null:
+
+| Chiave | Valore |
+| --- | --- |
+| `plenora.reprojection.clamp_web_mercator` | `latitude_85.06_degrees;original_position_not_guaranteed` |
+| `plenora.reprojection.extrapolation` | `parametric_only;accuracy_not_guaranteed_outside_area` |
+
+Sono dichiarazioni della policy autorizzata, non conteggi di punti modificati.
+La provenienza e' cumulativa: si conserva dopo altre operazioni, comprese
+riproiezioni e fusioni con un solo ramo marcato; valori discordanti causano
+`Schema`. Il float64 del campo descrive la rappresentazione numerica, non
+promette 1 cm rispetto alla posizione originale tagliata o estrapolata.
+I trasporti che conservano metadati Arrow (IPC e Parquet) conservano queste
+chiavi; i formati privi di metadati non acquisiscono una garanzia implicita.
+
+Oracoli: [formule Web Mercator PROJ](https://proj.org/en/stable/operations/projections/webmerc.html)
+e [Helmert PROJ](https://proj.org/en/stable/operations/transformations/helmert.html),
+registro EPSG v11.022 distribuito con PROJ 9.5.1 (tabella integrata e fixture
+preesistenti). `scripts/genera_oracolo_trasformazioni_620.py` genera una
+fixture indipendente a 80 cifre Decimal per EPSG:1662, dentro e fuori area,
+in entrambi i versi, con inversa geocentrica a punto fisso distinta da
+Bowring del kernel; `--check` ne verifica la riproducibilita'. Le prove
+coprono i binary64 adiacenti ai bordi, poli e antimeridiano. Nessuna fixture
+Esri e nessuna dichiarazione di compatibilita' con un server Esri.
+
+Le policy riusano formule, densificazione, validazione e limiti esistenti;
+non introducono API con nuovi budget, griglie, dipendenze o confronti di
+distanza. `geo.reproject` conserva il contratto `NonInterruptible`; i
+controlli di interruzione della pipeline e la precedenza di `Timeout` sono
+invariati. La suite lunga resta su richiesta del titolare.

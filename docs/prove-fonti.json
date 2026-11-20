@@ -147,6 +147,7 @@
     "scripts/genera_inventario.py": [],
     "scripts/genera_manifesto_adozione.py": [],
     "scripts/genera_oracolo_riproiezione.py": [],
+    "scripts/genera_oracolo_trasformazioni_620.py": [],
     "scripts/genera_projjson_integrati.py": [],
     "scripts/genera_riferimenti_geodetici.py": [],
     "scripts/genera_riferimenti_singolari.py": [],
@@ -596,6 +597,9 @@
       "batch_sequence_carries_logical_order",
       "rebuild_richiede_origini_complete_e_non_ricicla_omonimi"
     ],
+    "crates/plenora-core/src/contract/geometry_metadata_policy.rs": [
+      "provenance_survives_changes_and_either_merge_side"
+    ],
     "crates/plenora-core/src/contract/geometry_metadata_policy/report.rs": [
       "discarded_container_is_reported_without_interpreting_its_value",
       "unchanged_opaque_container_does_not_hide_other_metadata_changes",
@@ -692,7 +696,11 @@
       "trasformazione_nulla_non_cambia_lon_lat_fra_ellissoidi_diversi",
       "griglia_ntv2_big_endian_uguale_alla_little_endian",
       "griglia_ntv2_difettosa_si_rifiuta_senza_valori",
-      "la_sottogriglia_piu_fine_vince"
+      "la_sottogriglia_piu_fine_vince",
+      "policy_mercator_bordi_poli_e_antimeridiano",
+      "policy_estrapolazione_bordi_epsg_in_entrambi_i_versi",
+      "policy_non_allargano_selezione_domini_o_griglie",
+      "policy_helmert_fuori_area_oracolo_decimal_80_cifre"
     ],
     "crates/plenora-core/src/diagnostics.rs": [
       "rc17_rejects_examples_exceeding_observed_or_cause_count",
@@ -986,7 +994,8 @@
       "ipc_voci_dei_metadati_incomplete_rifiutate",
       "ipc_metadati_con_valore_vuoto_si_leggono",
       "uno_schema_map_malformato_senza_blocchi_e_un_errore",
-      "un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato"
+      "un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato",
+      "provenienza_riproiezione_in_ipc_e_parquet"
     ],
     "crates/plenora-io/tests/contratti_arrow.rs": [
       "i_vettori_sono_le_copie_registrate",
@@ -2062,7 +2071,9 @@
       "un_rilievo_della_griglia_fra_i_campioni_non_si_perde",
       "la_riproiezione_verso_un_geografico_usa_il_passo_sul_raggio_polare",
       "schemi_effettivi_verificati_prima_di_riproiettare",
-      "sorgente_argomento_deve_coincidere_con_il_campo"
+      "sorgente_argomento_deve_coincidere_con_il_campo",
+      "policy_clamp_ed_estrapolazione_su_geometrie",
+      "policy_config_tipizzata_e_dichiarazione_anche_senza_righe"
     ],
     "crates/plenora-kernels-geo/src/rust_backend/arrow.rs": [
       "adapter_rifiutano_schemi_divergenti",
@@ -3300,7 +3311,8 @@
       "pivot_con_mapping_sullo_schema_canonico",
       "run_end_e_union_rifiutati_in_validazione_e_in_esecuzione",
       "pivot_ordine_dei_rifiuti_in_validazione",
-      "il_poligono_vuoto_da_wkt_si_rilegge_nel_passo_dopo"
+      "il_poligono_vuoto_da_wkt_si_rilegge_nel_passo_dopo",
+      "policy_riproiezione_conservate_in_catena_e_concat_destra"
     ],
     "crates/plenora-pipeline/tests/geometrie_multiple.rs": [
       "trasporto_senza_passi_preserva_colonne_byte_primaria_e_identita",
@@ -3529,6 +3541,7 @@
     "crates/plenora-core/tests/fixtures/riproiezione/catene.csv",
     "crates/plenora-core/tests/fixtures/riproiezione/griglia.csv",
     "crates/plenora-core/tests/fixtures/riproiezione/griglia_sintetica.gsb",
+    "crates/plenora-core/tests/fixtures/riproiezione/policy_620.json",
     "crates/plenora-core/tests/fixtures/riproiezione/proiezioni.csv",
     "crates/plenora-core/tests/fixtures/riproiezione/singolari.csv",
     "crates/plenora-core/tests/fixtures/riproiezione/trasformazioni.csv",

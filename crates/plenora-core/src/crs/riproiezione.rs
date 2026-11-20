@@ -83,6 +83,31 @@ pub struct OpzioniRiproiezione {
     pub convenzione_wgs84_etrs89: Option<bool>,
 }
 
+/// Policy additive: il default conserva tutti i rifiuti preesistenti.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PolicyRiproiezione {
+    /// Taglia la latitudine d'arrivo a +/-85,06 gradi solo per EPSG:3857.
+    /// Non corregge coordinate sorgenti invalide e non usa il bordo tile.
+    pub clamp_web_mercator: bool,
+    /// Applica un percorso imposto fuori area, solo per passi parametrici.
+    /// L'accuratezza EPSG fuori area non e' garantita.
+    pub estrapola_trasformazioni: bool,
+}
+
+/// Esito puntuale con modifiche e perdita di accuratezza osservate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EsitoPuntoRiproiettato {
+    /// Coordinate e dettagli del percorso.
+    pub punto: PuntoRiproiettato,
+    /// La latitudine d'arrivo e' stata tagliata al dominio Web Mercator.
+    pub latitudine_tagliata: bool,
+    /// Almeno un passo parametrico e' stato applicato fuori area d'uso.
+    pub estrapolato: bool,
+    /// Accuratezza del percorso sul punto; assente dopo clamp o estrapolazione.
+    pub accuratezza_m: Option<f64>,
+}
+
 /// Un passo di un percorso: una trasformazione EPSG in un verso.
 #[derive(Clone, Copy, Debug)]
 pub struct PassoPercorso {
@@ -254,6 +279,7 @@ pub struct PianoRiproiezione {
     percorsi: Vec<PercorsoDatum>,
     /// Stessa proiezione e stesso datum: le coordinate non cambiano.
     identita: bool,
+    policy: PolicyRiproiezione,
 }
 
 impl PianoRiproiezione {
@@ -369,7 +395,50 @@ impl PianoRiproiezione {
             destinazione,
             percorsi,
             identita,
+            policy: PolicyRiproiezione::default(),
         })
+    }
+
+    /// Costruisce il piano con policy esplicite, senza cambiare la selezione
+    /// o le condizioni di accuratezza del costruttore ordinario.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Self::nuovo`]; `ReprojectionConfig` per clamp senza target
+    /// EPSG:3857 o estrapolazione senza percorso imposto parametrico non vuoto.
+    pub fn nuovo_con_policy(
+        sorgente: &ResolvedCrs,
+        destinazione: &ResolvedCrs,
+        opzioni: &OpzioniRiproiezione,
+        policy: PolicyRiproiezione,
+    ) -> Result<Self, CrsError> {
+        let mut piano = Self::nuovo(sorgente, destinazione, opzioni)?;
+        if policy.clamp_web_mercator
+            && piano.destinazione.definizione.crs != super::integrati::Identificativo::Epsg(3857)
+        {
+            return Err(CrsError::ReprojectionConfig(
+                "clamp richiede EPSG:3857 come target",
+            ));
+        }
+        if policy.estrapola_trasformazioni
+            && (opzioni.trasformazioni.as_ref().is_none_or(Vec::is_empty)
+                || piano
+                    .percorsi
+                    .iter()
+                    .any(|p| p.passi.iter().any(PassoPercorso::a_griglia)))
+        {
+            return Err(CrsError::ReprojectionConfig(
+                "estrapolazione richiede un percorso imposto non vuoto senza griglie",
+            ));
+        }
+        piano.policy = policy;
+        Ok(piano)
+    }
+
+    /// Policy esplicite del piano, dichiarate anche quando nessun punto le usa.
+    #[must_use]
+    pub const fn policy(&self) -> PolicyRiproiezione {
+        self.policy
     }
 
     /// I percorsi ammessi, nell'ordine in cui si provano.
@@ -379,9 +448,14 @@ impl PianoRiproiezione {
     }
 
     /// L'accuratezza peggiore fra i percorsi ammessi: quella che il
-    /// risultato garantisce, in metri.
+    /// risultato garantisce, in metri. Con clamp o estrapolazione abilitati
+    /// vale infinito: nessun limite globale garantito rispetto agli originali.
+    /// Per il singolo punto usare [`Riproiettore::trasforma_esito`].
     #[must_use]
     pub fn accuratezza_garantita_m(&self) -> f64 {
+        if self.policy.clamp_web_mercator || self.policy.estrapola_trasformazioni {
+            return f64::INFINITY;
+        }
         self.percorsi
             .iter()
             .map(PercorsoDatum::accuratezza_m)
@@ -569,7 +643,7 @@ impl Riproiettore {
         x: f64,
         y: f64,
     ) -> Result<Option<PuntoRiproiettato>, CrsError> {
-        self.calcola(percorso, x, y)
+        Ok(self.calcola(percorso, x, y)?.map(|esito| esito.punto))
     }
 
     /// Trasforma un punto lungo il percorso `percorso`.
@@ -590,15 +664,37 @@ impl Riproiettore {
         x: f64,
         y: f64,
     ) -> Result<Option<(f64, f64)>, CrsError> {
-        Ok(self.calcola(percorso, x, y)?.map(|p| (p.x, p.y)))
+        Ok(self
+            .calcola(percorso, x, y)?
+            .map(|p| (p.punto.x, p.punto.y)))
     }
 
+    /// Trasforma un punto dichiarando clamp e accuratezza effettiva.
+    ///
+    /// # Errors
+    ///
+    /// Come [`Self::trasforma`]; fuori area o copertura restituisce l'errore
+    /// tipizzato `ReprojectionOutsideTransformationArea`.
+    pub fn trasforma_esito(
+        &self,
+        percorso: usize,
+        x: f64,
+        y: f64,
+    ) -> Result<EsitoPuntoRiproiettato, CrsError> {
+        self.calcola(percorso, x, y)?
+            .ok_or(CrsError::ReprojectionOutsideTransformationArea)
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Catena puntuale unica: domini, datum, policy ed esito atomico"
+    )]
     fn calcola(
         &self,
         percorso: usize,
         x: f64,
         y: f64,
-    ) -> Result<Option<PuntoRiproiettato>, CrsError> {
+    ) -> Result<Option<EsitoPuntoRiproiettato>, CrsError> {
         let passi = self
             .operazioni
             .get(percorso)
@@ -609,24 +705,33 @@ impl Riproiettore {
             let (lon, lat) = self.geografiche_sorgente(x, y)?;
             self.piano.destinazione.regione(lon, lat)?;
             validate_geometry_domain(std::iter::once((x, y)), &self.piano.destinazione.crs)?;
-            return Ok(Some(PuntoRiproiettato {
-                x,
-                y,
-                lon_sorgente: lon,
-                lat_sorgente: lat,
-                celle: [None; MAX_PASSI_PERCORSO],
+            return Ok(Some(EsitoPuntoRiproiettato {
+                punto: PuntoRiproiettato {
+                    x,
+                    y,
+                    lon_sorgente: lon,
+                    lat_sorgente: lat,
+                    celle: [None; MAX_PASSI_PERCORSO],
+                },
+                latitudine_tagliata: false,
+                estrapolato: false,
+                accuratezza_m: Some(0.0),
             }));
         }
         let (lon_sorgente, lat_sorgente) = self.geografiche_sorgente(x, y)?;
         let (mut lon, mut lat) = (lon_sorgente, lat_sorgente);
         let mut celle = [None; MAX_PASSI_PERCORSO];
+        let mut estrapolato = false;
         for (posizione, (passo, operazione)) in passi.iter().enumerate() {
             let trasformazione = passo.trasformazione;
             // Un passo a griglia non riduce la longitudine: il riquadro
             // d'uso la vuole in [-180, 180].
             lon = proiezioni::riduci_gradi(lon);
             if !trasformazione.area.contains(lon, lat) {
-                return Ok(None);
+                if !self.piano.policy.estrapola_trasformazioni || passo.a_griglia() {
+                    return Ok(None);
+                }
+                estrapolato = true;
             }
             let nuovo = match operazione {
                 Operazione::Nulla => Some((lon, lat)),
@@ -670,18 +775,36 @@ impl Riproiettore {
         }
         let lon = proiezioni::riduci_gradi(lon);
         let lato = &self.piano.destinazione;
+        // La soglia e' quella della tabella, non il bordo delle tile. Il
+        // clamp segue il cambio di datum e precede la proiezione diretta.
+        let latitudine_tagliata = self.piano.policy.clamp_web_mercator && lat.abs() > 85.06;
+        if latitudine_tagliata {
+            lat = lat.clamp(-85.06, 85.06);
+        }
         lato.regione(lon, lat)?;
         let (x, y) = lato
             .proiezione
             .avanti(lon, lat)
             .map_err(errore_proiezione)?;
         validate_geometry_domain(std::iter::once((x, y)), &lato.crs)?;
-        Ok(Some(PuntoRiproiettato {
-            x,
-            y,
-            lon_sorgente,
-            lat_sorgente,
-            celle,
+        Ok(Some(EsitoPuntoRiproiettato {
+            punto: PuntoRiproiettato {
+                x,
+                y,
+                lon_sorgente,
+                lat_sorgente,
+                celle,
+            },
+            latitudine_tagliata,
+            estrapolato,
+            accuratezza_m: if latitudine_tagliata || estrapolato {
+                None
+            } else {
+                self.piano
+                    .percorsi
+                    .get(percorso)
+                    .map(PercorsoDatum::accuratezza_m)
+            },
         }))
     }
 }

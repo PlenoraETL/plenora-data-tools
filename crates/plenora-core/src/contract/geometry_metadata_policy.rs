@@ -5,6 +5,15 @@ pub mod types;
 use crate::arrow::Metadata;
 use crate::PlenoraError;
 
+/// Provenienza cumulativa: una riproiezione ha autorizzato il clamp.
+pub const REPROJECTION_CLAMP_KEY: &str = "plenora.reprojection.clamp_web_mercator";
+/// Provenienza cumulativa: accuratezza non garantita fuori area d'uso.
+pub const REPROJECTION_EXTRAPOLATION_KEY: &str = "plenora.reprojection.extrapolation";
+
+fn reprojection_history(key: &str) -> bool {
+    matches!(key, REPROJECTION_CLAMP_KEY | REPROJECTION_EXTRAPOLATION_KEY)
+}
+
 /// Significato di una chiave geometrica.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
@@ -35,6 +44,11 @@ pub enum Effect {
 }
 /// Elenco esaustivo delle chiavi conosciute; gli altri membri geometrici sono derivati.
 pub const KEYS: &[(&str, Class)] = &[
+    (
+        "plenora.reprojection.clamp_web_mercator",
+        Class::Representation,
+    ),
+    ("plenora.reprojection.extrapolation", Class::Representation),
     ("plenora.postgres.native_type", Class::Derived),
     ("plenora.postgres.native_declaration", Class::Derived),
     ("plenora.postgres.type_kind", Class::Derived),
@@ -161,6 +175,10 @@ pub fn governed(key: &str) -> bool {
 /// Decisione unica per classe ed effetto; bbox e' un contenitore dei valori superstiti.
 #[must_use]
 pub fn keep(key: &str, effect: Effect, equal: bool) -> bool {
+    // Una modifica successiva non ripristina la fedelta' agli originali.
+    if reprojection_history(key) {
+        return true;
+    }
     // Dichiarazioni sul valore corrente, anche future: nessuna provenienza
     // nota in questo namespace. Non estende l'enum pubblico Class della 4.1.
     if key.starts_with("plenora.postgres.") {
@@ -257,6 +275,19 @@ pub fn merge(left: &Metadata, right: &Metadata) -> Result<Metadata, PlenoraError
     let mut result = left.clone();
     for key in left.keys().chain(right.keys()) {
         if !governed(key) {
+            continue;
+        }
+        if reprojection_history(key) {
+            if let (Some(a), Some(b)) = (left.get(key), right.get(key)) {
+                if a != b {
+                    return Err(PlenoraError::Schema(
+                        "fusione con dichiarazioni di riproiezione discordanti".into(),
+                    ));
+                }
+            }
+            if let Some(value) = right.get(key) {
+                result.insert(key.clone(), value.clone());
+            }
             continue;
         }
         let equal = left.get(key) == right.get(key);
@@ -1325,4 +1356,47 @@ pub fn contract_column_effects(
         })
         .collect::<Vec<_>>();
     column_effects(descriptor, &output.schema, &resolved)
+}
+
+#[deny(clippy::disallowed_methods)]
+#[cfg(test)]
+mod reprojection_history_tests {
+    use super::*;
+
+    #[test]
+    fn provenance_survives_changes_and_either_merge_side() {
+        // Fonte contratti 1 e 2: una perdita autorizzata non scompare dopo un'altra
+        // operazione o concatenando un ramo che non dichiara la policy.
+        for key in [REPROJECTION_CLAMP_KEY, REPROJECTION_EXTRAPOLATION_KEY] {
+            let mut marked = Metadata::new();
+            marked.insert(key, "declared");
+            for effect in [
+                Effect::Unchanged,
+                Effect::Rows,
+                Effect::Values,
+                Effect::Types,
+                Effect::Crs,
+            ] {
+                let mut changed = marked.clone();
+                apply(&mut changed, effect);
+                assert_eq!(changed.get(key), marked.get(key));
+            }
+            for (left, right) in [
+                (&marked, Metadata::new()),
+                (&Metadata::new(), marked.clone()),
+                (&marked, marked.clone()),
+            ] {
+                assert_eq!(
+                    merge(left, &right).expect("provenienza").get(key),
+                    marked.get(key)
+                );
+            }
+            let mut conflict = Metadata::new();
+            conflict.insert(key, "different");
+            assert!(matches!(
+                merge(&marked, &conflict),
+                Err(PlenoraError::Schema(_))
+            ));
+        }
+    }
 }

@@ -465,6 +465,14 @@ prudenza.
 
 ## `geo.reproject`: il cambio di datum vale quanto l'accuratezza accettata
 
+**Policy 6.2.0.** Il clamp Web Mercator e l'estrapolazione sono solo
+espliciti. Dopo clamp non e' garantita la posizione originale; fuori area
+non e' garantita l'accuratezza EPSG. Queste perdite non sono coperte dalla
+tolleranza geografica di 1 cm. Soglie, esiti e metadati cumulativi sono in
+[Riproiezione, policy 6.2.0](riproiezione.md#policy-esplicite-620-clamp-ed-estrapolazione).
+La regola seguente riguarda i percorsi applicati entro la loro area.
+
+
 **Regola.** La matematica della riproiezione resta entro la precisione
 (proiezioni e trasformazioni entro 1e-8 m da PROJ, lati densificati entro
 mezzo centimetro); il **cambio di datum** vale quanto l'accuratezza EPSG del

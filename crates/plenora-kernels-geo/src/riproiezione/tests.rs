@@ -842,3 +842,86 @@ fn sorgente_argomento_deve_coincidere_con_il_campo() {
         }
     }
 }
+
+#[test]
+fn policy_clamp_ed_estrapolazione_su_geometrie() {
+    // Fonte contratti 1 e 2: le geometrie attraversano la soglia o l'area d'uso;
+    // il percorso resta unico, nessun ripiego o conversione implicita.
+    let polar = Geometry::LineString(line_string![(x: 12.0, y: 85.0), (x: 12.0, y: 90.0)]);
+    let strict = riproiettore("EPSG:4326", &json!({"target_crs":"EPSG:3857"}));
+    assert_crs_error(
+        &riproietta_geometria(&polar, &strict, 0.005).expect_err("polo"),
+        "COORDINATE_OUT_OF_CRS_DOMAIN",
+    );
+    let clamp = riproiettore(
+        "EPSG:4326",
+        &json!({"target_crs":"EPSG:3857", "clamp_web_mercator":true}),
+    );
+    let projected = riproietta_geometria(&polar, &clamp, 0.005).expect("clamp dichiarato");
+    let limite = clamp.trasforma_esito(0, 12.0, 85.06).expect("limite");
+    assert!(projected.coords_iter().all(|p| p.y <= limite.punto.y));
+    let mixed = Geometry::MultiPoint(vec![point!(x:9.0,y:40.0), point!(x:12.5,y:41.9)].into());
+    let config =
+        json!({"target_crs":"EPSG:4326", "trasformazioni":[1662], "accuratezza_accettata_m":4.0});
+    let strict = riproiettore("EPSG:4265", &config);
+    assert_crs_error(
+        &riproietta_geometria(&mixed, &strict, 1e-8).expect_err("Roma fuori Sardegna"),
+        "REPROJECTION_OUTSIDE_TRANSFORMATION_AREA",
+    );
+    let mut config = config;
+    config["estrapola_trasformazioni"] = json!(true);
+    let extrap = riproiettore("EPSG:4265", &config);
+    let output = riproietta_geometria(&mixed, &extrap, 1e-8).expect("percorso esplicito");
+    assert_eq!(output.coords_count(), 2);
+}
+
+#[test]
+fn policy_config_tipizzata_e_dichiarazione_anche_senza_righe() {
+    // Fonte contratti 1 e 2: config non ambigua, esito con garanzia conservativa.
+    for key in ["clamp_web_mercator", "estrapola_trasformazioni"] {
+        for value in [Value::Null, json!("SEGRETO"), json!(1), json!([])] {
+            let mut config = json!({"target_crs":"EPSG:3857"});
+            config[key] = value;
+            let err = ReprojectParams::da_config("geo.reproject", &config, &crs("EPSG:4326"))
+                .expect_err("booleano obbligatorio");
+            assert_eq!(err.category(), plenora_core::ErrorCategory::InvalidPlan);
+            assert!(!err.to_string().contains("SEGRETO"));
+        }
+    }
+    for (source, config, key) in [
+        (
+            "EPSG:4326",
+            json!({"target_crs":"EPSG:3857", "clamp_web_mercator":true}),
+            plenora_core::contract::geometry_metadata_policy::REPROJECTION_CLAMP_KEY,
+        ),
+        (
+            "EPSG:4265",
+            json!({"target_crs":"EPSG:4326", "trasformazioni":[1662], "accuratezza_accettata_m":4.0, "estrapola_trasformazioni":true}),
+            plenora_core::contract::geometry_metadata_policy::REPROJECTION_EXTRAPOLATION_KEY,
+        ),
+    ] {
+        let params = params(source, &config);
+        let field = campo_geometria(source);
+        let schema = Arc::new(Schema::new(vec![field.clone()]));
+        let (actual, batches) =
+            reproject_batches(&schema, &[], "geometry", &crs(source), &params).expect("vuoto");
+        assert!(batches.is_empty());
+        let expected = params
+            .campo_riproiettato(&field, GeometryDimensions::Xy, None)
+            .expect("campo");
+        assert_eq!(
+            actual.field(0).metadata().get(key),
+            expected.metadata().get(key)
+        );
+        assert!(actual.field(0).metadata().contains_key(key));
+        let nulls = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(BinaryArray::from(vec![None::<&[u8]>]))],
+        )
+        .expect("null");
+        let (actual, batches) =
+            reproject_batches(&schema, &[nulls], "geometry", &crs(source), &params).expect("null");
+        assert!(actual.field(0).metadata().contains_key(key));
+        assert_eq!(batches[0].column(0).null_count(), 1);
+    }
+}

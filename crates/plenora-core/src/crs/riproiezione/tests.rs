@@ -670,3 +670,230 @@ fn la_sottogriglia_piu_fine_vince() {
         .expect("nessun errore")
         .is_none());
 }
+
+fn con_policy(
+    da: &str,
+    a: &str,
+    opzioni: &OpzioniRiproiezione,
+    policy: PolicyRiproiezione,
+) -> Riproiettore {
+    Riproiettore::nuovo(
+        PianoRiproiezione::nuovo_con_policy(&crs(da), &crs(a), opzioni, policy).expect("piano"),
+        BTreeMap::new(),
+    )
+    .expect("riproiettore")
+}
+
+#[test]
+fn policy_mercator_bordi_poli_e_antimeridiano() {
+    // Fonte: PROJ webmerc, y=R ln(tan(pi/4+phi/2)); soglia di prodotto
+    // EPSG:3857 del registro integrato, +/-85,06, distinta dal mondo tile.
+    let opzioni = OpzioniRiproiezione::default();
+    let ordinario = riproiettore("EPSG:4326", "EPSG:3857", &opzioni);
+    let policy = PolicyRiproiezione {
+        clamp_web_mercator: true,
+        ..Default::default()
+    };
+    let clamp = con_policy("EPSG:4326", "EPSG:3857", &opzioni, policy);
+    assert!(clamp.piano().accuratezza_garantita_m().is_infinite());
+    for segno in [-1.0, 1.0] {
+        for lat in [
+            0.0,
+            85.051_128_779_806_6,
+            85.06_f64.next_down(),
+            85.06,
+            85.06_f64.next_up(),
+            90.0,
+        ] {
+            for lon in [
+                -180.0,
+                (-180.0_f64).next_up(),
+                0.0,
+                180.0_f64.next_down(),
+                180.0,
+            ] {
+                let lat = segno * lat;
+                let esito = clamp.trasforma_esito(0, lon, lat).expect("clamp esplicito");
+                let tagliata = lat.abs() > 85.06;
+                assert_eq!(esito.latitudine_tagliata, tagliata);
+                assert!(!esito.estrapolato);
+                assert_eq!(esito.accuratezza_m, if tagliata { None } else { Some(0.0) });
+                let phi = lat.clamp(-85.06, 85.06).to_radians();
+                let attesa_y = 6_378_137.0 * (std::f64::consts::FRAC_PI_4 + phi / 2.0).tan().ln();
+                assert!((esito.punto.y - attesa_y).abs() < 1e-7);
+                if tagliata {
+                    assert!(matches!(
+                        ordinario.trasforma_esito(0, lon, lat),
+                        Err(CrsError::CoordinateOutOfDomain { .. })
+                    ));
+                } else {
+                    assert_eq!(
+                        ordinario.trasforma_dettagli(0, lon, lat).expect("dominio"),
+                        Some(esito.punto)
+                    );
+                }
+            }
+        }
+    }
+    for (lon, lat) in [
+        (0.0, 90.0_f64.next_up()),
+        (0.0, (-90.0_f64).next_down()),
+        (181.0, 90.0),
+        (0.0, f64::INFINITY),
+        (f64::NAN, 0.0),
+    ] {
+        assert!(matches!(
+            clamp.trasforma_esito(0, lon, lat),
+            Err(CrsError::CoordinateOutOfDomain { .. })
+        ));
+    }
+}
+
+#[test]
+fn policy_estrapolazione_bordi_epsg_in_entrambi_i_versi() {
+    // Fonte: EPSG v11.022, operazione 1149, riquadro [-16.1,33.26,38.01,84.73].
+    // Traslazioni nulle: oracolo analitico identita', anche oltre l'antimeridiano
+    // dell'area europea; l'opt-in non attribuisce accuratezza a questi punti.
+    let opzioni = OpzioniRiproiezione {
+        trasformazioni: Some(vec![1149]),
+        ..Default::default()
+    };
+    let policy = PolicyRiproiezione {
+        estrapola_trasformazioni: true,
+        ..Default::default()
+    };
+    for (da, a) in [("EPSG:4258", "EPSG:4326"), ("EPSG:4326", "EPSG:4258")] {
+        let ordinario = riproiettore(da, a, &opzioni);
+        let esplicito = con_policy(da, a, &opzioni, policy);
+        for (lon, lat, fuori) in [
+            (-16.1, 50.0, false),
+            (-16.1_f64.next_up(), 50.0, true),
+            (-16.1_f64.next_down(), 50.0, false),
+            (38.01, 50.0, false),
+            (38.01_f64.next_down(), 50.0, false),
+            (38.01_f64.next_up(), 50.0, true),
+            (10.0, 33.26, false),
+            (10.0, 33.26_f64.next_down(), true),
+            (10.0, 33.26_f64.next_up(), false),
+            (10.0, 84.73, false),
+            (10.0, 84.73_f64.next_down(), false),
+            (10.0, 84.73_f64.next_up(), true),
+            (180.0, 0.0, true),
+            (-180.0, 0.0, true),
+            (0.0, 90.0, true),
+            (0.0, -90.0, true),
+        ] {
+            let esito = esplicito
+                .trasforma_esito(0, lon, lat)
+                .expect("parametri espliciti");
+            assert_eq!((esito.punto.x, esito.punto.y), (lon, lat));
+            assert_eq!(esito.estrapolato, fuori);
+            assert_eq!(esito.accuratezza_m, if fuori { None } else { Some(0.0) });
+            if fuori {
+                assert!(matches!(
+                    ordinario.trasforma_esito(0, lon, lat),
+                    Err(CrsError::ReprojectionOutsideTransformationArea)
+                ));
+            } else {
+                assert_eq!(ordinario.trasforma_esito(0, lon, lat).expect("area"), esito);
+            }
+        }
+    }
+}
+
+#[test]
+fn policy_non_allargano_selezione_domini_o_griglie() {
+    // Fonte: contratti 1 e 2, policy ammesse solo con target/percorso espliciti.
+    let clamp = PolicyRiproiezione {
+        clamp_web_mercator: true,
+        ..Default::default()
+    };
+    assert!(matches!(
+        PianoRiproiezione::nuovo_con_policy(
+            &crs("EPSG:4326"),
+            &crs("EPSG:3395"),
+            &OpzioniRiproiezione::default(),
+            clamp
+        ),
+        Err(CrsError::ReprojectionConfig(_))
+    ));
+    let extrapola = PolicyRiproiezione {
+        estrapola_trasformazioni: true,
+        ..Default::default()
+    };
+    for trasformazioni in [None, Some(vec![])] {
+        let opzioni = OpzioniRiproiezione {
+            trasformazioni,
+            ..Default::default()
+        };
+        assert!(matches!(
+            PianoRiproiezione::nuovo_con_policy(
+                &crs("EPSG:4326"),
+                &crs("EPSG:4326"),
+                &opzioni,
+                extrapola
+            ),
+            Err(CrsError::ReprojectionConfig(_))
+        ));
+    }
+    let griglia = OpzioniRiproiezione {
+        griglie: vec![9734],
+        trasformazioni: Some(vec![9734]),
+        accuratezza_accettata_m: Some(0.1),
+        ..Default::default()
+    };
+    assert!(matches!(
+        PianoRiproiezione::nuovo_con_policy(
+            &crs("EPSG:4265"),
+            &crs("EPSG:6706"),
+            &griglia,
+            extrapola
+        ),
+        Err(CrsError::ReprojectionConfig(_))
+    ));
+}
+
+#[test]
+fn policy_helmert_fuori_area_oracolo_decimal_80_cifre() {
+    // Fonte indipendente: genera_oracolo_trasformazioni_620.py, formule
+    // EPSG/PROJ, inversa geocentrica a punto fisso anziche' Bowring.
+    #[derive(serde::Deserialize)]
+    struct Riga {
+        inverse: bool,
+        lon: f64,
+        lat: f64,
+        x: f64,
+        y: f64,
+    }
+    #[derive(serde::Deserialize)]
+    struct Fixture {
+        rows: Vec<Riga>,
+    }
+    let fixture: Fixture = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/riproiezione/policy_620.json"
+    ))
+    .expect("fixture");
+    let opzioni = OpzioniRiproiezione {
+        trasformazioni: Some(vec![1662]),
+        accuratezza_accettata_m: Some(4.0),
+        ..Default::default()
+    };
+    let policy = PolicyRiproiezione {
+        estrapola_trasformazioni: true,
+        ..Default::default()
+    };
+    for riga in fixture.rows {
+        let (da, a) = if riga.inverse {
+            ("EPSG:4326", "EPSG:4265")
+        } else {
+            ("EPSG:4265", "EPSG:4326")
+        };
+        let r = con_policy(da, a, &opzioni, policy);
+        let esito = r.trasforma_esito(0, riga.lon, riga.lat).expect("Helmert");
+        assert!((esito.punto.x - riga.x).abs() < 1e-10);
+        assert!((esito.punto.y - riga.y).abs() < 1e-10);
+        let fuori = !(8.08..=9.89).contains(&riga.lon) || !(38.82..=41.31).contains(&riga.lat);
+        assert_eq!(esito.estrapolato, fuori);
+        assert_eq!(esito.accuratezza_m, if fuori { None } else { Some(4.0) });
+    }
+}

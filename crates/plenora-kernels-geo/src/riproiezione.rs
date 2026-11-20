@@ -43,8 +43,8 @@ use plenora_core::contract::arrow_metadata::{
 };
 use plenora_core::contract::{GeometryDimensions, GeometryEncoding};
 use plenora_core::crs::riproiezione::{
-    GrigliaNtv2, OpzioniRiproiezione, PassoPercorso, PianoRiproiezione, Riproiettore,
-    MAX_PASSI_PERCORSO,
+    GrigliaNtv2, OpzioniRiproiezione, PassoPercorso, PianoRiproiezione, PolicyRiproiezione,
+    Riproiettore, MAX_PASSI_PERCORSO,
 };
 use plenora_core::crs::{resolve_crs, CrsError, GeographicBounds, ResolvedCrs};
 use plenora_core::PlenoraError;
@@ -140,8 +140,27 @@ impl ReprojectParams {
         config: &Value,
         sorgente: &ResolvedCrs,
     ) -> Result<Self, PlenoraError> {
+        // Le policy additive non cambiano la struct pubblica ReprojectConfig.
+        // I valori non booleani, incluso null, sono errori senza dati.
+        let mut config_base = config.clone();
+        let mut policy = PolicyRiproiezione::default();
+        if let Some(campi) = config_base.as_object_mut() {
+            for (nome, valore) in [
+                ("clamp_web_mercator", &mut policy.clamp_web_mercator),
+                (
+                    "estrapola_trasformazioni",
+                    &mut policy.estrapola_trasformazioni,
+                ),
+            ] {
+                if let Some(scritto) = campi.remove(nome) {
+                    *valore = scritto.as_bool().ok_or_else(|| {
+                        errore_config(op, "policy di riproiezione: atteso booleano non null")
+                    })?;
+                }
+            }
+        }
         // Senza il testo di serde, che cita i valori scritti.
-        let parsed = ReprojectConfig::deserialize(config).map_err(|errore| {
+        let parsed = ReprojectConfig::deserialize(&config_base).map_err(|errore| {
             errore_config(
                 op,
                 format!(
@@ -180,9 +199,36 @@ impl ReprojectParams {
             trasformazioni: parsed.trasformazioni,
             convenzione_wgs84_etrs89: parsed.convenzione_wgs84_etrs89,
         };
-        let piano = PianoRiproiezione::nuovo(sorgente, &target, &opzioni)
+        let piano = PianoRiproiezione::nuovo_con_policy(sorgente, &target, &opzioni, policy)
             .map_err(|error| PlenoraError::from(error).con_contesto(op))?;
         Ok(Self { piano, griglie })
+    }
+
+    /// Stesso campo per analisi ed esecuzione: le policy dichiarano una
+    /// garanzia conservativa di colonna, anche per batch vuoti o tutti null.
+    pub(crate) fn campo_riproiettato(
+        &self,
+        ingresso: &Field,
+        dimensions: GeometryDimensions,
+        encoding: Option<GeometryEncoding>,
+    ) -> Result<Field, PlenoraError> {
+        let campo = campo_riproiettato(ingresso, self.target(), dimensions, encoding)?;
+        let mut metadata = campo.metadata().clone();
+        let policy = self.piano.policy();
+        if policy.clamp_web_mercator {
+            metadata.insert(
+                plenora_core::contract::geometry_metadata_policy::REPROJECTION_CLAMP_KEY.to_owned(),
+                "latitude_85.06_degrees;original_position_not_guaranteed".to_owned(),
+            );
+        }
+        if policy.estrapola_trasformazioni {
+            metadata.insert(
+                plenora_core::contract::geometry_metadata_policy::REPROJECTION_EXTRAPOLATION_KEY
+                    .to_owned(),
+                "parametric_only;accuracy_not_guaranteed_outside_area".to_owned(),
+            );
+        }
+        Ok(campo.with_metadata(metadata))
     }
 
     /// Il piano dei percorsi.
@@ -799,7 +845,7 @@ pub fn reproject_batches(
             PlenoraError::Crs(format!("{OP}: precisione del CRS d'arrivo non definita"))
         })?;
     let riproiettore = params.riproiettore()?;
-    let uscita_campo = campo_riproiettato(campo, target, dimensioni, chiavi.encoding)?;
+    let uscita_campo = params.campo_riproiettato(campo, dimensioni, chiavi.encoding)?;
     let mut fields: Vec<Field> = schema
         .fields()
         .iter()

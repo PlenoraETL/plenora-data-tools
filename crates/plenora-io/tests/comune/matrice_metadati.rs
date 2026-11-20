@@ -975,6 +975,14 @@ fn merge_rejection(key: &str, site: Site, mode: usize, ext: &str) -> Rejection {
     if let Some(category) = invalid_probe(key, site, mode) {
         return Some(category);
     }
+    if mode == 2
+        && matches!(
+            key,
+            policy::REPROJECTION_CLAMP_KEY | policy::REPROJECTION_EXTRAPOLATION_KEY
+        )
+    {
+        return Some(Schema);
+    }
     match (key, site) {
         (
             "ARROW:extension:name"
