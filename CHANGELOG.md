@@ -30,6 +30,14 @@ la cui versione non ha qui una voce datata.
   Il test rifiuta cicli privi di sonda e identificatori duplicati. Le misure
   dei cicli restano distinte dalle primitive: non certificano ancora il
   lavoro interno delle dipendenze, dei costruttori e dei distruttori.
+- Regola di qualifica dell'interruzione secondo l'opzione A del 20/11:
+  checkpoint condiviso o limite statico per i cicli espliciti del repository;
+  lavoro interno di librerie esterne, iteratori standard, macro di terzi e
+  distruttori come [limite dichiarato](docs/limiti.md#interruzione-cooperativa-e-lavoro-esterno),
+  con elenco delle chiamate opache censite. Il censimento conserva il
+  sorgente dei cicli, tratta le `const fn` come eseguibili a runtime e
+  registra i limiti locali degli intervalli letterali. La dimostrazione
+  composta dei maggioranti per tutte le API resta da completare.
 
 ## [6.1.0] - 2026-11-19
 

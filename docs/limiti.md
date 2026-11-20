@@ -16,6 +16,53 @@ stanno nella sua guida:
 | riproiezione | [`riproiezione.md`, «Limiti dichiarati della riproiezione»](riproiezione.md#limiti-dichiarati-della-riproiezione) |
 | operazioni topologiche | [`topologia.md`, «Differenze da GEOS»](topologia.md#differenze-da-geos) |
 
+## Interruzione cooperativa e lavoro esterno
+
+**Regola (decisione del titolare del 20 novembre 2026, opzione A).** La
+qualifica dell'interruzione dentro le chiamate richiede un checkpoint
+condiviso o un limite statico dimostrato per ogni ciclo esplicito del nostro
+codice geo e pipeline. Il censimento deve registrare la giustificazione e
+rifiutare nuovi cicli scoperti; il registro delle API deve comporre questi
+limiti in un maggiorante fra checkpoint nelle unita' del contatore.
+Una sonda `cfg(test)` conta il lavoro, ma non interrompe la produzione.
+Un massimo osservato sul corpus non dimostra un maggiorante universale.
+
+**Ambito e limite dichiarato.** Il lavoro interno alle librerie esterne,
+agli iteratori della libreria standard, alle espansioni di macro di terzi
+e ai distruttori non ha un limite dimostrato fra checkpoint. Una chiamata
+esterna puo' continuare dopo l'annullamento o la scadenza fino al ritorno
+al controllo cooperativo. Anche la distruzione degli oggetti su errore
+puo' proseguire dopo il controllo che ha osservato l'interruzione. Non e'
+promessa una latenza wall-clock, ne' un tempo massimo di ritorno dall'API.
+Il limite non esenta i cicli espliciti delle nostre closure, dei nostri
+callback, delle `const fn` chiamabili a runtime o delle nostre macro.
+Nemmeno una chiamata a un altro crate del workspace diventa per questo
+una libreria esterna.
+
+Il [registro AST](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-cycles.json)
+localizza per file, funzione e posizione le seguenti chiamate opache
+potenzialmente lunghe. La classificazione e' sintattica: un metodo
+omonimo puo' essere nostro o scalare; il suo nome non prova il costo.
+
+| Famiglia | Chiamate individuate e lavoro escluso dalla dimostrazione |
+| --- | --- |
+| Iteratori | `map`, `flat_map`, `flatten`, `filter`, `filter_map`, `find`, `find_map`, `position`, `any`, `all`, `fold`, `try_fold`, `for_each`, `try_for_each`, `collect`, `sum`, `count`: avanzamento e consumo interni; i cicli espliciti delle closure restano nel censimento |
+| Collezioni | `extend`, `retain`, `sort`, `sort_by`, `sort_unstable`, `sort_unstable_by`, `clone`, `to_vec`, `resize`, `truncate`, `clear`: scansioni, copie, ordinamenti, allocazioni e rilasci interni |
+| Geometrie | `Polygon::new`: chiusura degli anelli, compresi tutti i buchi, senza callback di interruzione |
+| Calcolo numerico | `inverse`, `direct` di GeographicLib; `sqrt`, `pow`, `modpow` quando risolti a librerie numeriche; aritmetica di `num-bigint`, anche attraverso operatori: lavoro interno non contato dai soli resti del gcd |
+| Parallelismo | `par_iter`, `into_par_iter` e consumo degli iteratori Rayon: scheduling e lavoro della dipendenza, senza esentare i corpi del repository |
+| Macro | Record `macro` con path e token: nessuna attribuzione automatica di costo costante; il censimento non espande il corpo. Solo le macro di terzi rientrano nel limite dichiarato |
+| Distruttori | Rilascio di batch, stringhe, grafi e geometrie, anche sui percorsi d'errore; i drop impliciti non sono chiamate risolte dall'AST |
+
+**Stato della prova e rientro.** Il registro conserva ora anche il sorgente
+dei cicli: una rimozione di checkpoint a parita' di posizione invalida la
+fixture. Per gli intervalli letterali registra un limite delle entrate nel
+corpo (`literal_iteration_bound`), che non include i cicli annidati o le
+funzioni chiamate. Questi controlli non costituiscono ancora la prova
+composta richiesta per tutti i cicli e tutte le API. Il limite sul lavoro
+esterno cade solo sostituendo le chiamate opache con percorsi cooperativi
+qualificati o provandone il costo al pin adottato, inclusi i rilasci.
+
 ## Ambito dell'adozione dei contratti
 
 **Regola.** Public Catalogs 2.0 distingue obiettivo e disponibilita; Runtime

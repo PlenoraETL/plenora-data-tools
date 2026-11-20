@@ -70,6 +70,37 @@ fn test_only(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Limite delle entrate nel corpo, non del lavoro dei suoi cicli annidati.
+/// Solo estremi letterali: nessuna deduzione da nomi, misure o tipi esterni.
+fn literal_range_bound(expression: &syn::Expr) -> Option<u128> {
+    let syn::Expr::Range(range) = expression else {
+        return None;
+    };
+    let value = |expression: &syn::Expr| {
+        let syn::Expr::Lit(literal) = expression else {
+            return None;
+        };
+        let syn::Lit::Int(integer) = &literal.lit else {
+            return None;
+        };
+        let value = integer.base10_parse::<u128>().ok()?;
+        // Senza risoluzione dei tipi, 0..=127 e' rappresentabile in ogni
+        // intero Rust. Oltre, un allow(overflowing_literals) potrebbe
+        // troncare anche un letterale senza suffisso per inferenza.
+        (value <= i8::MAX as u128).then_some(value)
+    };
+    let start = value(range.start.as_deref()?)?;
+    let end = value(range.end.as_deref()?)?;
+    if start > end {
+        return Some(0);
+    }
+    let difference = end.checked_sub(start)?;
+    match range.limits {
+        syn::RangeLimits::HalfOpen(_) => Some(difference),
+        syn::RangeLimits::Closed(_) => difference.checked_add(1),
+    }
+}
+
 struct Census {
     root: PathBuf,
     file: PathBuf,
@@ -117,6 +148,9 @@ impl Census {
             "line": start.line,
             "column": start.column,
             "counter": counter,
+            // Conserva anche condizioni, iteratore e corpo: togliere uno step
+            // senza cambiare le posizioni deve comunque invalidare il registro.
+            "source": body.map(|_| span.source_text().expect("sorgente del ciclo AST").replace("\r\n", "\n")),
             "body": body.map(|block| {
                 let point = block.brace_token.span.open().end();
                 [point.line, point.column]
@@ -146,8 +180,10 @@ impl<'ast> Visit<'ast> for Census {
             return;
         }
         let previous = std::mem::replace(&mut self.function, format!("trait::{}", node.sig.ident));
+        let constant = std::mem::replace(&mut self.constant, false);
         visit::visit_trait_item_fn(self, node);
         self.function = previous;
+        self.constant = constant;
     }
     fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
         if test_only(&node.attrs) {
@@ -224,7 +260,9 @@ impl<'ast> Visit<'ast> for Census {
             return;
         }
         let previous = std::mem::replace(&mut self.function, node.sig.ident.to_string());
-        let constant = std::mem::replace(&mut self.constant, node.sig.constness.is_some());
+        // Una const fn puo' essere chiamata anche a runtime. Solo gli
+        // inizializzatori const/static sono esclusi dall'esecuzione runtime.
+        let constant = std::mem::replace(&mut self.constant, false);
         visit::visit_item_fn(self, node);
         self.function = previous;
         self.constant = constant;
@@ -235,7 +273,7 @@ impl<'ast> Visit<'ast> for Census {
             return;
         }
         let previous = std::mem::replace(&mut self.function, node.sig.ident.to_string());
-        let constant = std::mem::replace(&mut self.constant, node.sig.constness.is_some());
+        let constant = std::mem::replace(&mut self.constant, false);
         visit::visit_impl_item_fn(self, node);
         self.function = previous;
         self.constant = constant;
@@ -243,6 +281,10 @@ impl<'ast> Visit<'ast> for Census {
 
     fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
         self.record("for", node.span(), Some(&node.body));
+        self.records.last_mut().unwrap()["literal_iteration_bound"] =
+            literal_range_bound(&node.expr)
+                .map(|bound| bound.to_string())
+                .into();
         visit::visit_expr_for_loop(self, node);
     }
     fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
@@ -284,6 +326,15 @@ impl<'ast> Visit<'ast> for Census {
             "resize",
             "truncate",
             "clear",
+            "inverse",
+            "direct",
+            "par_iter",
+            "into_par_iter",
+            "to_wkb",
+            "to_wkt",
+            "sqrt",
+            "pow",
+            "modpow",
         ]
         .contains(&name.as_str())
         {
@@ -443,4 +494,66 @@ fn checkpoint620_ast_keeps_module_macros_and_default_methods() {
     assert_eq!(census.records[4]["constant"], true);
     assert_eq!(census.records[5]["constant"], false);
     assert_eq!(census.records[1]["path"], "generate");
+}
+
+/// Il registro protegge il codice del ciclo, non solo la sua posizione.
+#[test]
+fn checkpoint620_ast_keeps_runtime_const_functions_and_loop_source() {
+    let scan = |source: &str| {
+        let mut census = Census {
+            root: PathBuf::from("root"),
+            file: PathBuf::from("root/fixture.rs"),
+            directory: PathBuf::from("root"),
+            function: String::new(),
+            constant: false,
+            records: Vec::new(),
+            counters: std::collections::BTreeSet::new(),
+        };
+        census.visit_file(&syn::parse_file(source).unwrap());
+        census.records
+    };
+    let before = scan("const fn f() { for x in 0..4 { step(); } }");
+    let after = scan("const fn f() { for x in 0..4 { skip(); } }");
+    assert_eq!(before[0]["constant"], false);
+    assert_eq!(before[0]["line"], after[0]["line"]);
+    assert_eq!(before[0]["column"], after[0]["column"]);
+    assert_eq!(before[0]["body"], after[0]["body"]);
+    assert_eq!(before[0]["source"], "for x in 0..4 { step(); }");
+    assert_ne!(before, after);
+    let implementation = scan("impl T { const fn f() { loop { break; } } }");
+    assert_eq!(implementation[0]["constant"], false);
+    let nested_trait = scan(
+        "static F: fn() = { trait T { fn f() { loop { break; } } } struct S; impl T for S {} S::f };",
+    );
+    assert_eq!(nested_trait[0]["constant"], false);
+    assert_eq!(
+        scan("fn f() { for x in 0..4 {\r\n step();\r\n} }"),
+        scan("fn f() { for x in 0..4 {\n step();\n} }")
+    );
+}
+
+#[test]
+fn checkpoint620_literal_bounds_are_structural() {
+    for (source, expected) in [
+        ("0..40", Some(40)),
+        ("1..=40", Some(40)),
+        ("4..4", Some(0)),
+        ("4..=4", Some(1)),
+        ("5..4", Some(0)),
+        ("5..=4", Some(0)),
+        ("0..0x10", Some(16)),
+        ("0..limit", None),
+        ("0..compute()", None),
+        ("0..", None),
+        ("..40", None),
+        ("items.iter()", None),
+        ("256u8..255u8", None),
+        ("256..255", None),
+        ("0..=340282366920938463463374607431768211455u128", None),
+    ] {
+        assert_eq!(
+            literal_range_bound(&syn::parse_str(source).unwrap()),
+            expected
+        );
+    }
 }

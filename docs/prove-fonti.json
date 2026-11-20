@@ -2271,6 +2271,14 @@
       "il_rifiuto_di_un_ingresso_invalido_non_pubblica_il_testo_della_dipendenza",
       "le_geometrie_valide_con_coordinate_minuscole_passano"
     ],
+    "crates/plenora-kernels-geo/tests/checkpoint620_census.rs": [
+      "checkpoint620_census",
+      "checkpoint620_counter_requires_first_test_statement",
+      "checkpoint620_ast_finds_nested_and_conditional_loops",
+      "checkpoint620_ast_keeps_module_macros_and_default_methods",
+      "checkpoint620_ast_keeps_runtime_const_functions_and_loop_source",
+      "checkpoint620_literal_bounds_are_structural"
+    ],
     "crates/plenora-kernels-geo/tests/concave_scavo.rs": [
       "divergenza_dodici_punti",
       "oracolo_razionale_enumerativo",
@@ -3592,6 +3600,7 @@
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-principale.txt",
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25-diretti.txt",
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25.txt",
+    "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-cycles.json",
     "crates/plenora-kernels-geo/tests/fixtures/checkpoint620.txt",
     "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.json",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/aree.csv",
