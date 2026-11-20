@@ -28,6 +28,9 @@ use spade::Triangulation as _;
 use std::collections::HashMap;
 use thiserror::Error;
 
+pub(crate) mod delaunay_limited;
+pub use delaunay_limited::{delaunay_points_with_limits, DelaunayBuildError};
+
 /// Errori dei kernel di questo modulo. Nessun messaggio riporta coordinate
 /// o valori delle righe.
 #[derive(Debug, Error)]
@@ -2279,7 +2282,16 @@ mod oracolo_delaunay {
     /// divisione e' esatta e i segni dei predicati sono quelli degli interi).
     fn delaunay_esatta(coppie: &[(f64, f64)], scala: f64) {
         let geometria = multipunto(coppie);
-        let nuova = delaunay(&geometria, u64::MAX, u64::MAX).expect("delaunay");
+        let coordinate: Vec<_> = coppie.iter().map(|&(x, y)| Coord { x, y }).collect();
+        let nuova = delaunay_points_with_limits(
+            &coordinate,
+            u64::MAX,
+            crate::predicates::RelateLimits::default(),
+            None,
+        )
+        .expect("delaunay bounded");
+        let storica = delaunay(&geometria, u64::MAX, u64::MAX).expect("delaunay");
+        assert_eq!(insieme(&nuova), insieme(&storica));
         let vecchia = delaunay_con_geo(&geometria, u64::MAX, u64::MAX).expect("geo");
         assert_eq!(nuova.len(), vecchia.len());
         let punti: Vec<(i128, i128)> = coppie

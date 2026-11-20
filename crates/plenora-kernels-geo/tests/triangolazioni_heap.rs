@@ -2,7 +2,7 @@
 //! Input preesistente escluso; include temporanei delle dipendenze e output.
 //! Misura del picco, non un limite di ammissione o una misura RSS.
 #![deny(clippy::disallowed_methods)]
-use geo::{Geometry, Point};
+use geo::{CoordsIter, Geometry, Point};
 use plenora_kernels_geo::advanced::{voronoi_cells, voronoi_cells_distinct};
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use std::alloc::System;
@@ -92,6 +92,38 @@ fn duplicate_circle_heap_curve() {
         });
         assert!(peak < 32_000_000);
         println!("delaunay side={side}: peak={peak}, final_live=0");
+        let coordinates: Vec<_> = input.coords_iter().collect();
+        let bounded = measure(|| {
+            plenora_kernels_geo::extended_algorithms::delaunay_points_with_limits(
+                &coordinates,
+                8192,
+                plenora_kernels_geo::predicates::RelateLimits::default(),
+                None,
+            )
+            .unwrap()
+        });
+        assert!(bounded < 32_000_000);
+        let rejected = measure(|| {
+            let result = plenora_kernels_geo::extended_algorithms::delaunay_points_with_limits(
+                &coordinates,
+                8192,
+                plenora_kernels_geo::predicates::RelateLimits {
+                    max_reserved_bytes: 1024,
+                    ..Default::default()
+                },
+                None,
+            );
+            assert!(matches!(
+                result,
+                Err(
+                    plenora_kernels_geo::extended_algorithms::DelaunayBuildError::Resource(
+                        plenora_kernels_geo::predicates::PredicateError::ReservationLimit
+                    )
+                )
+            ));
+        });
+        assert!(rejected < 4096);
+        println!("bounded delaunay side={side}: peak={bounded}, rejected={rejected}, final_live=0");
     }
     AllocationRegistry::disable_tracking();
 }

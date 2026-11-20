@@ -1086,7 +1086,7 @@ punti casuali UTM al centimetro; prima -> dopo): `delaunay` 10k 27,5 ->
 28 ms, 100k 1.221 -> 253 ms, 1M 86,5 -> 3,9 s (a 1M il prima è una sola
 esecuzione; `examples/bench_delaunay_voronoi.rs`).
 
-La preparazione 7.0.0 conserva esattamente ordine e bit della baseline
+La preparazione 6.2.0 conserva esattamente ordine e bit della baseline
 6.1.0, anche sui cocircolari: terne di ranghi per le facce Delaunay,
 riuso degli indici della deduplicazione e rilascio anticipato degli
 intermedi. `advanced::voronoi_cells_distinct` restituisce le celle una
@@ -1104,7 +1104,25 @@ Le celle prese in prestito sono escluse, cosi' come la costruzione gia'
 terminata e la serializzazione successiva. Fallimento atomico, nessuna
 uscita parziale. I bit, gli anelli e l'ordine della copia sono invariati.
 
-I percorsi di costruzione non offrono ancora un budget globale di memoria o
+`extended_algorithms::delaunay_points_with_limits` costruisce triangoli da
+una sequenza XY con un unico `RelateLimits`: deduplicazione, confronti,
+scansioni, ranghi, verifica esatta delle facce e copie di output sono
+contati. Le ricevute dei buffer trasferiti restano vive fino alla consegna;
+il conteggio e' conservativo, non RSS. `max_nodes` conta i siti distinti e
+quattro coordinate per triangolo. Gli ordinamenti conservano la stessa
+chiave totale e gli stessi bit della baseline, compreso il riordino di
+`Triangle::new` per i triangoli quasi collineari. La API accetta coordinate,
+non geometrie con anelli da validare; `delaunay` resta invariata.
+
+Spade 2.15.1 e' esplicitamente esterno (opzione A): checkpoint prima e dopo
+`bulk_load`, nessun controllo al suo interno. Il vettore passato a Spade
+viene prenotato, ma grafo e scratch privati sono esclusi. Non si promettono
+un tetto fisico di memoria o una latenza massima di interruzione. Le prove
+dell'heap includono Spade sul corpus dichiarato, senza trasformare la
+misura in un maggiorante d'ammissione. L'overhead del contesto e lo stack
+non rientrano nelle capacita' contate.
+
+I percorsi storici di costruzione non offrono ancora un budget globale di memoria o
 checkpoint cooperativi: il caricamento Spade, il ritaglio e la validazione
 hanno temporanei interni non governati. Le prove dell'heap misurano il
 picco richiesto all'allocatore, non un tetto di ammissione n? RSS. Non ?

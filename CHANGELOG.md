@@ -10,9 +10,16 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [7.0.0] - non rilasciata
+## [6.2.0] - non rilasciata
 
 ### Aggiunte
+
+- API Rust `delaunay_points_with_limits`: costruzione da coordinate XY
+  con contesto comune, prenotazioni locali e checkpoint GOP-028, fino
+  ai poligoni di output. Deduplicazione, ordine e bit seguono la baseline.
+  Spade resta una chiamata esterna indivisibile: il suo lavoro e le sue
+  allocazioni private sono esclusi dai limiti contabili (opzione A).
+  Non estende il budget al clipping o alla costruzione Voronoi.
 
 - API Rust `voronoi_cells_distinct`: celle condivise con indice per input,
   visita senza copie e adapter per materializzare l'uscita 1:1.
@@ -26,8 +33,8 @@ la cui versione non ha qui una voce datata.
 - Triangolazioni: deduplicazione con riuso degli indici, facce Delaunay
   rappresentate da terne di ranghi, rilascio anticipato del grafo e rimozione
   di copie delle celle Voronoi. Ordine e bit preservati contro la baseline
-  6.1.0, inclusi duplicati e siti cocircolari. Queste API non aggiungono
-  un limite globale di memoria o interruzioni cooperative.
+  6.1.0, inclusi duplicati e siti cocircolari. Le API storiche mantengono
+  i propri limiti e il comportamento di interruzione.
 
 ## [6.1.0] - 2026-11-19
 

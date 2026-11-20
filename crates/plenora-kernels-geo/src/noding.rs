@@ -1091,6 +1091,19 @@ mod gop028 {
     fn cases() -> Vec<Case> {
         vec![
             case!(
+                "extended_algorithms/delaunay_limited.rs",
+                delaunay_points_with_limits,
+                |f, d, t| crate::extended_algorithms::delaunay_points_with_limits(
+                    &f.polygon.exterior().0,
+                    10,
+                    limits(d),
+                    Some(t),
+                ),
+                crate::extended_algorithms::DelaunayBuildError::Resource(
+                    PredicateError::DeadlineExceeded
+                )
+            ),
+            case!(
                 "advanced.rs",
                 materialize_with_limits,
                 |f, d, t| {

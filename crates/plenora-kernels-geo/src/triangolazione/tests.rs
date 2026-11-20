@@ -143,7 +143,25 @@ fn exact_voronoi_delaunay_duality_square_and_center() {
     expected.sort_unstable();
     assert_eq!(vertices, expected);
     let input = Geometry::MultiPoint(geo::MultiPoint::from(points.to_vec()));
-    let triangles = crate::extended_algorithms::delaunay(&input, 5, 4).unwrap();
+    let historic = crate::extended_algorithms::delaunay(&input, 5, 4).unwrap();
+    let coordinates: Vec<_> = points.iter().map(|&(x, y)| Coord { x, y }).collect();
+    let triangles = crate::extended_algorithms::delaunay_points_with_limits(
+        &coordinates,
+        4,
+        crate::predicates::RelateLimits::default(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        triangles
+            .iter()
+            .map(|p| bits(&p.exterior().0))
+            .collect::<Vec<_>>(),
+        historic
+            .iter()
+            .map(|p| bits(&p.exterior().0))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(triangles.len(), 4);
     for (x, y) in centers {
         // Distanze quadrate intere esatte: esattamente tre siti incidenti,

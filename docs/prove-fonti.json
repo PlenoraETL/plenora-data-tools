@@ -1269,6 +1269,12 @@
       "coordinate_troppo_grandi_per_la_precisione_si_rifiutano",
       "dominio_utm_realistico_non_si_rifiuta"
     ],
+    "crates/plenora-kernels-geo/src/advanced/materialization_tests.rs": [
+      "materialization_default_limits_scale_and_bits",
+      "materialization_exact_budget_boundaries",
+      "materialization_cancel_and_timeout_after_real_work",
+      "materialization_empty_checks_interruption"
+    ],
     "crates/plenora-kernels-geo/src/analysis.rs": [
       "distances_preserve_null_rows_and_reject_unbounded_work",
       "invalid_topology_is_rejected_on_both_sides_before_distance_work",
@@ -2446,6 +2452,9 @@
       "overlay_e_copertura_su_sovrapposizioni_si_fermano_al_margine",
       "buffer_a_zig_zag_si_ferma_al_margine",
       "i_risultati_hanno_capacita_esatta_e_il_conto_e_al_byte"
+    ],
+    "crates/plenora-kernels-geo/tests/materialization_heap.rs": [
+      "bounded_materialization_heap_curve"
     ],
     "crates/plenora-kernels-geo/tests/publication_regressions.rs": [
       "p3b_fraction_two_hundred_unions_and_eleven_completion_faces",

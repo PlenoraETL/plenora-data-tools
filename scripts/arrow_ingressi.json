@@ -9560,6 +9560,18 @@
       "reason": "Adapter da celle Voronoi Rust gia costruite; nessun ingresso Arrow.",
       "signature": "pub fn materialize_with_limits( &self, limits: crate::predicates::RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<Geometry<f64>>, crate::predicates::PredicateError>",
       "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/extended_algorithms/delaunay_limited.rs::delaunay_points_with_limits": {
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate XY Rust e contesto di lavoro; nessun ingresso di buffer o celle Arrow.",
+      "signature": "pub fn delaunay_points_with_limits( coordinates: &[Coord<f64>], max_triangles: u64, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<Polygon<f64>>, DelaunayBuildError>",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/triangolazione/bounded.rs::build": {
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate XY Rust e contesto di lavoro; nessun ingresso di buffer o celle Arrow.",
+      "signature": "pub fn build( coordinates: &[Coord<f64>], work: &mut Work<'_>, ) -> Result<Triangolazione, DelaunayBuildError>",
+      "arrow_arguments": []
     }
   },
   "rust_variants": {

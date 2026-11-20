@@ -33,6 +33,8 @@
 //! ingresso, stessa triangolazione. L'ordine dei vertici che la variante
 //! stabile conserverebbe qui si ricostruisce comunque con il rango.
 
+pub mod bounded;
+
 use geo::{Coord, GeoNum, Kernel, Orientation};
 use spade::{DelaunayTriangulation, HasPosition, InsertionError, Point2, Triangulation};
 
