@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
+#[path = "checkpoint620_census/rules.rs"]
+mod rules;
 #[path = "checkpoint620_census/static_proofs.rs"]
 mod static_proofs;
 
@@ -288,6 +290,7 @@ fn locally_covered(record: &serde_json::Value) -> bool {
         || !record["literal_iteration_bound"].is_null()
         || !record["array_iteration_bound"].is_null()
         || !record["registered_iteration_bound"].is_null()
+        || !record["structural_proof"].is_null()
 }
 
 fn verify_closed_modules(records: &[serde_json::Value]) {
@@ -339,6 +342,7 @@ struct Census {
     directory: PathBuf,
     function: String,
     constant: bool,
+    structural_proofs: rules::Proofs,
     records: Vec<serde_json::Value>,
     counters: std::collections::BTreeSet<String>,
 }
@@ -349,7 +353,9 @@ impl Census {
         let previous_directory = std::mem::replace(&mut self.directory, directory.to_owned());
         let text = std::fs::read_to_string(path).expect("sorgente censito");
         let ast = syn::parse_file(&text).expect("AST Rust valido");
+        let proofs = std::mem::take(&mut self.structural_proofs);
         self.visit_file(&ast);
+        self.structural_proofs = proofs;
         self.file = previous_file;
         self.directory = previous_directory;
     }
@@ -496,7 +502,12 @@ impl<'ast> Visit<'ast> for Census {
         // Una const fn puo' essere chiamata anche a runtime. Solo gli
         // inizializzatori const/static sono esclusi dall'esecuzione runtime.
         let constant = std::mem::replace(&mut self.constant, false);
+        let proofs = std::mem::replace(
+            &mut self.structural_proofs,
+            rules::function(&node.sig, &node.block),
+        );
         visit::visit_item_fn(self, node);
+        self.structural_proofs = proofs;
         self.function = previous;
         self.constant = constant;
     }
@@ -507,13 +518,22 @@ impl<'ast> Visit<'ast> for Census {
         }
         let previous = std::mem::replace(&mut self.function, node.sig.ident.to_string());
         let constant = std::mem::replace(&mut self.constant, false);
+        let proofs = std::mem::replace(
+            &mut self.structural_proofs,
+            rules::function(&node.sig, &node.block),
+        );
         visit::visit_impl_item_fn(self, node);
+        self.structural_proofs = proofs;
         self.function = previous;
         self.constant = constant;
     }
 
     fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
         self.record("for", node.span(), Some(&node.body));
+        let start = node.span().start();
+        if let Some(proof) = self.structural_proofs.get(&(start.line, start.column)) {
+            self.records.last_mut().unwrap()["structural_proof"] = proof.clone();
+        }
         self.records.last_mut().unwrap()["literal_iteration_bound"] =
             literal_range_bound(&node.expr)
                 .map(|bound| bound.to_string())
@@ -622,6 +642,7 @@ fn checkpoint620_census() {
         directory: PathBuf::new(),
         function: String::new(),
         constant: false,
+        structural_proofs: rules::Proofs::new(),
         records: Vec::new(),
         counters: std::collections::BTreeSet::new(),
     };
@@ -635,15 +656,21 @@ fn checkpoint620_census() {
     let pending: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("fixtures/checkpoint620-open-cycles.json"))
             .expect("debito esplicito dei cicli, non rigenerato dal censimento");
+    std::fs::write(
+        root.join("target/checkpoint620-open-candidate.json"),
+        serde_json::to_string_pretty(&uncovered_cycles(&census.records)).unwrap() + "\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("target/checkpoint620-candidate.json"), &actual).unwrap();
     verify_open_cycles(&census.records, &pending);
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint620-cycles.json");
     if std::env::var("PLENORA_RIGENERA_CICLI").as_deref() == Ok("1") {
         std::fs::write(&fixture, &actual).unwrap();
     }
-    assert_eq!(
-        actual,
-        std::fs::read_to_string(fixture).expect("registro dei cicli")
+    assert!(
+        actual == std::fs::read_to_string(fixture).expect("registro dei cicli"),
+        "censimento diverso dal registro: rigenerare e revisionare il diff"
     );
 }
 
@@ -675,6 +702,7 @@ fn checkpoint620_ast_finds_nested_and_conditional_loops() {
         directory: PathBuf::from("root"),
         function: String::new(),
         constant: false,
+        structural_proofs: rules::Proofs::new(),
         records: Vec::new(),
         counters: std::collections::BTreeSet::new(),
     };
@@ -709,6 +737,7 @@ fn checkpoint620_ast_keeps_module_macros_and_default_methods() {
         directory: PathBuf::from("root"),
         function: String::new(),
         constant: false,
+        structural_proofs: rules::Proofs::new(),
         records: Vec::new(),
         counters: std::collections::BTreeSet::new(),
     };
@@ -748,6 +777,7 @@ fn checkpoint620_ast_keeps_runtime_const_functions_and_loop_source() {
             directory: PathBuf::from("root"),
             function: String::new(),
             constant: false,
+            structural_proofs: rules::Proofs::new(),
             records: Vec::new(),
             counters: std::collections::BTreeSet::new(),
         };

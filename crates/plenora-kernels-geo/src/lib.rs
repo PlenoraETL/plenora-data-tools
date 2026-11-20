@@ -635,7 +635,7 @@ impl<'a> WkbCursor<'a> {
 }
 
 pub(crate) fn checked_count(
-    value: u32,
+    value: ::core::primitive::u32,
     remaining: usize,
     minimum_item_bytes: usize,
 ) -> Result<usize, PlenoraError> {

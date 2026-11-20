@@ -170,16 +170,6 @@
     "source": "for (posizione, carattere) in testo[apertura..].char_indices() {\n        match carattere {\n            '(' => profondita += 1,\n            ')' => {\n                profondita = profondita.saturating_sub(1);\n                if profondita == 0 {\n                    let resto = &testo[apertura + posizione + 1..];\n                    return !resto.chars().all(spazio_wkt);\n                }\n            }\n            _ => {}\n        }\n    }"
   },
   {
-    "file": "crates/plenora-kernels-geo/src/decoded_size.rs",
-    "function": "decoded_size_geometry",
-    "source": "for ring_index in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                cursor.skip(count * stride)?;\n                *total = total.saturating_add(COORD_BYTES.saturating_mul(count as u64));\n                // Anelli interni: header `LineString` nel buffer degli\n                // interni (l'esterno e' inline nel `Polygon`).\n                if ring_index > 0 {\n                    *total = total.saturating_add(LINESTRING_BYTES);\n                }\n            }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/decoded_size.rs",
-    "function": "decoded_size_geometry",
-    "source": "for _ in 0..children {\n                let child_type =\n                    decoded_size_geometry(cursor, depth + 1, max_depth, components, total)?;\n                // Controllo per figlio, immediatamente dopo la sua\n                // camminata: stesso ordine del decoder.\n                let compatible = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                // Slot del figlio nel buffer del contenitore (inline).\n                let slot = match geometry_type {\n                    4 => POINT_BYTES,\n                    5 => LINESTRING_BYTES,\n                    6 => POLYGON_BYTES,\n                    _ => GEOMETRY_BYTES,\n                };\n                *total = total.saturating_add(slot);\n            }"
-  },
-  {
     "file": "crates/plenora-kernels-geo/src/equality.rs",
     "function": "cmp_coords",
     "source": "for (a, b) in left.iter().zip(right.iter()) {\n        let ordering = cmp_coord(a, b);\n        if ordering != Ordering::Equal {\n            return ordering;\n        }\n    }"
@@ -347,11 +337,6 @@
   {
     "file": "crates/plenora-kernels-geo/src/extensions2.rs",
     "function": "subdivide_polygon",
-    "source": "for half in halves {\n        let meta = MultiPolygon::new(vec![half.to_polygon()]);\n        let intersection = protetto(|| pezzo.intersection(&meta))?;\n        for part in intersection.0 {\n            // Scarti di area nulla lungo la linea di taglio.\n            if part.coords_count() == 0 || protetto(|| part.unsigned_area())? == 0.0 {\n                continue;\n            }\n            subdivide_polygon(&part, max_vertices, depth + 1, precision, parts)?;\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/extensions2.rs",
-    "function": "subdivide_polygon",
     "source": "for part in intersection.0 {\n            // Scarti di area nulla lungo la linea di taglio.\n            if part.coords_count() == 0 || protetto(|| part.unsigned_area())? == 0.0 {\n                continue;\n            }\n            subdivide_polygon(&part, max_vertices, depth + 1, precision, parts)?;\n        }"
   },
   {
@@ -453,11 +438,6 @@
     "file": "crates/plenora-kernels-geo/src/geodetica.rs",
     "function": "verifica_topologia_geodetica",
     "source": "for vicino in albero.locate_in_envelope_intersecting(&riquadro(lato)) {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodetica.rs::verifica_topologia_geodetica:4\");\n            let j = vicino.data;\n            if j <= i {\n                continue;\n            }\n            let altro = &lati[j];\n            let comuni = [\n                (lato.da == altro.da, lato.a, altro.a),\n                (lato.da == altro.a, lato.a, altro.da),\n                (lato.a == altro.da, lato.da, altro.a),\n                (lato.a == altro.a, lato.da, altro.da),\n            ];\n            let condivisi: Vec<(Coord<f64>, Coord<f64>)> = comuni\n                .iter()\n                .filter(|(comune, _, _)| *comune)\n                .map(|&(_, mio, suo)| (mio, suo))\n                .collect();\n            match condivisi.as_slice() {\n                [] => {\n                    let distanza = Euclidean.distance(&segmento(lato), &segmento(altro));\n                    if !oltre(distanza, lato.scarto + altro.scarto + MARGINE_GRADI) {\n                        return Err(VICINI);\n                    }\n                }\n                [(mio, suo)] => {\n                    let mio_dall_altro =\n                        Euclidean.distance(&geo::Point::from(*mio), &segmento(altro));\n                    let suo_dal_mio = Euclidean.distance(&geo::Point::from(*suo), &segmento(lato));\n                    if !(oltre(mio_dall_altro, altro.scarto + MARGINE_GRADI)\n                        && oltre(suo_dal_mio, lato.scarto + MARGINE_GRADI))\n                    {\n                        return Err(VICINI);\n                    }\n                }\n                _ => return Err(VICINI),\n            }\n        }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
-    "function": "new",
-    "source": "while b.value.sign() != Sign::NoSign {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/exact.rs::new:1\");\n            crate::noding::check_interruption(\n                a.lease.budget().deadline,\n                None,\n                PredicateError::DeadlineExceeded,\n                PredicateError::Cancelled,\n            )?;\n            let r = a.rem(&b)?;\n            a = b;\n            b = r;\n        }"
   },
   {
     "file": "crates/plenora-kernels-geo/src/operations/rdp.rs",
@@ -1615,41 +1595,6 @@
     "source": "for (cells, contract) in &colonne {\n            if !cells.is_null(row) {\n                verify_value(*contract, cells.value(row), u64::MAX, 33, ErrorPhase::Read)?;\n            }\n        }"
   },
   {
-    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
-    "function": "decode_geometry",
-    "source": "for _ in 0..count {\n                let (x, y) = cursor.read_coordinate(little_endian, stride)?;\n                coordinates.push((x, y));\n            }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
-    "function": "decode_geometry",
-    "source": "for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut ring = Vec::with_capacity(count);\n                ring.push(first);\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                    ring.push(last);\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n                // Il primo anello e' l'esterno, i successivi gli interni.\n                // Mai `exterior.take()` nel discriminante: con un secondo\n                // anello scarterebbe il primo, e un oracolo che si ferma ai\n                // poligoni a un anello solo non lo vedrebbe.\n                if exterior.is_none() {\n                    exterior = Some(LineString::from(ring));\n                } else {\n                    interiors.push(LineString::from(ring));\n                }\n            }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
-    "function": "decode_geometry",
-    "source": "for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                    ring.push(last);\n                }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
-    "function": "decode_geometry",
-    "source": "for _ in 0..children {\n                let child = decode_geometry(cursor, depth + 1, max_depth, components)?;\n                // Controllo per figlio, immediatamente dopo il suo decode:\n                // stesso ordine del validatore strutturale.\n                let compatible = match geometry_type {\n                    4 => child.0 == 1,\n                    5 => child.0 == 2,\n                    6 => child.0 == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                decoded.push(child);\n            }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
-    "function": "decode_geometry",
-    "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Point(point) => points.push(point),\n                            _ => return Err(incompatible()),\n                        }\n                    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
-    "function": "decode_geometry",
-    "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::LineString(line) => lines.push(line),\n                            _ => return Err(incompatible()),\n                        }\n                    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
-    "function": "decode_geometry",
-    "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Polygon(polygon) => polygons.push(polygon),\n                            _ => return Err(incompatible()),\n                        }\n                    }"
-  },
-  {
     "file": "crates/plenora-kernels-geo/src/lib.rs",
     "function": "anello_con_punta",
     "source": "for &punto in &anello.0 {\n        if !punto.x.is_finite() || !punto.y.is_finite() {\n            return false;\n        }\n        if vertici.last() != Some(&punto) {\n            vertici.push(punto);\n        }\n    }"
@@ -1658,26 +1603,6 @@
     "file": "crates/plenora-kernels-geo/src/lib.rs",
     "function": "anello_con_punta",
     "source": "while vertici.len() > 1 && vertici.first() == vertici.last() {\n        vertici.pop();\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/lib.rs",
-    "function": "validate_wkb_geometry_with_dimensions",
-    "source": "for _ in 0..count {\n                cursor.read_coordinate(little_endian, stride)?;\n            }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/lib.rs",
-    "function": "validate_wkb_geometry_with_dimensions",
-    "source": "for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n            }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/lib.rs",
-    "function": "validate_wkb_geometry_with_dimensions",
-    "source": "for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/lib.rs",
-    "function": "validate_wkb_geometry_with_dimensions",
-    "source": "for _ in 0..children {\n                let child_type = validate_wkb_geometry_with_dimensions(\n                    cursor,\n                    depth + 1,\n                    max_depth,\n                    components,\n                    expected,\n                    srid_policy,\n                )?;\n                let valid_child = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    7 => true,\n                    _ => {\n                        return Err(invalid_wkb_structure(\"tipo geometria non supportato\"));\n                    }\n                };\n                if !valid_child {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n            }"
   },
   {
     "file": "crates/plenora-kernels-geo/src/lib.rs",

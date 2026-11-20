@@ -113,10 +113,16 @@ pub fn register(root: &Path, records: &mut [serde_json::Value]) {
         serde_json::from_str(include_str!("../fixtures/checkpoint620-static-proofs.json")).unwrap();
     for proof in proofs {
         let file = proof["file"].as_str().unwrap();
-        assert!(
-            guards_match(&std::fs::read_to_string(root.join(file)).unwrap(), &proof),
-            "dipendenze della prova statica modificate: {file}"
-        );
+        for guard in proof["guards"].as_array().unwrap() {
+            let dependency = guard["file"].as_str().unwrap_or(file);
+            assert!(
+                guards_match(
+                    &std::fs::read_to_string(root.join(dependency)).unwrap(),
+                    &serde_json::json!({"guards": [guard]})
+                ),
+                "dipendenze della prova statica modificate: {dependency}"
+            );
+        }
         for cycle in proof["cycles"].as_array().unwrap() {
             let matching: Vec<_> = records
                 .iter_mut()
@@ -152,10 +158,14 @@ fn static_proofs_reject_changed_dependencies_and_comment_copies() {
             .unwrap()
             .parent()
             .unwrap();
-        let source = std::fs::read_to_string(root.join(proof["file"].as_str().unwrap())).unwrap();
-        assert!(guards_match(&source, &proof));
         // Ogni dipendenza e obbligatoria: una copia nel commento non e un item AST.
         for guard in proof["guards"].as_array().unwrap() {
+            let dependency = guard["file"]
+                .as_str()
+                .unwrap_or_else(|| proof["file"].as_str().unwrap());
+            let source = std::fs::read_to_string(root.join(dependency)).unwrap();
+            let proof = serde_json::json!({"guards": [guard]});
+            assert!(guards_match(&source, &proof));
             let source = source.replace("\r\n", "\n");
             let text = guard["source"].as_str().unwrap();
             assert!(source.contains(text));

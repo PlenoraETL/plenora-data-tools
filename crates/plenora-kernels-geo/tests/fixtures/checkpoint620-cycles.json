@@ -932,7 +932,12 @@
     "kind": "for",
     "line": 714,
     "literal_iteration_bound": null,
-    "source": "for valore in [coordinata.x, coordinata.y] {\n            let assoluto = valore.abs();\n            // NaN non passa: nessuno dei due confronti e' vero.\n            let nel_dominio = valore == 0.0 || (MODULO_MINIMO..=MODULO_MASSIMO).contains(&assoluto);\n            if !nel_dominio {\n                return None;\n            }\n            modulo = modulo.max(assoluto);\n        }"
+    "source": "for valore in [coordinata.x, coordinata.y] {\n            let assoluto = valore.abs();\n            // NaN non passa: nessuno dei due confronti e' vero.\n            let nel_dominio = valore == 0.0 || (MODULO_MINIMO..=MODULO_MASSIMO).contains(&assoluto);\n            if !nel_dominio {\n                return None;\n            }\n            modulo = modulo.max(assoluto);\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -1187,7 +1192,12 @@
     "kind": "for",
     "line": 140,
     "literal_iteration_bound": null,
-    "source": "for (name, value) in [(\"x_origin\", parsed.x_origin), (\"y_origin\", parsed.y_origin)] {\n                if let Some(value) = value {\n                    ensure_finite(op, name, value)?;\n                }\n            }"
+    "source": "for (name, value) in [(\"x_origin\", parsed.x_origin), (\"y_origin\", parsed.y_origin)] {\n                if let Some(value) = value {\n                    ensure_finite(op, name, value)?;\n                }\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -1204,7 +1214,12 @@
     "kind": "for",
     "line": 149,
     "literal_iteration_bound": null,
-    "source": "for (name, value) in [(\"x_origin\", parsed.x_origin), (\"y_origin\", parsed.y_origin)] {\n                if let Some(value) = value {\n                    ensure_finite(op, name, value)?;\n                }\n            }"
+    "source": "for (name, value) in [(\"x_origin\", parsed.x_origin), (\"y_origin\", parsed.y_origin)] {\n                if let Some(value) = value {\n                    ensure_finite(op, name, value)?;\n                }\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -1682,7 +1697,12 @@
     "kind": "for",
     "line": 705,
     "literal_iteration_bound": null,
-    "source": "for (name, data_type) in [\n                (RIGHT_INDEX_COLUMN, DataType::UInt64),\n                (DISTANCE_COLUMN, DataType::Float64),\n            ] {\n                ensure_name_free(op, &fields, name)?;\n                fields.push(Field::new(name, data_type, false));\n            }"
+    "source": "for (name, data_type) in [\n                (RIGHT_INDEX_COLUMN, DataType::UInt64),\n                (DISTANCE_COLUMN, DataType::Float64),\n            ] {\n                ensure_name_free(op, &fields, name)?;\n                fields.push(Field::new(name, data_type, false));\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -2081,7 +2101,12 @@
     "literal_iteration_bound": null,
     "registered_iteration_bound": 2,
     "registered_iteration_reason": "sources e un array locale con due elementi. Il prestito mutabile non ne cambia la cardinalita. Due entrate, senza includere il costo delle mappe e del merge.",
-    "source": "for source in &mut sources {\n        source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);\n    }"
+    "source": "for source in &mut sources {\n        source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Tipo array o inizializzatore array nello scope dominante; binding non oscurato. I rami condizionali producono array per valore di uguale lunghezza.",
+      "rule": "R-FIXED-ARRAY"
+    }
   },
   {
     "body": null,
@@ -2200,7 +2225,12 @@
     "kind": "for",
     "line": 30,
     "literal_iteration_bound": null,
-    "source": "for suffix in [\"minx\", \"miny\", \"maxx\", \"maxy\"] {\n        let name = format!(\"{}_{suffix}\", geometry.name);\n        ensure_name_free(op, &fields, &name)?;\n        fields.push(Field::new(name, DataType::Float64, true));\n    }"
+    "source": "for suffix in [\"minx\", \"miny\", \"maxx\", \"maxy\"] {\n        let name = format!(\"{}_{suffix}\", geometry.name);\n        ensure_name_free(op, &fields, &name)?;\n        fields.push(Field::new(name, DataType::Float64, true));\n    }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -2997,7 +3027,12 @@
     "kind": "for",
     "line": 287,
     "literal_iteration_bound": null,
-    "source": "for (param, column) in [(\"x_column\", x_column), (\"y_column\", y_column)] {\n        if !ensure_name(column) {\n            return Err(invalid_param(op, param, \"non deve essere vuoto\"));\n        }\n        let field = input.schema.field_with_name(column).map_err(|_| {\n            PlenoraError::Schema(format!(\"{op}: colonna `{column}` assente dallo schema\"))\n        })?;\n        if !matches!(field.data_type(), DataType::Float64 | DataType::Int64) {\n            return Err(PlenoraError::Schema(format!(\n                \"{op}: colonna `{column}` di tipo {}, attesa Float64 o Int64\",\n                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())\n            )));\n        }\n    }"
+    "source": "for (param, column) in [(\"x_column\", x_column), (\"y_column\", y_column)] {\n        if !ensure_name(column) {\n            return Err(invalid_param(op, param, \"non deve essere vuoto\"));\n        }\n        let field = input.schema.field_with_name(column).map_err(|_| {\n            PlenoraError::Schema(format!(\"{op}: colonna `{column}` assente dallo schema\"))\n        })?;\n        if !matches!(field.data_type(), DataType::Float64 | DataType::Int64) {\n            return Err(PlenoraError::Schema(format!(\n                \"{op}: colonna `{column}` di tipo {}, attesa Float64 o Int64\",\n                plenora_core::tipo_arrow::descrivi_tipo(field.data_type())\n            )));\n        }\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -3621,7 +3656,12 @@
     "kind": "for",
     "line": 186,
     "literal_iteration_bound": null,
-    "source": "for key in [\"input_geometry\", \"left_geometry\", \"right_geometry\"] {\n        if object.contains_key(key) && !keys.contains(&key) {\n            return Err(PlenoraError::InvalidPlan(\n                \"selettore geometrico non ammesso per l'operazione\".into(),\n            ));\n        }\n    }"
+    "source": "for key in [\"input_geometry\", \"left_geometry\", \"right_geometry\"] {\n        if object.contains_key(key) && !keys.contains(&key) {\n            return Err(PlenoraError::InvalidPlan(\n                \"selettore geometrico non ammesso per l'operazione\".into(),\n            ));\n        }\n    }",
+    "structural_proof": {
+      "iterations": "3",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -5081,7 +5121,12 @@
     "kind": "for",
     "line": 374,
     "literal_iteration_bound": "5",
-    "source": "for cycle in 0..5 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"coordinate_mgrs.rs::resolve_cell:1\");\n            let mut candidate = cell;\n            candidate.south += cycle * 2_000_000;\n            candidate.north += cycle * 2_000_000;\n            if intersects(candidate, ellipsoid)? {\n                if found.is_some() {\n                    return Err(MgrsError::DataMapping);\n                }\n                found = Some(candidate);\n            }\n        }"
+    "source": "for cycle in 0..5 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"coordinate_mgrs.rs::resolve_cell:1\");\n            let mut candidate = cell;\n            candidate.south += cycle * 2_000_000;\n            candidate.north += cycle * 2_000_000;\n            if intersects(candidate, ellipsoid)? {\n                if found.is_some() {\n                    return Err(MgrsError::DataMapping);\n                }\n                found = Some(candidate);\n            }\n        }",
+    "structural_proof": {
+      "iterations": "5",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": "6",
@@ -5098,7 +5143,12 @@
     "kind": "for",
     "line": 431,
     "literal_iteration_bound": null,
-    "source": "for (a, b) in [\n        ((west, south), (west, north)),\n        ((east, south), (east, north)),\n        ((west, south), (split, south)),\n        ((split, south), (east, south)),\n        ((west, north), (split, north)),\n        ((split, north), (east, north)),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:1\");\n        let eval = |t: f64| project(a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1));\n        let start = eval(0.0)?;\n        let end = eval(1.0)?;\n        let mut lo = 0.0_f64;\n        let mut hi = 1.0_f64;\n        for (axis, minimum, maximum) in [(0, cell.west, cell.east), (1, cell.south, cell.north)] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:2\");\n            let component = |p: (f64, f64)| if axis == 0 { p.0 } else { p.1 };\n            let s = component(start);\n            let e = component(end);\n            if s.min(e) >= f64::from(maximum) || s.max(e) < f64::from(minimum) {\n                hi = -1.0;\n                break;\n            }\n            if s == e {\n                continue;\n            }\n            for boundary in [f64::from(minimum), f64::from(maximum)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:3\");\n                if boundary <= s.min(e) || boundary >= s.max(e) {\n                    continue;\n                }\n                let mut left = 0.0;\n                let mut right = 1.0;\n                for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }\n                let root = f64::midpoint(left, right);\n                if (boundary == f64::from(minimum)) == (e > s) {\n                    lo = lo.max(root);\n                } else {\n                    hi = hi.min(root);\n                }\n            }\n        }\n        if lo < hi {\n            let point = eval(f64::midpoint(lo, hi))?;\n            let excluded =\n                (a.0 == east && b.0 == east) || (north != 84.0 && a.1 == north && b.1 == north);\n            if inside(cell, point.0, point.1)\n                && (!excluded\n                    || (point.0 > f64::from(cell.west) && point.1 > f64::from(cell.south)))\n            {\n                return Ok(true);\n            }\n        }\n    }"
+    "source": "for (a, b) in [\n        ((west, south), (west, north)),\n        ((east, south), (east, north)),\n        ((west, south), (split, south)),\n        ((split, south), (east, south)),\n        ((west, north), (split, north)),\n        ((split, north), (east, north)),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:1\");\n        let eval = |t: f64| project(a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1));\n        let start = eval(0.0)?;\n        let end = eval(1.0)?;\n        let mut lo = 0.0_f64;\n        let mut hi = 1.0_f64;\n        for (axis, minimum, maximum) in [(0, cell.west, cell.east), (1, cell.south, cell.north)] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:2\");\n            let component = |p: (f64, f64)| if axis == 0 { p.0 } else { p.1 };\n            let s = component(start);\n            let e = component(end);\n            if s.min(e) >= f64::from(maximum) || s.max(e) < f64::from(minimum) {\n                hi = -1.0;\n                break;\n            }\n            if s == e {\n                continue;\n            }\n            for boundary in [f64::from(minimum), f64::from(maximum)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:3\");\n                if boundary <= s.min(e) || boundary >= s.max(e) {\n                    continue;\n                }\n                let mut left = 0.0;\n                let mut right = 1.0;\n                for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }\n                let root = f64::midpoint(left, right);\n                if (boundary == f64::from(minimum)) == (e > s) {\n                    lo = lo.max(root);\n                } else {\n                    hi = hi.min(root);\n                }\n            }\n        }\n        if lo < hi {\n            let point = eval(f64::midpoint(lo, hi))?;\n            let excluded =\n                (a.0 == east && b.0 == east) || (north != 84.0 && a.1 == north && b.1 == north);\n            if inside(cell, point.0, point.1)\n                && (!excluded\n                    || (point.0 > f64::from(cell.west) && point.1 > f64::from(cell.south)))\n            {\n                return Ok(true);\n            }\n        }\n    }",
+    "structural_proof": {
+      "iterations": "6",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -5115,7 +5165,12 @@
     "kind": "for",
     "line": 446,
     "literal_iteration_bound": null,
-    "source": "for (axis, minimum, maximum) in [(0, cell.west, cell.east), (1, cell.south, cell.north)] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:2\");\n            let component = |p: (f64, f64)| if axis == 0 { p.0 } else { p.1 };\n            let s = component(start);\n            let e = component(end);\n            if s.min(e) >= f64::from(maximum) || s.max(e) < f64::from(minimum) {\n                hi = -1.0;\n                break;\n            }\n            if s == e {\n                continue;\n            }\n            for boundary in [f64::from(minimum), f64::from(maximum)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:3\");\n                if boundary <= s.min(e) || boundary >= s.max(e) {\n                    continue;\n                }\n                let mut left = 0.0;\n                let mut right = 1.0;\n                for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }\n                let root = f64::midpoint(left, right);\n                if (boundary == f64::from(minimum)) == (e > s) {\n                    lo = lo.max(root);\n                } else {\n                    hi = hi.min(root);\n                }\n            }\n        }"
+    "source": "for (axis, minimum, maximum) in [(0, cell.west, cell.east), (1, cell.south, cell.north)] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:2\");\n            let component = |p: (f64, f64)| if axis == 0 { p.0 } else { p.1 };\n            let s = component(start);\n            let e = component(end);\n            if s.min(e) >= f64::from(maximum) || s.max(e) < f64::from(minimum) {\n                hi = -1.0;\n                break;\n            }\n            if s == e {\n                continue;\n            }\n            for boundary in [f64::from(minimum), f64::from(maximum)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:3\");\n                if boundary <= s.min(e) || boundary >= s.max(e) {\n                    continue;\n                }\n                let mut left = 0.0;\n                let mut right = 1.0;\n                for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }\n                let root = f64::midpoint(left, right);\n                if (boundary == f64::from(minimum)) == (e > s) {\n                    lo = lo.max(root);\n                } else {\n                    hi = hi.min(root);\n                }\n            }\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -5132,7 +5187,12 @@
     "kind": "for",
     "line": 459,
     "literal_iteration_bound": null,
-    "source": "for boundary in [f64::from(minimum), f64::from(maximum)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:3\");\n                if boundary <= s.min(e) || boundary >= s.max(e) {\n                    continue;\n                }\n                let mut left = 0.0;\n                let mut right = 1.0;\n                for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }\n                let root = f64::midpoint(left, right);\n                if (boundary == f64::from(minimum)) == (e > s) {\n                    lo = lo.max(root);\n                } else {\n                    hi = hi.min(root);\n                }\n            }"
+    "source": "for boundary in [f64::from(minimum), f64::from(maximum)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:3\");\n                if boundary <= s.min(e) || boundary >= s.max(e) {\n                    continue;\n                }\n                let mut left = 0.0;\n                let mut right = 1.0;\n                for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }\n                let root = f64::midpoint(left, right);\n                if (boundary == f64::from(minimum)) == (e > s) {\n                    lo = lo.max(root);\n                } else {\n                    hi = hi.min(root);\n                }\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -5149,7 +5209,12 @@
     "kind": "for",
     "line": 467,
     "literal_iteration_bound": "52",
-    "source": "for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }"
+    "source": "for _ in 0..52 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"coordinate_mgrs.rs::intersects:4\");\n                    let middle = f64::midpoint(left, right);\n                    if (component(eval(middle)?) < boundary) == (e > s) {\n                        left = middle;\n                    } else {\n                        right = middle;\n                    }\n                }",
+    "structural_proof": {
+      "iterations": "52",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
@@ -5477,6 +5542,8 @@
     "kind": "for",
     "line": 141,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for ring_index in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                cursor.skip(count * stride)?;\n                *total = total.saturating_add(COORD_BYTES.saturating_mul(count as u64));\n                // Anelli interni: header `LineString` nel buffer degli\n                // interni (l'esterno e' inline nel `Polygon`).\n                if ring_index > 0 {\n                    *total = total.saturating_add(LINESTRING_BYTES);\n                }\n            }"
   },
   {
@@ -5494,6 +5561,8 @@
     "kind": "for",
     "line": 157,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 0..children {\n                let child_type =\n                    decoded_size_geometry(cursor, depth + 1, max_depth, components, total)?;\n                // Controllo per figlio, immediatamente dopo la sua\n                // camminata: stesso ordine del decoder.\n                let compatible = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                // Slot del figlio nel buffer del contenitore (inline).\n                let slot = match geometry_type {\n                    4 => POINT_BYTES,\n                    5 => LINESTRING_BYTES,\n                    6 => POLYGON_BYTES,\n                    _ => GEOMETRY_BYTES,\n                };\n                *total = total.saturating_add(slot);\n            }"
   },
   {
@@ -8424,7 +8493,12 @@
     "kind": "for",
     "line": 84,
     "literal_iteration_bound": null,
-    "source": "for (name, value) in [\n            (\"extent.xmin\", xmin),\n            (\"extent.ymin\", ymin),\n            (\"extent.xmax\", xmax),\n            (\"extent.ymax\", ymax),\n        ] {\n            if !value.is_finite() {\n                return Err(invalid_parameter(name, \"deve essere finito\"));\n            }\n        }"
+    "source": "for (name, value) in [\n            (\"extent.xmin\", xmin),\n            (\"extent.ymin\", ymin),\n            (\"extent.xmax\", xmax),\n            (\"extent.ymax\", ymax),\n        ] {\n            if !value.is_finite() {\n                return Err(invalid_parameter(name, \"deve essere finito\"));\n            }\n        }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -8696,7 +8770,12 @@
     "kind": "for",
     "line": 510,
     "literal_iteration_bound": null,
-    "source": "for half in halves {\n        let meta = MultiPolygon::new(vec![half.to_polygon()]);\n        let intersection = protetto(|| pezzo.intersection(&meta))?;\n        for part in intersection.0 {\n            // Scarti di area nulla lungo la linea di taglio.\n            if part.coords_count() == 0 || protetto(|| part.unsigned_area())? == 0.0 {\n                continue;\n            }\n            subdivide_polygon(&part, max_vertices, depth + 1, precision, parts)?;\n        }\n    }"
+    "source": "for half in halves {\n        let meta = MultiPolygon::new(vec![half.to_polygon()]);\n        let intersection = protetto(|| pezzo.intersection(&meta))?;\n        for part in intersection.0 {\n            // Scarti di area nulla lungo la linea di taglio.\n            if part.coords_count() == 0 || protetto(|| part.unsigned_area())? == 0.0 {\n                continue;\n            }\n            subdivide_polygon(&part, max_vertices, depth + 1, precision, parts)?;\n        }\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Tipo array o inizializzatore array nello scope dominante; binding non oscurato. I rami condizionali producono array per valore di uguale lunghezza.",
+      "rule": "R-FIXED-ARRAY"
+    }
   },
   {
     "body": null,
@@ -9994,7 +10073,12 @@
     "kind": "for",
     "line": 241,
     "literal_iteration_bound": null,
-    "source": "for geometry in [operand, result] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::certify:1\");\n        for ring in parts(geometry)? {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::certify:2\");\n            work.step()?;\n            for p in &ring.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::certify:3\");\n                work.step()?;\n                root.low.x = root.low.x.min(p.x);\n                root.low.y = root.low.y.min(p.y);\n                root.high.x = root.high.x.max(p.x);\n                root.high.y = root.high.y.max(p.y);\n            }\n        }\n    }"
+    "source": "for geometry in [operand, result] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::certify:1\");\n        for ring in parts(geometry)? {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::certify:2\");\n            work.step()?;\n            for p in &ring.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::certify:3\");\n                work.step()?;\n                root.low.x = root.low.x.min(p.x);\n                root.low.y = root.low.y.min(p.y);\n                root.high.x = root.high.x.max(p.x);\n                root.high.y = root.high.y.max(p.y);\n            }\n        }\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -10060,7 +10144,12 @@
     "kind": "for",
     "line": 312,
     "literal_iteration_bound": null,
-    "source": "for scale in [0.0, 0.25, 0.5, 0.75, 0.875, 0.9375, 0.96875] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:1\");\n        for index in 0..=64 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:2\");\n            let x = f64::from(index) / 64.0;\n            let y = 1.0 - x;\n            for (x, y) in [(x, y), (-y, x), (-x, -y), (y, -x)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:3\");\n                work.step()?;\n                let distance = reach * scale / x.hypot(y);\n                let witness = Coord {\n                    x: distance.mul_add(x, center.x),\n                    y: distance.mul_add(y, center.y),\n                };\n                if cell.reach(witness) <= reach\n                    && signed_distance(witness, operand, work)?.lo > upper\n                    && signed_distance(witness, result, work)?.lo > 0.0\n                {\n                    return Ok(true);\n                }\n            }\n        }\n    }"
+    "source": "for scale in [0.0, 0.25, 0.5, 0.75, 0.875, 0.9375, 0.96875] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:1\");\n        for index in 0..=64 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:2\");\n            let x = f64::from(index) / 64.0;\n            let y = 1.0 - x;\n            for (x, y) in [(x, y), (-y, x), (-x, -y), (y, -x)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:3\");\n                work.step()?;\n                let distance = reach * scale / x.hypot(y);\n                let witness = Coord {\n                    x: distance.mul_add(x, center.x),\n                    y: distance.mul_add(y, center.y),\n                };\n                if cell.reach(witness) <= reach\n                    && signed_distance(witness, operand, work)?.lo > upper\n                    && signed_distance(witness, result, work)?.lo > 0.0\n                {\n                    return Ok(true);\n                }\n            }\n        }\n    }",
+    "structural_proof": {
+      "iterations": "7",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -10077,7 +10166,12 @@
     "kind": "for",
     "line": 315,
     "literal_iteration_bound": "65",
-    "source": "for index in 0..=64 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:2\");\n            let x = f64::from(index) / 64.0;\n            let y = 1.0 - x;\n            for (x, y) in [(x, y), (-y, x), (-x, -y), (y, -x)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:3\");\n                work.step()?;\n                let distance = reach * scale / x.hypot(y);\n                let witness = Coord {\n                    x: distance.mul_add(x, center.x),\n                    y: distance.mul_add(y, center.y),\n                };\n                if cell.reach(witness) <= reach\n                    && signed_distance(witness, operand, work)?.lo > upper\n                    && signed_distance(witness, result, work)?.lo > 0.0\n                {\n                    return Ok(true);\n                }\n            }\n        }"
+    "source": "for index in 0..=64 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:2\");\n            let x = f64::from(index) / 64.0;\n            let y = 1.0 - x;\n            for (x, y) in [(x, y), (-y, x), (-x, -y), (y, -x)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:3\");\n                work.step()?;\n                let distance = reach * scale / x.hypot(y);\n                let witness = Coord {\n                    x: distance.mul_add(x, center.x),\n                    y: distance.mul_add(y, center.y),\n                };\n                if cell.reach(witness) <= reach\n                    && signed_distance(witness, operand, work)?.lo > upper\n                    && signed_distance(witness, result, work)?.lo > 0.0\n                {\n                    return Ok(true);\n                }\n            }\n        }",
+    "structural_proof": {
+      "iterations": "65",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": "4",
@@ -10094,7 +10188,12 @@
     "kind": "for",
     "line": 320,
     "literal_iteration_bound": null,
-    "source": "for (x, y) in [(x, y), (-y, x), (-x, -y), (y, -x)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:3\");\n                work.step()?;\n                let distance = reach * scale / x.hypot(y);\n                let witness = Coord {\n                    x: distance.mul_add(x, center.x),\n                    y: distance.mul_add(y, center.y),\n                };\n                if cell.reach(witness) <= reach\n                    && signed_distance(witness, operand, work)?.lo > upper\n                    && signed_distance(witness, result, work)?.lo > 0.0\n                {\n                    return Ok(true);\n                }\n            }"
+    "source": "for (x, y) in [(x, y), (-y, x), (-x, -y), (y, -x)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/projected/erosion.rs::covered:3\");\n                work.step()?;\n                let distance = reach * scale / x.hypot(y);\n                let witness = Coord {\n                    x: distance.mul_add(x, center.x),\n                    y: distance.mul_add(y, center.y),\n                };\n                if cell.reach(witness) <= reach\n                    && signed_distance(witness, operand, work)?.lo > upper\n                    && signed_distance(witness, result, work)?.lo > 0.0\n                {\n                    return Ok(true);\n                }\n            }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -10215,7 +10314,12 @@
     "kind": "for",
     "line": 107,
     "literal_iteration_bound": null,
-    "source": "for (end, azimuth, distance) in [(before, backwards, back), (b, forwards, length)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"geodesic_buffer/projected/surface.rs::validate_impl:5\",\n                );\n                work.step()?;\n                let (lat, lon): (f64, f64) =\n                    ellipsoid.geodetica().direct(a.y, a.x, azimuth, distance);\n                work.step()?;\n                let residual: f64 = ellipsoid.geodetica().inverse(lat, lon, end.y, end.x);\n                if !residual.is_finite() || residual > 1e-6 {\n                    return Err(BufferFailure::AccuracyUnproven.into());\n                }\n            }"
+    "source": "for (end, azimuth, distance) in [(before, backwards, back), (b, forwards, length)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"geodesic_buffer/projected/surface.rs::validate_impl:5\",\n                );\n                work.step()?;\n                let (lat, lon): (f64, f64) =\n                    ellipsoid.geodetica().direct(a.y, a.x, azimuth, distance);\n                work.step()?;\n                let residual: f64 = ellipsoid.geodetica().inverse(lat, lon, end.y, end.x);\n                if !residual.is_finite() || residual > 1e-6 {\n                    return Err(BufferFailure::AccuracyUnproven.into());\n                }\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -11297,7 +11401,12 @@
     "kind": "for",
     "line": 1069,
     "literal_iteration_bound": "4",
-    "source": "for quadrant in 0..4 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected.rs::disk:1\");\n        for i in 0..n {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected.rs::disk:2\");\n            work.step()?;\n            let t = f64::from(i) / f64::from(n);\n            let divisor = t.mul_add(t, 1.0);\n            let cosine = (-t).mul_add(t, 1.0) / divisor;\n            let sine = 2.0 * t / divisor;\n            let (x, y) = match quadrant {\n                0 => (cosine, sine),\n                1 => (-sine, cosine),\n                2 => (-cosine, -sine),\n                _ => (sine, -cosine),\n            };\n            vertex(\n                &mut points,\n                Coord {\n                    x: radius.mul_add(x, center.x),\n                    y: radius.mul_add(y, center.y),\n                },\n                vertices,\n                limits,\n                work,\n            )?;\n        }\n    }"
+    "source": "for quadrant in 0..4 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected.rs::disk:1\");\n        for i in 0..n {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/projected.rs::disk:2\");\n            work.step()?;\n            let t = f64::from(i) / f64::from(n);\n            let divisor = t.mul_add(t, 1.0);\n            let cosine = (-t).mul_add(t, 1.0) / divisor;\n            let sine = 2.0 * t / divisor;\n            let (x, y) = match quadrant {\n                0 => (cosine, sine),\n                1 => (-sine, cosine),\n                2 => (-cosine, -sine),\n                _ => (sine, -cosine),\n            };\n            vertex(\n                &mut points,\n                Coord {\n                    x: radius.mul_add(x, center.x),\n                    y: radius.mul_add(y, center.y),\n                },\n                vertices,\n                limits,\n                work,\n            )?;\n        }\n    }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -11355,7 +11464,12 @@
     "kind": "for",
     "line": 1126,
     "literal_iteration_bound": null,
-    "source": "for (p, sign) in [(a, -1.0), (b, -1.0), (b, 1.0), (a, 1.0), (a, -1.0)] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected.rs::rectangle:1\");\n        vertex(\n            &mut points,\n            Coord {\n                x: nx.mul_add(sign, p.x),\n                y: ny.mul_add(sign, p.y),\n            },\n            vertices,\n            limits,\n            work,\n        )?;\n    }"
+    "source": "for (p, sign) in [(a, -1.0), (b, -1.0), (b, 1.0), (a, 1.0), (a, -1.0)] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/projected.rs::rectangle:1\");\n        vertex(\n            &mut points,\n            Coord {\n                x: nx.mul_add(sign, p.x),\n                y: ny.mul_add(sign, p.y),\n            },\n            vertices,\n            limits,\n            work,\n        )?;\n    }",
+    "structural_proof": {
+      "iterations": "5",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -12561,7 +12675,12 @@
     "kind": "for",
     "line": 362,
     "literal_iteration_bound": null,
-    "source": "for (p, q, r) in [\n        (endpoints[0], endpoints[1], endpoints[2]),\n        (endpoints[0], endpoints[1], endpoints[3]),\n        (endpoints[2], endpoints[3], endpoints[0]),\n        (endpoints[2], endpoints[3], endpoints[1]),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_surface.rs::crossing:3\");\n        work.checkpoint()?;\n        if (p.x == q.x && p.x == r.x && (p.y.min(q.y)..=p.y.max(q.y)).contains(&r.y))\n            || (p.y == 0.0\n                && q.y == 0.0\n                && r.y == 0.0\n                && (p.x - q.x).abs() < 180.0\n                && (p.x.min(q.x)..=p.x.max(q.x)).contains(&r.x))\n        {\n            return Ok(true);\n        }\n    }"
+    "source": "for (p, q, r) in [\n        (endpoints[0], endpoints[1], endpoints[2]),\n        (endpoints[0], endpoints[1], endpoints[3]),\n        (endpoints[2], endpoints[3], endpoints[0]),\n        (endpoints[2], endpoints[3], endpoints[1]),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_surface.rs::crossing:3\");\n        work.checkpoint()?;\n        if (p.x == q.x && p.x == r.x && (p.y.min(q.y)..=p.y.max(q.y)).contains(&r.y))\n            || (p.y == 0.0\n                && q.y == 0.0\n                && r.y == 0.0\n                && (p.x - q.x).abs() < 180.0\n                && (p.x.min(q.x)..=p.x.max(q.x)).contains(&r.x))\n        {\n            return Ok(true);\n        }\n    }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -12578,7 +12697,12 @@
     "kind": "for",
     "line": 382,
     "literal_iteration_bound": null,
-    "source": "for (p, q, r, t) in [\n        endpoints.into(),\n        (endpoints[2], endpoints[3], endpoints[0], endpoints[1]),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_surface.rs::crossing:4\");\n        work.checkpoint()?;\n        let (base_length, axis, _, _) = work.inverse(p, q)?;\n        let (dr, ar, _, _) = work.inverse(p, r)?;\n        let (dt, at, _, _) = work.inverse(p, t)?;\n        if dr.max(dt) > 1_000_000.0 {\n            return Ok(false);\n        }\n        let sr = (ar - axis).to_radians().sin();\n        let st = (at - axis).to_radians().sin();\n        let uncertainty = 32.0 * work.position_margin / base_length.min(dr).min(dt) + 1e-10;\n        opposite &= sr.abs() > uncertainty && st.abs() > uncertainty && sr.signum() != st.signum();\n    }"
+    "source": "for (p, q, r, t) in [\n        endpoints.into(),\n        (endpoints[2], endpoints[3], endpoints[0], endpoints[1]),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_surface.rs::crossing:4\");\n        work.checkpoint()?;\n        let (base_length, axis, _, _) = work.inverse(p, q)?;\n        let (dr, ar, _, _) = work.inverse(p, r)?;\n        let (dt, at, _, _) = work.inverse(p, t)?;\n        if dr.max(dt) > 1_000_000.0 {\n            return Ok(false);\n        }\n        let sr = (ar - axis).to_radians().sin();\n        let st = (at - axis).to_radians().sin();\n        let uncertainty = 32.0 * work.position_margin / base_length.min(dr).min(dt) + 1e-10;\n        opposite &= sr.abs() > uncertainty && st.abs() > uncertainty && sr.signum() != st.signum();\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -13311,6 +13435,8 @@
     "function": "new",
     "kind": "while",
     "line": 490,
+    "registered_iteration_bound": 290347,
+    "registered_iteration_reason": "Euclide non negativo: new normalizza i segni e copy/neg passano da created/check_bits prima del ciclo, quindi a e b hanno al massimo B=145173 bit. rem calcola il resto esatto, 0 <= r < b. Dopo la possibile prima permutazione, ogni due resti il divisore si dimezza: al massimo 2*B+1=290347 entrate. La deadline interna non copre il token di cancellazione; questa e solo una prova statica locale, non un checkpoint condiviso.",
     "source": "while b.value.sign() != Sign::NoSign {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/exact.rs::new:1\");\n            crate::noding::check_interruption(\n                a.lease.budget().deadline,\n                None,\n                PredicateError::DeadlineExceeded,\n                PredicateError::Cancelled,\n            )?;\n            let r = a.rem(&b)?;\n            a = b;\n            b = r;\n        }"
   },
   {
@@ -13647,7 +13773,12 @@
     "kind": "for",
     "line": 247,
     "literal_iteration_bound": null,
-    "source": "for (from, to) in [(a, b), (b, a)] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/faces.rs::graph:5\");\n            work.push(&mut outgoing[from], arcs.len())?;\n            work.push(\n                &mut arcs,\n                ArcSide {\n                    from,\n                    to,\n                    next: 0,\n                    seen: false,\n                    atom,\n                },\n            )?;\n        }"
+    "source": "for (from, to) in [(a, b), (b, a)] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/faces.rs::graph:5\");\n            work.push(&mut outgoing[from], arcs.len())?;\n            work.push(\n                &mut arcs,\n                ArcSide {\n                    from,\n                    to,\n                    next: 0,\n                    seen: false,\n                    atom,\n                },\n            )?;\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -13971,7 +14102,12 @@
     "kind": "for",
     "line": 307,
     "literal_iteration_bound": null,
-    "source": "for p in [&a.a, &a.b, &b.a, &b.b] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::intersections:1\");\n        work.checkpoint()?;\n        if a.contains(p)? && b.contains(p)? {\n            if match first {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_lt(),\n            } {\n                first = Some(p);\n            }\n            if match last {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_gt(),\n            } {\n                last = Some(p);\n            }\n        }\n    }"
+    "source": "for p in [&a.a, &a.b, &b.a, &b.b] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::intersections:1\");\n        work.checkpoint()?;\n        if a.contains(p)? && b.contains(p)? {\n            if match first {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_lt(),\n            } {\n                first = Some(p);\n            }\n            if match last {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_gt(),\n            } {\n                last = Some(p);\n            }\n        }\n    }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -14044,7 +14180,12 @@
     "kind": "for",
     "line": 406,
     "literal_iteration_bound": null,
-    "source": "for point in [&edge.a, &edge.b] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:2\");\n            work.checkpoint()?;\n            if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {\n                return Err(PredicateError::CalcoloNonConcluso(\n                    \"proprietario del budget\",\n                ));\n            }\n        }"
+    "source": "for point in [&edge.a, &edge.b] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:2\");\n            work.checkpoint()?;\n            if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {\n                return Err(PredicateError::CalcoloNonConcluso(\n                    \"proprietario del budget\",\n                ));\n            }\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -14241,7 +14382,12 @@
     "kind": "for",
     "line": 37,
     "literal_iteration_bound": null,
-    "source": "for (a, b) in [\n            (&self.low, &b.high),\n            (&self.high, &b.low),\n            (&self.high, &b.high),\n        ] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"offset/enclosure.rs::mul:1\");\n            let q = a.try_mul(b)?;\n            if q.try_cmp(&low)?.is_lt() {\n                low = q.try_clone()?;\n            }\n            if q.try_cmp(&high)?.is_gt() {\n                high = q;\n            }\n        }"
+    "source": "for (a, b) in [\n            (&self.low, &b.high),\n            (&self.high, &b.low),\n            (&self.high, &b.high),\n        ] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"offset/enclosure.rs::mul:1\");\n            let q = a.try_mul(b)?;\n            if q.try_cmp(&low)?.is_lt() {\n                low = q.try_clone()?;\n            }\n            if q.try_cmp(&high)?.is_gt() {\n                high = q;\n            }\n        }",
+    "structural_proof": {
+      "iterations": "3",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -14374,7 +14520,12 @@
     "kind": "for",
     "line": 260,
     "literal_iteration_bound": null,
-    "source": "for precision in [80, 160, 320, 640, 1280, 2560] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"offset.rs::execute:2\");\n        work.step()?;\n        match construct(&points, options, precision, work) {\n            Err(OffsetError::AccuracyUnproven) => {}\n            result => return result,\n        }\n    }"
+    "source": "for precision in [80, 160, 320, 640, 1280, 2560] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"offset.rs::execute:2\");\n        work.step()?;\n        match construct(&points, options, precision, work) {\n            Err(OffsetError::AccuracyUnproven) => {}\n            result => return result,\n        }\n    }",
+    "structural_proof": {
+      "iterations": "6",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -14573,7 +14724,12 @@
     "kind": "for",
     "line": 577,
     "literal_iteration_bound": null,
-    "source": "for axis in [true, false] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"offset.rs::certify_topology:5\");\n                let coord = |k: usize| if axis { &points[k].x } else { &points[k].y };\n                for (a, b) in [(i, j), (j, i)] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"offset.rs::certify_topology:6\");\n                    if coord(a).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                    {\n                        separated = true;\n                    }\n                }\n            }"
+    "source": "for axis in [true, false] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"offset.rs::certify_topology:5\");\n                let coord = |k: usize| if axis { &points[k].x } else { &points[k].y };\n                for (a, b) in [(i, j), (j, i)] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"offset.rs::certify_topology:6\");\n                    if coord(a).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                    {\n                        separated = true;\n                    }\n                }\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -14590,7 +14746,12 @@
     "kind": "for",
     "line": 581,
     "literal_iteration_bound": null,
-    "source": "for (a, b) in [(i, j), (j, i)] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"offset.rs::certify_topology:6\");\n                    if coord(a).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                    {\n                        separated = true;\n                    }\n                }"
+    "source": "for (a, b) in [(i, j), (j, i)] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"offset.rs::certify_topology:6\");\n                    if coord(a).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b).low)?.is_lt()\n                        && coord(a + 1).high.try_cmp(&coord(b + 1).low)?.is_lt()\n                    {\n                        separated = true;\n                    }\n                }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -14624,7 +14785,12 @@
     "kind": "for",
     "line": 649,
     "literal_iteration_bound": null,
-    "source": "for p in [&points[i], &points[i + 1], &points[j], &points[j + 1]] {\n                        #[cfg(test)]\n                        crate::noding::gop028::cycle(\"offset.rs::certify_topology:8\");\n                        if p.x.low != p.x.high || p.y.low != p.y.high {\n                            return Err(OffsetError::AccuracyUnproven);\n                        }\n                    }"
+    "source": "for p in [&points[i], &points[i + 1], &points[j], &points[j + 1]] {\n                        #[cfg(test)]\n                        crate::noding::gop028::cycle(\"offset.rs::certify_topology:8\");\n                        if p.x.low != p.x.high || p.y.low != p.y.high {\n                            return Err(OffsetError::AccuracyUnproven);\n                        }\n                    }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -14641,7 +14807,12 @@
     "kind": "for",
     "line": 658,
     "literal_iteration_bound": null,
-    "source": "for (edge, other) in [(i, j), (j, i)] {\n                        #[cfg(test)]\n                        crate::noding::gop028::cycle(\"offset.rs::certify_topology:9\");\n                        let direction = points[edge + 1].sub(&points[edge])?;\n                        let axis_x = !direction.x.sign()?.is_eq();\n                        for p in [&points[other], &points[other + 1]] {\n                            #[cfg(test)]\n                            crate::noding::gop028::cycle(\"offset.rs::certify_topology:10\");\n                            let delta = p.sub(&points[edge])?;\n                            let t = if axis_x {\n                                delta.x.div(&direction.x, work)?\n                            } else {\n                                delta.y.div(&direction.y, work)?\n                            };\n                            work.push(&mut parameters[edge], t)?;\n                        }\n                    }"
+    "source": "for (edge, other) in [(i, j), (j, i)] {\n                        #[cfg(test)]\n                        crate::noding::gop028::cycle(\"offset.rs::certify_topology:9\");\n                        let direction = points[edge + 1].sub(&points[edge])?;\n                        let axis_x = !direction.x.sign()?.is_eq();\n                        for p in [&points[other], &points[other + 1]] {\n                            #[cfg(test)]\n                            crate::noding::gop028::cycle(\"offset.rs::certify_topology:10\");\n                            let delta = p.sub(&points[edge])?;\n                            let t = if axis_x {\n                                delta.x.div(&direction.x, work)?\n                            } else {\n                                delta.y.div(&direction.y, work)?\n                            };\n                            work.push(&mut parameters[edge], t)?;\n                        }\n                    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -14658,7 +14829,12 @@
     "kind": "for",
     "line": 663,
     "literal_iteration_bound": null,
-    "source": "for p in [&points[other], &points[other + 1]] {\n                            #[cfg(test)]\n                            crate::noding::gop028::cycle(\"offset.rs::certify_topology:10\");\n                            let delta = p.sub(&points[edge])?;\n                            let t = if axis_x {\n                                delta.x.div(&direction.x, work)?\n                            } else {\n                                delta.y.div(&direction.y, work)?\n                            };\n                            work.push(&mut parameters[edge], t)?;\n                        }"
+    "source": "for p in [&points[other], &points[other + 1]] {\n                            #[cfg(test)]\n                            crate::noding::gop028::cycle(\"offset.rs::certify_topology:10\");\n                            let delta = p.sub(&points[edge])?;\n                            let t = if axis_x {\n                                delta.x.div(&direction.x, work)?\n                            } else {\n                                delta.y.div(&direction.y, work)?\n                            };\n                            work.push(&mut parameters[edge], t)?;\n                        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -14709,7 +14885,12 @@
     "kind": "for",
     "line": 747,
     "literal_iteration_bound": null,
-    "source": "for x in [true, false] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"offset.rs::separated:1\");\n        let bounds = |points: &[EnclosedPoint], work: &Work<'_>| -> Result<_, OffsetError> {\n            let first = if x { &points[0].x } else { &points[0].y };\n            let (mut low, mut high) = (first.low.try_clone()?, first.high.try_clone()?);\n            for point in &points[1..] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"offset.rs::separated:2\");\n                work.checkpoint()?;\n                let value = if x { &point.x } else { &point.y };\n                if value.low.try_cmp(&low)?.is_lt() {\n                    low = value.low.try_clone()?;\n                }\n                if value.high.try_cmp(&high)?.is_gt() {\n                    high = value.high.try_clone()?;\n                }\n            }\n            Ok((low, high))\n        };\n        work.step()?;\n        let (al, ah) = bounds(a, work)?;\n        let (bl, bh) = bounds(b, work)?;\n        if ah.try_cmp(&bl)?.is_lt() || bh.try_cmp(&al)?.is_lt() {\n            return Ok(true);\n        }\n    }"
+    "source": "for x in [true, false] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"offset.rs::separated:1\");\n        let bounds = |points: &[EnclosedPoint], work: &Work<'_>| -> Result<_, OffsetError> {\n            let first = if x { &points[0].x } else { &points[0].y };\n            let (mut low, mut high) = (first.low.try_clone()?, first.high.try_clone()?);\n            for point in &points[1..] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"offset.rs::separated:2\");\n                work.checkpoint()?;\n                let value = if x { &point.x } else { &point.y };\n                if value.low.try_cmp(&low)?.is_lt() {\n                    low = value.low.try_clone()?;\n                }\n                if value.high.try_cmp(&high)?.is_gt() {\n                    high = value.high.try_clone()?;\n                }\n            }\n            Ok((low, high))\n        };\n        work.step()?;\n        let (al, ah) = bounds(a, work)?;\n        let (bl, bh) = bounds(b, work)?;\n        if ah.try_cmp(&bl)?.is_lt() || bh.try_cmp(&al)?.is_lt() {\n            return Ok(true);\n        }\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -14794,7 +14975,12 @@
     "kind": "for",
     "line": 819,
     "literal_iteration_bound": "3",
-    "source": "for i in 0..3 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"offset.rs::outside_triangle:1\");\n        let a = &triangle[i];\n        let b = &triangle[(i + 1) % 3];\n        let own = strict_side(&side(a, b, &triangle[(i + 2) % 3])?);\n        let other = strict_side(&side(a, b, p)?);\n        if own.is_some() && other.is_some() && own != other {\n            return Ok(true);\n        }\n    }"
+    "source": "for i in 0..3 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"offset.rs::outside_triangle:1\");\n        let a = &triangle[i];\n        let b = &triangle[(i + 1) % 3];\n        let own = strict_side(&side(a, b, &triangle[(i + 2) % 3])?);\n        let other = strict_side(&side(a, b, p)?);\n        if own.is_some() && other.is_some() && own != other {\n            return Ok(true);\n        }\n    }",
+    "structural_proof": {
+      "iterations": "3",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -15492,7 +15678,12 @@
     "kind": "for",
     "line": 692,
     "literal_iteration_bound": null,
-    "source": "for coordinate in [line.0[0], line.0[line.0.len() - 1]] {\n            let canonical_x = if coordinate.x == 0.0 {\n                0.0\n            } else {\n                coordinate.x\n            };\n            let canonical_y = if coordinate.y == 0.0 {\n                0.0\n            } else {\n                coordinate.y\n            };\n            let key = (canonical_x.to_bits(), canonical_y.to_bits());\n            endpoints\n                .entry(key)\n                .and_modify(|(_, odd)| *odd = !*odd)\n                .or_insert_with(|| (geo::Point::new(canonical_x, canonical_y), true));\n        }"
+    "source": "for coordinate in [line.0[0], line.0[line.0.len() - 1]] {\n            let canonical_x = if coordinate.x == 0.0 {\n                0.0\n            } else {\n                coordinate.x\n            };\n            let canonical_y = if coordinate.y == 0.0 {\n                0.0\n            } else {\n                coordinate.y\n            };\n            let key = (canonical_x.to_bits(), canonical_y.to_bits());\n            endpoints\n                .entry(key)\n                .and_modify(|(_, odd)| *odd = !*odd)\n                .or_insert_with(|| (geo::Point::new(canonical_x, canonical_y), true));\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -16144,7 +16335,12 @@
     "kind": "for",
     "line": 532,
     "literal_iteration_bound": null,
-    "source": "for (x, y) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"predicates/arrangement_indexed.rs::position:2\");\n                work.push(\n                    &mut rays,\n                    P {\n                        x: work.integer(x)?,\n                        y: work.integer(y)?,\n                    },\n                )?;\n            }"
+    "source": "for (x, y) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"predicates/arrangement_indexed.rs::position:2\");\n                work.push(\n                    &mut rays,\n                    P {\n                        x: work.integer(x)?,\n                        y: work.integer(y)?,\n                    },\n                )?;\n            }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -16178,7 +16374,12 @@
     "kind": "for",
     "line": 550,
     "literal_iteration_bound": null,
-    "source": "for endpoint in [&edge.a, &edge.b] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"predicates/arrangement_indexed.rs::position:4\");\n                    if endpoint != p {\n                        work.push(&mut rays, endpoint.try_sub(p)?)?;\n                    }\n                }"
+    "source": "for endpoint in [&edge.a, &edge.b] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"predicates/arrangement_indexed.rs::position:4\");\n                    if endpoint != p {\n                        work.push(&mut rays, endpoint.try_sub(p)?)?;\n                    }\n                }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -17145,7 +17346,12 @@
     "kind": "for",
     "line": 345,
     "literal_iteration_bound": null,
-    "source": "for p in [&edge.a, &edge.b] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/line_boolean.rs::execute:7\",\n                );\n                let c = originals.coordinate(p, work)?;\n                work.push(&mut coords, c)?;\n            }"
+    "source": "for p in [&edge.a, &edge.b] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/line_boolean.rs::execute:7\",\n                );\n                let c = originals.coordinate(p, work)?;\n                work.push(&mut coords, c)?;\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": [
@@ -18119,7 +18325,12 @@
     "kind": "for",
     "line": 350,
     "literal_iteration_bound": null,
-    "source": "for at_start in [true, false] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:4\",\n            );\n            loop {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:5\",\n                );\n                work.step()?;\n                let at = if at_start { &a } else { &b };\n                if originals.contains(at, work)? {\n                    break;\n                }\n                let (mut low, mut high) = (0, endpoints.len());\n                while low < high {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\n                        \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:6\",\n                    );\n                    work.step()?;\n                    let mid = low + (high - low) / 2;\n                    if point_cmp(endpoints[mid].0, at)?.is_lt() {\n                        low = mid + 1;\n                    } else {\n                        high = mid;\n                    }\n                }\n                let mut degree = 0;\n                let mut next = None;\n                for &(point, other) in &endpoints[low..] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\n                        \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:7\",\n                    );\n                    work.step()?;\n                    if point != at || degree == 3 {\n                        break;\n                    }\n                    degree += 1;\n                    if other < edges.len() && !used[other] {\n                        next = Some(other);\n                    }\n                }\n                if degree != 2 {\n                    break;\n                }\n                let Some(next) = next else {\n                    break;\n                };\n                let candidate = &edges[next];\n                let end = if candidate.a == *at {\n                    &candidate.b\n                } else {\n                    &candidate.a\n                };\n                if !b.try_sub(&a)?.try_cross(&end.try_sub(at)?)?.sign().is_eq() {\n                    break;\n                }\n                let end = end.try_clone()?;\n                used[next] = true;\n                if at_start {\n                    a = end;\n                } else {\n                    b = end;\n                }\n            }\n        }"
+    "source": "for at_start in [true, false] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:4\",\n            );\n            loop {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:5\",\n                );\n                work.step()?;\n                let at = if at_start { &a } else { &b };\n                if originals.contains(at, work)? {\n                    break;\n                }\n                let (mut low, mut high) = (0, endpoints.len());\n                while low < high {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\n                        \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:6\",\n                    );\n                    work.step()?;\n                    let mid = low + (high - low) / 2;\n                    if point_cmp(endpoints[mid].0, at)?.is_lt() {\n                        low = mid + 1;\n                    } else {\n                        high = mid;\n                    }\n                }\n                let mut degree = 0;\n                let mut next = None;\n                for &(point, other) in &endpoints[low..] {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\n                        \"predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:7\",\n                    );\n                    work.step()?;\n                    if point != at || degree == 3 {\n                        break;\n                    }\n                    degree += 1;\n                    if other < edges.len() && !used[other] {\n                        next = Some(other);\n                    }\n                }\n                if degree != 2 {\n                    break;\n                }\n                let Some(next) = next else {\n                    break;\n                };\n                let candidate = &edges[next];\n                let end = if candidate.a == *at {\n                    &candidate.b\n                } else {\n                    &candidate.a\n                };\n                if !b.try_sub(&a)?.try_cross(&end.try_sub(at)?)?.sign().is_eq() {\n                    break;\n                }\n                let end = end.try_clone()?;\n                used[next] = true;\n                if at_start {\n                    a = end;\n                } else {\n                    b = end;\n                }\n            }\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": [
@@ -18692,7 +18903,12 @@
     "kind": "for",
     "line": 939,
     "literal_iteration_bound": null,
-    "source": "for p in [&edge.a, &edge.b] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:7\",\n                );\n                work.nodes(1)?;\n                let c = originals.coordinate(p, work)?;\n                work.push(&mut coords, c)?;\n            }"
+    "source": "for p in [&edge.a, &edge.b] {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:7\",\n                );\n                work.nodes(1)?;\n                let c = originals.coordinate(p, work)?;\n                work.push(&mut coords, c)?;\n            }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": "2",
@@ -18709,7 +18925,12 @@
     "kind": "for",
     "line": 998,
     "literal_iteration_bound": null,
-    "source": "for (geometries, shape) in [(left, &mut a), (right, &mut b)] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"predicates/arrangement_indexed/polygon_boolean.rs::execute_many:1\",\n        );\n        for geometry in geometries {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_boolean.rs::execute_many:2\",\n            );\n            work.step()?;\n            general_supported(geometry, work)?;\n            super::relate(geometry, &empty, work)?;\n            shape.geometry(geometry, work)?;\n        }\n        shape.build_indices(work)?;\n    }"
+    "source": "for (geometries, shape) in [(left, &mut a), (right, &mut b)] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"predicates/arrangement_indexed/polygon_boolean.rs::execute_many:1\",\n        );\n        for geometry in geometries {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_boolean.rs::execute_many:2\",\n            );\n            work.step()?;\n            general_supported(geometry, work)?;\n            super::relate(geometry, &empty, work)?;\n            shape.geometry(geometry, work)?;\n        }\n        shape.build_indices(work)?;\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -19076,7 +19297,12 @@
     "kind": "for",
     "line": 389,
     "literal_iteration_bound": null,
-    "source": "for (rings, subtract) in [(a, false), (b, true)] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"predicates/arrangement_indexed/polygon_completion.rs::compare_areas:1\",\n        );\n        for &id in rings {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_completion.rs::compare_areas:2\",\n            );\n            work.checkpoint()?;\n            let vertices = &graph.rings[id].vertices;\n            for i in 0..vertices.len() {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_completion.rs::compare_areas:3\",\n                );\n                work.step()?;\n                let term = graph.points[vertices[i]]\n                    .try_cross(&graph.points[vertices[(i + 1) % vertices.len()]])?;\n                work.push(&mut terms, (term, subtract))?;\n            }\n        }\n    }"
+    "source": "for (rings, subtract) in [(a, false), (b, true)] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"predicates/arrangement_indexed/polygon_completion.rs::compare_areas:1\",\n        );\n        for &id in rings {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_completion.rs::compare_areas:2\",\n            );\n            work.checkpoint()?;\n            let vertices = &graph.rings[id].vertices;\n            for i in 0..vertices.len() {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_completion.rs::compare_areas:3\",\n                );\n                work.step()?;\n                let term = graph.points[vertices[i]]\n                    .try_cross(&graph.points[vertices[(i + 1) % vertices.len()]])?;\n                work.push(&mut terms, (term, subtract))?;\n            }\n        }\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -19178,7 +19404,12 @@
     "kind": "for",
     "line": 471,
     "literal_iteration_bound": null,
-    "source": "for range in [0..min, min..ring.vertices.len(), 0..ring.vertices.len()] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_completion.rs::canonicalize:3\",\n            );\n            let mut lo = range.start;\n            let mut hi = range.end;\n            while lo < hi {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_completion.rs::canonicalize:4\",\n                );\n                work.step()?;\n                hi -= 1;\n                ring.vertices.swap(lo, hi);\n                ring.atoms.swap(lo, hi);\n                lo += 1;\n            }\n        }"
+    "source": "for range in [0..min, min..ring.vertices.len(), 0..ring.vertices.len()] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"predicates/arrangement_indexed/polygon_completion.rs::canonicalize:3\",\n            );\n            let mut lo = range.start;\n            let mut hi = range.end;\n            while lo < hi {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"predicates/arrangement_indexed/polygon_completion.rs::canonicalize:4\",\n                );\n                work.step()?;\n                hi -= 1;\n                ring.vertices.swap(lo, hi);\n                ring.atoms.swap(lo, hi);\n                lo += 1;\n            }\n        }",
+    "structural_proof": {
+      "iterations": "3",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": [
@@ -20151,7 +20382,12 @@
     "kind": "for",
     "line": 26,
     "literal_iteration_bound": "12",
-    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate/azimuthal.rs::authalic:1\");\n        power = power.mul(ratio);\n        sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * k + 1)))?);\n    }"
+    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate/azimuthal.rs::authalic:1\");\n        power = power.mul(ratio);\n        sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * k + 1)))?);\n    }",
+    "structural_proof": {
+      "iterations": "12",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
@@ -20180,7 +20416,12 @@
     "kind": "for",
     "line": 38,
     "literal_iteration_bound": "40",
-    "source": "for k in 1..=40 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/lambert.rs::exponential:1\",\n        );\n        term = term\n            .mul(x)\n            .div_positive(ShapeInterval::exact(f64::from(k)))?;\n        sum = sum.add(term);\n    }"
+    "source": "for k in 1..=40 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/lambert.rs::exponential:1\",\n        );\n        term = term\n            .mul(x)\n            .div_positive(ShapeInterval::exact(f64::from(k)))?;\n        sum = sum.add(term);\n    }",
+    "structural_proof": {
+      "iterations": "40",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
@@ -20209,7 +20450,12 @@
     "kind": "for",
     "line": 82,
     "literal_iteration_bound": "12",
-    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate/transverse.rs::cosine:1\");\n        term = term\n            .mul(square)\n            .div_positive(ShapeInterval::exact(f64::from((2 * k - 1) * 2 * k)))?;\n        sum = sum.add(term);\n    }"
+    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate/transverse.rs::cosine:1\");\n        term = term\n            .mul(square)\n            .div_positive(ShapeInterval::exact(f64::from((2 * k - 1) * 2 * k)))?;\n        sum = sum.add(term);\n    }",
+    "structural_proof": {
+      "iterations": "12",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20226,7 +20472,12 @@
     "kind": "for",
     "line": 102,
     "literal_iteration_bound": "12",
-    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::hyperbolic:1\",\n        );\n        odd = odd\n            .mul(square)\n            .div_positive(ShapeInterval::exact(f64::from(2 * k * (2 * k + 1))))?;\n        even = even\n            .mul(square)\n            .div_positive(ShapeInterval::exact(f64::from((2 * k - 1) * 2 * k)))?;\n        sinh = sinh.add(odd);\n        cosh = cosh.add(even);\n    }"
+    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::hyperbolic:1\",\n        );\n        odd = odd\n            .mul(square)\n            .div_positive(ShapeInterval::exact(f64::from(2 * k * (2 * k + 1))))?;\n        even = even\n            .mul(square)\n            .div_positive(ShapeInterval::exact(f64::from((2 * k - 1) * 2 * k)))?;\n        sinh = sinh.add(odd);\n        cosh = cosh.add(even);\n    }",
+    "structural_proof": {
+      "iterations": "12",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
@@ -20267,7 +20518,12 @@
     "kind": "for",
     "line": 152,
     "literal_iteration_bound": "2",
-    "source": "for _ in 0..2 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::arctangent:1\",\n        );\n        x = x.div_positive(one.add(square_root(one.add(x.mul(x)))?))?;\n    }"
+    "source": "for _ in 0..2 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::arctangent:1\",\n        );\n        x = x.div_positive(one.add(square_root(one.add(x.mul(x)))?))?;\n    }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20284,7 +20540,12 @@
     "kind": "for",
     "line": 165,
     "literal_iteration_bound": "40",
-    "source": "for k in 1..=40 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::arctangent:2\",\n        );\n        power = power.mul(square);\n        sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * k + 1)))?);\n    }"
+    "source": "for k in 1..=40 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::arctangent:2\",\n        );\n        power = power.mul(square);\n        sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * k + 1)))?);\n    }",
+    "structural_proof": {
+      "iterations": "40",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20301,7 +20562,12 @@
     "kind": "for",
     "line": 208,
     "literal_iteration_bound": "12",
-    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::meridian_correction:1\",\n        );\n        integral = integral\n            .scale(ShapeInterval::exact(f64::from(2 * k - 1)))\n            .sub(odd_power.mul(cos))\n            .scale(ShapeInterval::exact(1.0).div_positive(ShapeInterval::exact(f64::from(2 * k)))?);\n        coefficient = coefficient\n            .mul(q)\n            .mul(ShapeInterval::exact(f64::from(2 * k + 1)))\n            .div_positive(ShapeInterval::exact(f64::from(2 * k)))?;\n        sum = sum.add(integral.scale(coefficient.mul(ShapeInterval::exact(1.0).sub(q))));\n        odd_power = odd_power.mul(square);\n    }"
+    "source": "for k in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure/certificate/transverse.rs::meridian_correction:1\",\n        );\n        integral = integral\n            .scale(ShapeInterval::exact(f64::from(2 * k - 1)))\n            .sub(odd_power.mul(cos))\n            .scale(ShapeInterval::exact(1.0).div_positive(ShapeInterval::exact(f64::from(2 * k)))?);\n        coefficient = coefficient\n            .mul(q)\n            .mul(ShapeInterval::exact(f64::from(2 * k + 1)))\n            .div_positive(ShapeInterval::exact(f64::from(2 * k)))?;\n        sum = sum.add(integral.scale(coefficient.mul(ShapeInterval::exact(1.0).sub(q))));\n        odd_power = odd_power.mul(square);\n    }",
+    "structural_proof": {
+      "iterations": "12",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
@@ -20330,7 +20596,12 @@
     "kind": "for",
     "line": 327,
     "literal_iteration_bound": "24",
-    "source": "for _ in 0..24 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure/certificate/transverse.rs::certify:1\",\n            );\n            root = root.intersect(target.sub(meridian_correction(root, self.q)?))?;\n        }"
+    "source": "for _ in 0..24 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure/certificate/transverse.rs::certify:1\",\n            );\n            root = root.intersect(target.sub(meridian_correction(root, self.q)?))?;\n        }",
+    "structural_proof": {
+      "iterations": "24",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
@@ -20371,7 +20642,12 @@
     "kind": "for",
     "line": 105,
     "literal_iteration_bound": "12",
-    "source": "for n in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::sine:1\");\n        term = term\n            .mul(squared)\n            .div_positive(ShapeInterval::exact(f64::from(2 * n * (2 * n + 1))))?;\n        sum = sum.add(term);\n    }"
+    "source": "for n in 1..=12 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::sine:1\");\n        term = term\n            .mul(squared)\n            .div_positive(ShapeInterval::exact(f64::from(2 * n * (2 * n + 1))))?;\n        sum = sum.add(term);\n    }",
+    "structural_proof": {
+      "iterations": "12",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20388,7 +20664,12 @@
     "kind": "for",
     "line": 127,
     "literal_iteration_bound": "24",
-    "source": "for n in 1..25 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::log_series:1\");\n        power = power.mul(squared);\n        sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * n + 1)))?);\n    }"
+    "source": "for n in 1..25 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::log_series:1\");\n        power = power.mul(squared);\n        sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * n + 1)))?);\n    }",
+    "structural_proof": {
+      "iterations": "24",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20405,7 +20686,12 @@
     "kind": "for",
     "line": 141,
     "literal_iteration_bound": "10",
-    "source": "for _ in 0..10 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::logarithm:1\");\n        if z.lo >= 0.75 {\n            break;\n        }\n        z = z.mul(ShapeInterval::exact(2.0));\n        exponent -= 1;\n    }"
+    "source": "for _ in 0..10 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::logarithm:1\");\n        if z.lo >= 0.75 {\n            break;\n        }\n        z = z.mul(ShapeInterval::exact(2.0));\n        exponent -= 1;\n    }",
+    "structural_proof": {
+      "iterations": "10",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20422,7 +20708,12 @@
     "kind": "for",
     "line": 150,
     "literal_iteration_bound": "10",
-    "source": "for _ in 0..10 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::logarithm:2\");\n        if z.hi <= 1.5 {\n            break;\n        }\n        z = z.mul(ShapeInterval::exact(0.5));\n        exponent += 1;\n    }"
+    "source": "for _ in 0..10 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure/certificate.rs::logarithm:2\");\n        if z.hi <= 1.5 {\n            break;\n        }\n        z = z.mul(ShapeInterval::exact(0.5));\n        exponent += 1;\n    }",
+    "structural_proof": {
+      "iterations": "10",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
@@ -20624,7 +20915,12 @@
     "kind": "for",
     "line": 662,
     "literal_iteration_bound": "9",
-    "source": "for n in 0..9 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::area_primitive:1\");\n        sum.add(f64::from(n + 1) / f64::from(2 * n + 1) * power);\n        power *= ratio;\n    }"
+    "source": "for n in 0..9 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::area_primitive:1\");\n        sum.add(f64::from(n + 1) / f64::from(2 * n + 1) * power);\n        power *= ratio;\n    }",
+    "structural_proof": {
+      "iterations": "9",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20828,7 +21124,12 @@
     "kind": "for",
     "line": 150,
     "literal_iteration_bound": null,
-    "source": "for (owner, point) in [\n        (0, &target[hit.target.before]),\n        (0, &target[hit.target.after]),\n        (1, &reshaper[hit.reshaper.before]),\n        (1, &reshaper[hit.reshaper.after]),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"reshape.rs::transverse:1\");\n        work.nodes(1)?;\n        work.push(&mut rays, (owner, point.try_sub(&hit.point)?))?;\n    }"
+    "source": "for (owner, point) in [\n        (0, &target[hit.target.before]),\n        (0, &target[hit.target.after]),\n        (1, &reshaper[hit.reshaper.before]),\n        (1, &reshaper[hit.reshaper.after]),\n    ] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"reshape.rs::transverse:1\");\n        work.nodes(1)?;\n        work.push(&mut rays, (owner, point.try_sub(&hit.point)?))?;\n    }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -20845,7 +21146,12 @@
     "kind": "for",
     "line": 170,
     "literal_iteration_bound": "4",
-    "source": "for i in 0..4 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"reshape.rs::transverse:2\");\n        work.step()?;\n        let a = &rays[i];\n        let b = &rays[(i + 1) % 4];\n        if a.0 == b.0 || (upper(&a.1) == upper(&b.1) && a.1.try_cross(&b.1)?.sign().is_eq()) {\n            return Ok(false);\n        }\n    }"
+    "source": "for i in 0..4 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"reshape.rs::transverse:2\");\n        work.step()?;\n        let a = &rays[i];\n        let b = &rays[(i + 1) % 4];\n        if a.0 == b.0 || (upper(&a.1) == upper(&b.1) && a.1.try_cross(&b.1)?.sign().is_eq()) {\n            return Ok(false);\n        }\n    }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -21219,7 +21525,12 @@
     "kind": "for",
     "line": 397,
     "literal_iteration_bound": null,
-    "source": "for (p, q) in [\n            (-dx, a.x - ovest),\n            (dx, est - a.x),\n            (-dy, a.y - sud),\n            (dy, nord - a.y),\n        ] {\n            if p == 0.0 {\n                if q < 0.0 {\n                    vuoto = true;\n                }\n            } else {\n                let t = q / p;\n                if p < 0.0 {\n                    t0 = t0.max(t);\n                } else {\n                    t1 = t1.min(t);\n                }\n            }\n        }"
+    "source": "for (p, q) in [\n            (-dx, a.x - ovest),\n            (dx, est - a.x),\n            (-dy, a.y - sud),\n            (dy, nord - a.y),\n        ] {\n            if p == 0.0 {\n                if q < 0.0 {\n                    vuoto = true;\n                }\n            } else {\n                let t = q / p;\n                if p < 0.0 {\n                    t0 = t0.max(t);\n                } else {\n                    t1 = t1.min(t);\n                }\n            }\n        }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -23254,7 +23565,12 @@
     "kind": "for",
     "line": 132,
     "literal_iteration_bound": null,
-    "source": "for parte in [p, e, -q, -f] {\n            accresci(espansione, verso * parte);\n        }"
+    "source": "for parte in [p, e, -q, -f] {\n            accresci(espansione, verso * parte);\n        }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -23935,7 +24251,12 @@
     "kind": "for",
     "line": 983,
     "literal_iteration_bound": null,
-    "source": "for fraction in [0.25, 0.5, 0.75] {\n        let sample = Coord {\n            x: start.x + (end.x - start.x) * fraction,\n            y: start.y + (end.y - start.y) * fraction,\n        };\n        let here = match area.coordinate_position(&sample) {\n            CoordPos::Inside => SideOfArea::Inside,\n            CoordPos::Outside => SideOfArea::Outside,\n            CoordPos::OnBoundary => continue,\n        };\n        match side {\n            None => side = Some(here),\n            Some(previous) if previous != here => {\n                return Err(MakeValidError::InternalInvariant(\n                    \"lato collassato dentro e fuori dall'area\",\n                ))\n            }\n            Some(_) => {}\n        }\n    }"
+    "source": "for fraction in [0.25, 0.5, 0.75] {\n        let sample = Coord {\n            x: start.x + (end.x - start.x) * fraction,\n            y: start.y + (end.y - start.y) * fraction,\n        };\n        let here = match area.coordinate_position(&sample) {\n            CoordPos::Inside => SideOfArea::Inside,\n            CoordPos::Outside => SideOfArea::Outside,\n            CoordPos::OnBoundary => continue,\n        };\n        match side {\n            None => side = Some(here),\n            Some(previous) if previous != here => {\n                return Err(MakeValidError::InternalInvariant(\n                    \"lato collassato dentro e fuori dall'area\",\n                ))\n            }\n            Some(_) => {}\n        }\n    }",
+    "structural_proof": {
+      "iterations": "3",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "array_iteration_bound": null,
@@ -26028,7 +26349,12 @@
     "kind": "for",
     "line": 1296,
     "literal_iteration_bound": null,
-    "source": "for start in [(edge.0, edge.1), (edge.1, edge.0)] {\n            if visited.contains(&start) {\n                continue;\n            }\n            let mut half_edge = start;\n            let mut keys = vec![start.0];\n            let max_steps = active\n                .len()\n                .checked_mul(2)\n                .and_then(|value| value.checked_add(1))\n                .ok_or(PolygonizeError::IndexOverflow)?;\n            let mut closed = false;\n            for _ in 0..max_steps {\n                if !visited.insert(half_edge) && half_edge != start {\n                    break;\n                }\n                keys.push(half_edge.1);\n                let next = next_half_edge(half_edge.0, half_edge.1, &neighbors)?;\n                if next == start {\n                    closed = true;\n                    break;\n                }\n                half_edge = next;\n            }\n            if !closed {\n                return Err(PolygonizeError::InternalInvariant(\n                    \"cammino di mezzi archi non chiuso\",\n                ));\n            }\n            for cycle in decompose_closed_walk(keys) {\n                let ring_coordinates =\n                    u64::try_from(cycle.len()).map_err(|_| PolygonizeError::IndexOverflow)?;\n                if ring_coordinates > limits.max_output_coordinates {\n                    return Err(PolygonizeError::OutputLimit {\n                        actual: ring_coordinates,\n                        limit: limits.max_output_coordinates,\n                    });\n                }\n                let mut ring = Vec::new();\n                ring.try_reserve_exact(cycle.len())\n                    .map_err(|_| PolygonizeError::AllocationFailed(\"coordinate della faccia\"))?;\n                for key in &cycle {\n                    ring.push(coordinates.get(key).copied().ok_or(\n                        PolygonizeError::InternalInvariant(\n                            \"coordinata dell'anello estratto assente\",\n                        ),\n                    )?);\n                }\n                let edge_count = cycle.len().saturating_sub(1);\n                let mut cycle_edges = Vec::new();\n                cycle_edges.try_reserve_exact(edge_count).map_err(|_| {\n                    PolygonizeError::AllocationFailed(\"archi della faccia estratta\")\n                })?;\n                for pair in cycle.windows(2) {\n                    cycle_edges.push(EdgeKey::new(pair[0], pair[1]).ok_or(\n                        PolygonizeError::InternalInvariant(\"arco degenere nell'anello estratto\"),\n                    )?);\n                }\n                if ring.len() < 4 {\n                    continue;\n                }\n                let orientation = ring_orientation(&ring)?;\n                if orientation == Ordering::Greater {\n                    let polygon = Polygon::new(LineString::new(ring), Vec::new());\n                    if ValidazioneOgc::valida_ogc_rapida(&polygon).is_ok() {\n                        intermediate_budget.charge_polygon(&polygon)?;\n                        polygons.try_reserve(1).map_err(|_| {\n                            PolygonizeError::AllocationFailed(\"facce poligonali intermedie\")\n                        })?;\n                        polygon_edges.extend(cycle_edges);\n                        polygons.push(polygon);\n                    } else if cycle_edges.iter().any(|edge| !polygon_edges.contains(edge)) {\n                        output_budget.charge_line(polygon.exterior())?;\n                        invalid_rings.try_reserve(1).map_err(|_| {\n                            PolygonizeError::AllocationFailed(\"anelli invalidi residui\")\n                        })?;\n                        polygon_edges.extend(&cycle_edges);\n                        invalid_rings.push(polygon.exterior().clone());\n                    }\n                } else if orientation == Ordering::Equal\n                    && cycle_edges.iter().any(|edge| !polygon_edges.contains(edge))\n                {\n                    let invalid = LineString::new(ring);\n                    output_budget.charge_line(&invalid)?;\n                    invalid_rings.try_reserve(1).map_err(|_| {\n                        PolygonizeError::AllocationFailed(\"anelli invalidi residui\")\n                    })?;\n                    polygon_edges.extend(&cycle_edges);\n                    invalid_rings.push(invalid);\n                }\n            }\n        }"
+    "source": "for start in [(edge.0, edge.1), (edge.1, edge.0)] {\n            if visited.contains(&start) {\n                continue;\n            }\n            let mut half_edge = start;\n            let mut keys = vec![start.0];\n            let max_steps = active\n                .len()\n                .checked_mul(2)\n                .and_then(|value| value.checked_add(1))\n                .ok_or(PolygonizeError::IndexOverflow)?;\n            let mut closed = false;\n            for _ in 0..max_steps {\n                if !visited.insert(half_edge) && half_edge != start {\n                    break;\n                }\n                keys.push(half_edge.1);\n                let next = next_half_edge(half_edge.0, half_edge.1, &neighbors)?;\n                if next == start {\n                    closed = true;\n                    break;\n                }\n                half_edge = next;\n            }\n            if !closed {\n                return Err(PolygonizeError::InternalInvariant(\n                    \"cammino di mezzi archi non chiuso\",\n                ));\n            }\n            for cycle in decompose_closed_walk(keys) {\n                let ring_coordinates =\n                    u64::try_from(cycle.len()).map_err(|_| PolygonizeError::IndexOverflow)?;\n                if ring_coordinates > limits.max_output_coordinates {\n                    return Err(PolygonizeError::OutputLimit {\n                        actual: ring_coordinates,\n                        limit: limits.max_output_coordinates,\n                    });\n                }\n                let mut ring = Vec::new();\n                ring.try_reserve_exact(cycle.len())\n                    .map_err(|_| PolygonizeError::AllocationFailed(\"coordinate della faccia\"))?;\n                for key in &cycle {\n                    ring.push(coordinates.get(key).copied().ok_or(\n                        PolygonizeError::InternalInvariant(\n                            \"coordinata dell'anello estratto assente\",\n                        ),\n                    )?);\n                }\n                let edge_count = cycle.len().saturating_sub(1);\n                let mut cycle_edges = Vec::new();\n                cycle_edges.try_reserve_exact(edge_count).map_err(|_| {\n                    PolygonizeError::AllocationFailed(\"archi della faccia estratta\")\n                })?;\n                for pair in cycle.windows(2) {\n                    cycle_edges.push(EdgeKey::new(pair[0], pair[1]).ok_or(\n                        PolygonizeError::InternalInvariant(\"arco degenere nell'anello estratto\"),\n                    )?);\n                }\n                if ring.len() < 4 {\n                    continue;\n                }\n                let orientation = ring_orientation(&ring)?;\n                if orientation == Ordering::Greater {\n                    let polygon = Polygon::new(LineString::new(ring), Vec::new());\n                    if ValidazioneOgc::valida_ogc_rapida(&polygon).is_ok() {\n                        intermediate_budget.charge_polygon(&polygon)?;\n                        polygons.try_reserve(1).map_err(|_| {\n                            PolygonizeError::AllocationFailed(\"facce poligonali intermedie\")\n                        })?;\n                        polygon_edges.extend(cycle_edges);\n                        polygons.push(polygon);\n                    } else if cycle_edges.iter().any(|edge| !polygon_edges.contains(edge)) {\n                        output_budget.charge_line(polygon.exterior())?;\n                        invalid_rings.try_reserve(1).map_err(|_| {\n                            PolygonizeError::AllocationFailed(\"anelli invalidi residui\")\n                        })?;\n                        polygon_edges.extend(&cycle_edges);\n                        invalid_rings.push(polygon.exterior().clone());\n                    }\n                } else if orientation == Ordering::Equal\n                    && cycle_edges.iter().any(|edge| !polygon_edges.contains(edge))\n                {\n                    let invalid = LineString::new(ring);\n                    output_budget.charge_line(&invalid)?;\n                    invalid_rings.try_reserve(1).map_err(|_| {\n                        PolygonizeError::AllocationFailed(\"anelli invalidi residui\")\n                    })?;\n                    polygon_edges.extend(&cycle_edges);\n                    invalid_rings.push(invalid);\n                }\n            }\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -27382,7 +27708,12 @@
     "kind": "for",
     "line": 344,
     "literal_iteration_bound": null,
-    "source": "for factor in [1e-3, 1e-5, 1e-7, 1e-9, 1e-11] {\n            let point = Point::new(\n                midpoint_x + direction_x * span_x * factor,\n                midpoint_y + direction_y * span_y * factor,\n            );\n            if face.contains(&point) {\n                return Some(point);\n            }\n        }"
+    "source": "for factor in [1e-3, 1e-5, 1e-7, 1e-9, 1e-11] {\n            let point = Point::new(\n                midpoint_x + direction_x * span_x * factor,\n                midpoint_y + direction_y * span_y * factor,\n            );\n            if face.contains(&point) {\n                return Some(point);\n            }\n        }",
+    "structural_proof": {
+      "iterations": "5",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -29653,7 +29984,12 @@
     "kind": "for",
     "line": 354,
     "literal_iteration_bound": null,
-    "source": "for (enabled, terminal, neighbor) in [\n            (\n                matches!(options.ends, TrimExtendEnds::Start | TrimExtendEnds::Both),\n                0,\n                1,\n            ),\n            (\n                matches!(options.ends, TrimExtendEnds::End | TrimExtendEnds::Both),\n                last,\n                last - 1,\n            ),\n        ] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"trim_extend.rs::execute:5\");\n            work.step()?;\n            if !enabled {\n                continue;\n            }\n            work.pair()?;\n            let denominator = sides[terminal].try_sub(&sides[neighbor])?;\n            if denominator.sign().is_eq() {\n                continue;\n            }\n            // P(t)=terminale+t*(terminale-vicino), t>0.\n            if sides[terminal].sign() == denominator.sign() {\n                continue;\n            }\n            work.nodes(1)?;\n            let point = intersection(\n                &points[terminal],\n                &points[neighbor],\n                &sides[terminal],\n                &sides[neighbor],\n            )?;\n            if hit.is_some() {\n                return Err(TrimExtendError::Unsupported);\n            }\n            hit = Some((terminal, point));\n        }"
+    "source": "for (enabled, terminal, neighbor) in [\n            (\n                matches!(options.ends, TrimExtendEnds::Start | TrimExtendEnds::Both),\n                0,\n                1,\n            ),\n            (\n                matches!(options.ends, TrimExtendEnds::End | TrimExtendEnds::Both),\n                last,\n                last - 1,\n            ),\n        ] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"trim_extend.rs::execute:5\");\n            work.step()?;\n            if !enabled {\n                continue;\n            }\n            work.pair()?;\n            let denominator = sides[terminal].try_sub(&sides[neighbor])?;\n            if denominator.sign().is_eq() {\n                continue;\n            }\n            // P(t)=terminale+t*(terminale-vicino), t>0.\n            if sides[terminal].sign() == denominator.sign() {\n                continue;\n            }\n            work.nodes(1)?;\n            let point = intersection(\n                &points[terminal],\n                &points[neighbor],\n                &sides[terminal],\n                &sides[neighbor],\n            )?;\n            if hit.is_some() {\n                return Err(TrimExtendError::Unsupported);\n            }\n            hit = Some((terminal, point));\n        }",
+    "structural_proof": {
+      "iterations": "2",
+      "reason": "Numero di elementi AST dell array, oppure ripetizione con lunghezza letterale; cfg puo solo ridurlo.",
+      "rule": "R-ARRAY-LITERAL"
+    }
   },
   {
     "body": null,
@@ -30680,6 +31016,8 @@
     "kind": "for",
     "line": 120,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 0..count {\n                let (x, y) = cursor.read_coordinate(little_endian, stride)?;\n                coordinates.push((x, y));\n            }"
   },
   {
@@ -30697,6 +31035,8 @@
     "kind": "for",
     "line": 135,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut ring = Vec::with_capacity(count);\n                ring.push(first);\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                    ring.push(last);\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n                // Il primo anello e' l'esterno, i successivi gli interni.\n                // Mai `exterior.take()` nel discriminante: con un secondo\n                // anello scarterebbe il primo, e un oracolo che si ferma ai\n                // poligoni a un anello solo non lo vedrebbe.\n                if exterior.is_none() {\n                    exterior = Some(LineString::from(ring));\n                } else {\n                    interiors.push(LineString::from(ring));\n                }\n            }"
   },
   {
@@ -30714,6 +31054,8 @@
     "kind": "for",
     "line": 147,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967294,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                    ring.push(last);\n                }"
   },
   {
@@ -30731,7 +31073,7 @@
   {
     "array_iteration_bound": null,
     "body": [
-      173,
+      174,
       34
     ],
     "column": 12,
@@ -30741,14 +31083,16 @@
     "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
     "function": "decode_geometry",
     "kind": "for",
-    "line": 173,
+    "line": 174,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 0..children {\n                let child = decode_geometry(cursor, depth + 1, max_depth, components)?;\n                // Controllo per figlio, immediatamente dopo il suo decode:\n                // stesso ordine del validatore strutturale.\n                let compatible = match geometry_type {\n                    4 => child.0 == 1,\n                    5 => child.0 == 2,\n                    6 => child.0 == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                decoded.push(child);\n            }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      202,
+      203,
       50
     ],
     "column": 20,
@@ -30758,14 +31102,16 @@
     "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
     "function": "decode_geometry",
     "kind": "for",
-    "line": 202,
+    "line": 203,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Point(point) => points.push(point),\n                            _ => return Err(incompatible()),\n                        }\n                    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      212,
+      213,
       50
     ],
     "column": 20,
@@ -30775,14 +31121,16 @@
     "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
     "function": "decode_geometry",
     "kind": "for",
-    "line": 212,
+    "line": 213,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::LineString(line) => lines.push(line),\n                            _ => return Err(incompatible()),\n                        }\n                    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      222,
+      223,
       50
     ],
     "column": 20,
@@ -30792,8 +31140,10 @@
     "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
     "function": "decode_geometry",
     "kind": "for",
-    "line": 222,
+    "line": 223,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Polygon(polygon) => polygons.push(polygon),\n                            _ => return Err(incompatible()),\n                        }\n                    }"
   },
   {
@@ -30805,7 +31155,7 @@
     "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
     "function": "decode_geometry",
     "kind": "method:collect",
-    "line": 233,
+    "line": 234,
     "source": null
   },
   {
@@ -30817,7 +31167,7 @@
     "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
     "function": "decode_geometry",
     "kind": "method:map",
-    "line": 233,
+    "line": 234,
     "source": null
   },
   {
@@ -30997,6 +31347,8 @@
     "kind": "for",
     "line": 792,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 0..count {\n                cursor.read_coordinate(little_endian, stride)?;\n            }"
   },
   {
@@ -31014,6 +31366,8 @@
     "kind": "for",
     "line": 799,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n            }"
   },
   {
@@ -31031,6 +31385,8 @@
     "kind": "for",
     "line": 809,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967294,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                }"
   },
   {
@@ -31048,6 +31404,8 @@
     "kind": "for",
     "line": 820,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4294967295,
+    "registered_iteration_reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
     "source": "for _ in 0..children {\n                let child_type = validate_wkb_geometry_with_dimensions(\n                    cursor,\n                    depth + 1,\n                    max_depth,\n                    components,\n                    expected,\n                    srid_policy,\n                )?;\n                let valid_child = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    7 => true,\n                    _ => {\n                        return Err(invalid_wkb_structure(\"tipo geometria non supportato\"));\n                    }\n                };\n                if !valid_child {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n            }"
   },
   {
@@ -34533,7 +34891,12 @@
     "kind": "for",
     "line": 798,
     "literal_iteration_bound": "4",
-    "source": "for asse in 0..4 {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    colonne.push(Arc::new(Float64Array::from(\n                        limiti\n                            .iter()\n                            .map(|valore| valore.map(|limite| limite[asse]))\n                            .collect::<Vec<_>>(),\n                    )));\n                }"
+    "source": "for asse in 0..4 {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    colonne.push(Arc::new(Float64Array::from(\n                        limiti\n                            .iter()\n                            .map(|valore| valore.map(|limite| limite[asse]))\n                            .collect::<Vec<_>>(),\n                    )));\n                }",
+    "structural_proof": {
+      "iterations": "4",
+      "reason": "Estremi interi letterali rappresentabili senza troncamento; differenza controllata, incluso l estremo chiuso.",
+      "rule": "R-LITERAL-RANGE"
+    }
   },
   {
     "body": null,
