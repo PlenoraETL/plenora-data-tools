@@ -2283,6 +2283,9 @@
       "checkpoint620_callbacks_receivers_and_pipeline_require_propagation",
       "checkpoint620_coordinate_test_unit_is_not_production_work"
     ],
+    "crates/plenora-kernels-geo/tests/checkpoint620_census/static_proofs.rs": [
+      "static_proofs_reject_changed_dependencies_and_comment_copies"
+    ],
     "crates/plenora-kernels-geo/tests/concave_scavo.rs": [
       "divergenza_dodici_punti",
       "oracolo_razionale_enumerativo",
@@ -3194,7 +3197,8 @@
     ],
     "crates/plenora-pipeline/src/geo/mod.rs": [
       "la_config_rifiutata_non_cita_i_valori_scritti",
-      "il_tipo_si_legge_dal_type_code_iso_ed_ewkb"
+      "il_tipo_si_legge_dal_type_code_iso_ed_ewkb",
+      "tipi_preservano_timeout_e_cancellazione"
     ],
     "crates/plenora-pipeline/src/geo/unari.rs": [
       "il_buffer_conta_l_uscita_accumulata_nel_margine"
@@ -3607,6 +3611,7 @@
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25.txt",
     "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-cycles.json",
     "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json",
+    "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-static-proofs.json",
     "crates/plenora-kernels-geo/tests/fixtures/checkpoint620.txt",
     "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.json",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/aree.csv",

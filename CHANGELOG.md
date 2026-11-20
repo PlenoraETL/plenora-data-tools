@@ -14,6 +14,12 @@ la cui versione non ha qui una voce datata.
 
 ### Correzioni
 
+- Copertura locale dei quattro moduli geo del runner: il dispatch propaga
+  il controllo condiviso ai 21 cicli espliciti di validazione, unari,
+  binari e collettivi. Cancellazione e timeout della verifica dei tipi
+  conservano la propria categoria. Restano da qualificare i kernel
+  chiamati e i maggioranti composti, secondo l'opzione A invariata.
+
 - Checkpoint GOP-028 nelle scansioni di parti vuote di polygonize/split con
   limiti, negli input vuoti dei buffer geodetici e nei rami scartati delle
   scansioni topologiche e geodetiche. Riutilizzato il controllo condiviso;

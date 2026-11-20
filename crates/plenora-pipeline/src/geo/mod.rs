@@ -107,12 +107,17 @@ impl Lato {
 
     /// Dominio di validita' e tipi dichiarati di ogni cella non-null, dopo la
     /// sola decodifica strutturale (la validazione OGC resta ai kernel).
-    fn verifica(&self, op: &str, batch: &RecordBatch) -> Result<()> {
+    fn verifica(
+        &self,
+        op: &str,
+        batch: &RecordBatch,
+        interruzione: &crate::Interruzione,
+    ) -> Result<()> {
         plenora_core::contract::geometry_metadata_policy::require_planar(
             batch.schema().field(self.indice),
         )?;
         let celle = self.celle(batch)?;
-        verifica_tipi_dichiarati(celle, self.tipi.as_deref()).map_err(|()| {
+        verifica_tipi_dichiarati(celle, self.tipi.as_deref(), interruzione, || {
             PlenoraError::Schema(format!(
                 "{op}: una geometria della colonna `{}` ha un tipo che il contratto \
                  dell'ingresso non dichiara",
@@ -174,21 +179,24 @@ fn tipo_wkb(cella: &[u8]) -> Option<GeometryType> {
 }
 
 /// Ogni cella non-null e' di un tipo dell'elenco (nessun controllo senza
-/// elenco). `Err(())` alla prima che non lo e'.
+/// elenco). Errore di tipo alla prima che non lo e', o interruzione condivisa.
 fn verifica_tipi_dichiarati(
     celle: &BinaryArray,
     ammessi: Option<&[GeometryType]>,
-) -> std::result::Result<(), ()> {
+    interruzione: &crate::Interruzione,
+    errore_tipo: impl FnOnce() -> PlenoraError,
+) -> Result<()> {
     let Some(ammessi) = ammessi else {
         return Ok(());
     };
     for riga in 0..celle.len() {
+        interruzione.verifica("esecuzione pipeline")?;
         if celle.is_null(riga) {
             continue;
         }
         match tipo_wkb(celle.value(riga)) {
             Some(tipo) if ammessi.contains(&tipo) => {}
-            _ => return Err(()),
+            _ => return Err(errore_tipo()),
         }
     }
     Ok(())
@@ -206,6 +214,7 @@ fn monta(
     uscita: &DataContract,
     colonne: Vec<ArrayRef>,
     righe: usize,
+    interruzione: &crate::Interruzione,
 ) -> Result<RecordBatch> {
     if colonne.len() != uscita.schema.fields().len() {
         return Err(PlenoraError::Internal(format!(
@@ -213,6 +222,7 @@ fn monta(
         )));
     }
     for geometria in &uscita.geometries {
+        interruzione.verifica("esecuzione pipeline")?;
         let indice = uscita.schema.index_of(&geometria.name).map_err(|_| {
             PlenoraError::Internal(format!(
                 "{op}: geometria del contratto assente dallo schema"
@@ -231,12 +241,17 @@ fn monta(
                 geometria.name
             )));
         }
-        verifica_tipi_dichiarati(celle, tipi_con_elenco(geometria).as_deref()).map_err(|()| {
-            PlenoraError::Internal(format!(
-                "{op}: una geometria prodotta ha un tipo che il contratto d'uscita non \
+        verifica_tipi_dichiarati(
+            celle,
+            tipi_con_elenco(geometria).as_deref(),
+            interruzione,
+            || {
+                PlenoraError::Internal(format!(
+                    "{op}: una geometria prodotta ha un tipo che il contratto d'uscita non \
                      dichiara (analisi e kernel divergono)"
-            ))
-        })?;
+                ))
+            },
+        )?;
     }
     plenora_core::batch_with_rows(uscita.schema.clone(), colonne, righe)
 }
@@ -377,8 +392,10 @@ impl PassoGeo {
         ingressi: &[&RecordBatch],
         uscita: &DataContract,
         margine: usize,
+        interruzione: &crate::Interruzione,
     ) -> Result<RecordBatch> {
         for batch_arrow in ingressi {
+            interruzione.verifica("esecuzione pipeline")?;
             plenora_core::valida_arrow::batch(batch_arrow)?;
         }
         let margine = MargineMemoria::byte(u64::try_from(margine).unwrap_or(u64::MAX));
@@ -389,8 +406,9 @@ impl PassoGeo {
             )));
         }
         for (lato, batch) in self.lati.iter().zip(ingressi) {
+            interruzione.verifica("esecuzione pipeline")?;
             if let Some(lato) = lato {
-                lato.verifica(self.op, batch)?;
+                lato.verifica(self.op, batch, interruzione)?;
             }
         }
         let (colonne, righe) = match &self.kernel {
@@ -407,6 +425,7 @@ impl PassoGeo {
                     batch,
                     uscita,
                     margine,
+                    interruzione,
                 )?
             }
             Kernel::Collettivo(kernel, righe_massime) => {
@@ -422,6 +441,7 @@ impl PassoGeo {
                     batch,
                     *righe_massime,
                     margine,
+                    interruzione,
                 )?
             }
             Kernel::Binario(kernel, righe_massime) => {
@@ -439,10 +459,11 @@ impl PassoGeo {
                     (sinistra, destra),
                     *righe_massime,
                     margine,
+                    interruzione,
                 )?
             }
         };
-        monta(self.op, uscita, colonne, righe)
+        monta(self.op, uscita, colonne, righe, interruzione)
     }
 }
 
@@ -483,5 +504,67 @@ mod tests {
         assert_eq!(tipo_wkb(&[1, 3, 0]), None);
         assert_eq!(tipo_wkb(&[2, 1, 0, 0, 0]), None);
         assert_eq!(tipo_wkb(&[1, 99, 0, 0, 0]), None);
+    }
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod checkpoint_tests {
+    use super::verifica_tipi_dichiarati;
+    use plenora_core::arrow::array::BinaryArray;
+    use plenora_core::contract::GeometryType;
+    use plenora_core::{ErrorCategory, PlenoraError};
+    use std::sync::{atomic::AtomicBool, Arc};
+    use std::time::Instant;
+
+    #[test]
+    fn tipi_preservano_timeout_e_cancellazione() {
+        let celle = BinaryArray::from_iter_values([&[1_u8, 1, 0, 0, 0][..]]);
+        for (interruzione, categoria) in [
+            (
+                crate::Interruzione {
+                    scadenza: Some(Instant::now()),
+                    annullamento: None,
+                },
+                ErrorCategory::Timeout,
+            ),
+            (
+                crate::Interruzione {
+                    scadenza: None,
+                    annullamento: Some(Arc::new(AtomicBool::new(true))),
+                },
+                ErrorCategory::Cancelled,
+            ),
+        ] {
+            assert_eq!(
+                verifica_tipi_dichiarati(
+                    &celle,
+                    Some(&[GeometryType::Polygon]),
+                    &interruzione,
+                    || PlenoraError::Schema("tipo".into())
+                )
+                .expect_err("interruzione")
+                .category(),
+                categoria
+            );
+        }
+        assert_eq!(
+            verifica_tipi_dichiarati(
+                &celle,
+                Some(&[GeometryType::Polygon]),
+                &crate::Interruzione::default(),
+                || PlenoraError::Schema("tipo".into())
+            )
+            .expect_err("tipo errato")
+            .category(),
+            ErrorCategory::Schema
+        );
+        verifica_tipi_dichiarati(
+            &celle,
+            Some(&[GeometryType::Point]),
+            &crate::Interruzione::default(),
+            || PlenoraError::Schema("tipo".into()),
+        )
+        .expect("tipo valido");
     }
 }

@@ -9241,12 +9241,12 @@
       "checks": [
         {
           "function": "crates/plenora-pipeline/src/geo/mod.rs::esegui",
-          "contains": "for batch_arrow in ingressi {\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
+          "contains": "for batch_arrow in ingressi {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
         }
       ],
       "classification": "ingresso guardato",
       "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn esegui( &self, ingressi: &[&RecordBatch], uscita: &DataContract, margine: usize, ) -> Result<RecordBatch>"
+      "signature": "pub fn esegui( &self, ingressi: &[&RecordBatch], uscita: &DataContract, margine: usize, interruzione: &crate::Interruzione, ) -> Result<RecordBatch>"
     },
     "crates/plenora-pipeline/src/geo/mod.rs::prepara": {
       "arrow_arguments": [],

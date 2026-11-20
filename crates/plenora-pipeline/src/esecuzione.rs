@@ -376,8 +376,13 @@ fn esegui_kernel(
                 interruzione.verifica("esecuzione pipeline")?;
                 plenora_kernels_geo::valori_arrow::verifica_tabella(tabella)?;
             }
-            geo.esegui(ingressi, contratto, limiti.max_governed_memory_bytes)
-                .map(nessuno)
+            geo.esegui(
+                ingressi,
+                contratto,
+                limiti.max_governed_memory_bytes,
+                interruzione,
+            )
+            .map(nessuno)
         }
         (KernelPasso::Tabellare(preparato), [unico]) => {
             preparato.esegui_unario_con_effetti(unico, limiti)

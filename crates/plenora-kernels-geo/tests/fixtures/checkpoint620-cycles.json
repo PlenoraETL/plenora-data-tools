@@ -31457,7 +31457,7 @@
     "line": 344,
     "path": "format",
     "source": null,
-    "tokens": "\"max_expansion_factor superato (vincolo {:?}): soglia {}, output={righe_out}, \\\n             input={righe_in:?}\" , descrittore . expansion_constraint , descrittore . expansion_constraint . binding_threshold (fattore) ,"
+    "tokens": "\"max_expansion_factor superato (vincolo {:?}): soglia {}, output={righe_out}, \\\r\n             input={righe_in:?}\" , descrittore . expansion_constraint , descrittore . expansion_constraint . binding_threshold (fattore) ,"
   },
   {
     "array_iteration_bound": null,
@@ -31478,14 +31478,14 @@
   },
   {
     "body": null,
-    "column": 17,
+    "column": 13,
     "constant": false,
     "counter": null,
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 380,
+    "line": 385,
     "source": null
   },
   {
@@ -31497,7 +31497,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 387,
+    "line": 392,
     "source": null
   },
   {
@@ -31509,7 +31509,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "macro",
-    "line": 394,
+    "line": 399,
     "path": "format",
     "source": null,
     "tokens": "\"panico nel kernel {}: {}\" , passo . descrittore . id , plenora_core :: panic_policy :: forma_payload (payload . as_ref ())"
@@ -31523,7 +31523,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "macro",
-    "line": 400,
+    "line": 405,
     "path": "matches",
     "source": null,
     "tokens": "passo . kernel , KernelPasso :: Tabellare (_)"
@@ -31537,7 +31537,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:collect",
-    "line": 402,
+    "line": 407,
     "source": null
   },
   {
@@ -31549,7 +31549,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 402,
+    "line": 407,
     "source": null
   },
   {
@@ -31561,7 +31561,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:collect",
-    "line": 403,
+    "line": 408,
     "source": null
   },
   {
@@ -31573,7 +31573,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 403,
+    "line": 408,
     "source": null
   },
   {
@@ -31585,7 +31585,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:to_vec",
-    "line": 411,
+    "line": 416,
     "source": null
   },
   {
@@ -31597,7 +31597,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "diagnostica_nella_base",
     "kind": "macro",
-    "line": 437,
+    "line": 442,
     "path": "format",
     "source": null,
     "tokens": "\"passo `{}`: diagnostica per riga non valida senza gli esempi\" , passo . out"
@@ -31611,10 +31611,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "diagnostica_nella_base",
     "kind": "macro",
-    "line": 443,
+    "line": 448,
     "path": "format",
     "source": null,
-    "tokens": "\"passo `{}`: righe rifiutate nell'ingresso `{ingresso}` del passo, \\\n                 non riconducibili alla sorgente (diagnostica senza esempi)\" , passo . out"
+    "tokens": "\"passo `{}`: righe rifiutate nell'ingresso `{ingresso}` del passo, \\\r\n                 non riconducibili alla sorgente (diagnostica senza esempi)\" , passo . out"
   },
   {
     "body": null,
@@ -31625,7 +31625,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "byte_ingresso",
     "kind": "method:fold",
-    "line": 478,
+    "line": 483,
     "source": null
   },
   {
@@ -31637,13 +31637,13 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "somma",
     "kind": "method:fold",
-    "line": 507,
+    "line": 512,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      532,
+      537,
       41
     ],
     "column": 8,
@@ -31653,7 +31653,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run",
     "kind": "for",
-    "line": 532,
+    "line": 537,
     "literal_iteration_bound": null,
     "source": "for (_, batch_arrow) in &tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
@@ -31666,7 +31666,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 559,
+    "line": 564,
     "path": "format",
     "source": null,
     "tokens": "\"prima del passo `{}` ({op})\" , passo . out"
@@ -31674,7 +31674,7 @@
   {
     "array_iteration_bound": null,
     "body": [
-      565,
+      570,
       41
     ],
     "column": 8,
@@ -31684,14 +31684,14 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 565,
+    "line": 570,
     "literal_iteration_bound": null,
     "source": "for (_, batch_arrow) in &tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      572,
+      577,
       39
     ],
     "column": 8,
@@ -31701,7 +31701,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 572,
+    "line": 577,
     "literal_iteration_bound": null,
     "source": "for (nome, tabella) in tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let Some(atteso) = self.schemi_input.get(&nome) else {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` non dichiarata tra gli input del piano\"\n                )));\n            };\n            let tabella = normalize_large_utf8(tabella, interruzione)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            if tabella.schema().as_ref() != atteso.as_ref() {\n                return Err(PlenoraError::Schema(format!(\n                    \"input `{nome}`: schema diverso da quello dato in validazione\"\n                )));\n            }\n            // Lo schema del contratto dell'input (blocco canonico delle\n            // geometrie, `validazione::canonico`): stesse colonne, solo\n            // metadati in piu'.\n            let canonico = self.contratti.get(&nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto dell'input `{nome}` assente\"))\n            })?;\n            let righe_tabella = tabella.num_rows();\n            let tabella = plenora_core::batch_with_rows(\n                canonico.schema.clone(),\n                tabella.columns().to_vec(),\n                righe_tabella,\n            )\n            .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            validate_batch(&tabella, &self.limiti_kernel, interruzione)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            let righe_input = righe(&tabella)?;\n            if righe_input > self.limiti.rows.max_input_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"input `{nome}`: {righe_input} righe oltre max_input_rows {}\",\n                    self.limiti.rows.max_input_rows\n                )));\n            }\n            if vivi.insert(nome.clone(), tabella).is_some() {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` fornita due volte\"\n                )));\n            }\n        }"
   },
@@ -31714,7 +31714,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 575,
+    "line": 580,
     "path": "format",
     "source": null,
     "tokens": "\"tabella `{nome}` non dichiarata tra gli input del piano\""
@@ -31728,7 +31728,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 580,
+    "line": 585,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`\""
@@ -31742,7 +31742,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 582,
+    "line": 587,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`: schema diverso da quello dato in validazione\""
@@ -31756,7 +31756,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 590,
+    "line": 595,
     "path": "format",
     "source": null,
     "tokens": "\"contratto dell'input `{nome}` assente\""
@@ -31770,7 +31770,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 594,
+    "line": 599,
     "source": null
   },
   {
@@ -31782,7 +31782,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:to_vec",
-    "line": 595,
+    "line": 600,
     "source": null
   },
   {
@@ -31794,35 +31794,35 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 598,
-    "path": "format",
-    "source": null,
-    "tokens": "\"input `{nome}`\""
-  },
-  {
-    "body": null,
-    "column": 55,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "run_interrompibile",
-    "kind": "macro",
-    "line": 600,
-    "path": "format",
-    "source": null,
-    "tokens": "\"input `{nome}`\""
-  },
-  {
-    "body": null,
-    "column": 55,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "run_interrompibile",
-    "kind": "macro",
     "line": 603,
+    "path": "format",
+    "source": null,
+    "tokens": "\"input `{nome}`\""
+  },
+  {
+    "body": null,
+    "column": 55,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/esecuzione.rs",
+    "function": "run_interrompibile",
+    "kind": "macro",
+    "line": 605,
+    "path": "format",
+    "source": null,
+    "tokens": "\"input `{nome}`\""
+  },
+  {
+    "body": null,
+    "column": 55,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/esecuzione.rs",
+    "function": "run_interrompibile",
+    "kind": "macro",
+    "line": 608,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`: {righe_input} righe oltre max_input_rows {}\" , self . limiti . rows . max_input_rows"
@@ -31836,7 +31836,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 608,
+    "line": 613,
     "source": null
   },
   {
@@ -31848,7 +31848,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 609,
+    "line": 614,
     "path": "format",
     "source": null,
     "tokens": "\"tabella `{nome}` fornita due volte\""
@@ -31862,7 +31862,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:find",
-    "line": 614,
+    "line": 619,
     "source": null
   },
   {
@@ -31874,7 +31874,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 615,
+    "line": 620,
     "path": "format",
     "source": null,
     "tokens": "\"manca la tabella dell'input `{mancante}`\""
@@ -31882,7 +31882,7 @@
   {
     "array_iteration_bound": null,
     "body": [
-      624,
+      629,
       35
     ],
     "column": 8,
@@ -31892,14 +31892,14 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 624,
+    "line": 629,
     "literal_iteration_bound": null,
     "source": "for nome in &self.outputs {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            ultimo_uso.insert(nome, USO_SENZA_FINE);\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      628,
+      633,
       68
     ],
     "column": 8,
@@ -31909,14 +31909,14 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 628,
+    "line": 633,
     "literal_iteration_bound": null,
     "source": "for (indice, passo) in self.passi.iter().enumerate().rev() {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            for sorgente in &passo.inputs {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }\n            ultimo_uso.entry(&passo.out).or_insert(indice);\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      630,
+      635,
       43
     ],
     "column": 12,
@@ -31926,7 +31926,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 630,
+    "line": 635,
     "literal_iteration_bound": null,
     "source": "for sorgente in &passo.inputs {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }"
   },
@@ -31939,7 +31939,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 642,
+    "line": 647,
     "source": null
   },
   {
@@ -31951,13 +31951,13 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:filter",
-    "line": 640,
+    "line": 645,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      643,
+      648,
       41
     ],
     "column": 8,
@@ -31967,7 +31967,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 643,
+    "line": 648,
     "literal_iteration_bound": null,
     "source": "for nome in &liberati_all_avvio {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            vivi.remove(nome);\n        }"
   },
@@ -31980,15 +31980,15 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 651,
+    "line": 656,
     "path": "format",
     "source": null,
-    "tokens": "\"input: byte vivi iniziali {byte_vivi_iniziali} oltre il budget {budget} \\\n                 (max_governed_memory_bytes)\""
+    "tokens": "\"input: byte vivi iniziali {byte_vivi_iniziali} oltre il budget {budget} \\\r\n                 (max_governed_memory_bytes)\""
   },
   {
     "array_iteration_bound": null,
     "body": [
-      658,
+      663,
       62
     ],
     "column": 8,
@@ -31998,7 +31998,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 658,
+    "line": 663,
     "literal_iteration_bound": null,
     "source": "for (indice, passo) in self.passi.iter().enumerate() {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let op = passo.descrittore.id;\n            #[cfg(feature = \"sonde-di-prova\")]\n            if indice > 0 {\n                crate::sonda::chiama(crate::sonda::Punto::FraPassi, interruzione)?;\n            }\n            interruzione.verifica(&format!(\"prima del passo `{}` ({op})\", passo.out))?;\n            let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);\n            let ingressi: Vec<&RecordBatch> = passo\n                .inputs\n                .iter()\n                .map(|sorgente| {\n                    vivi.get(sorgente).ok_or_else(|| {\n                        PlenoraError::Internal(format!(\n                            \"`{sorgente}` non residente al passo che lo usa\"\n                        ))\n                    })\n                })\n                .collect::<Result<_>>()?;\n            let righe_in: Vec<u64> = ingressi.iter().map(|t| righe(t)).collect::<Result<_>>()?;\n            let contratto = self.contratti.get(&passo.out).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto di `{}` assente\", passo.out))\n            })?;\n\n            // Prima di eseguire: byte vivi delle residenti piu' il picco\n            // previsto nel budget, o il passo si rifiuta senza girare.\n            let residenti = byte_vivi(vivi.values()).map_err(nel)?;\n            let byte_previsti = passo.costo.in_memoria.picco(ingresso_del_passo(\n                passo,\n                &righe_in,\n                byte_ingresso(&ingressi).map_err(nel)?,\n            ));\n            if residenti\n                .checked_add(byte_previsti)\n                .is_none_or(|totale| totale > budget)\n            {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\"\n                ))));\n            }\n            // Al kernel tutto il margine: i suoi preflight usano lo spazio\n            // che c'e'.\n            let margine = budget - residenti;\n            let limiti_kernel = plenora_kernels_table::Limits {\n                max_governed_memory_bytes: usize::try_from(margine).unwrap_or(usize::MAX),\n                ..self.limiti_kernel.clone()\n            };\n\n            let (uscita, effetti) =\n                esegui_kernel(passo, &ingressi, &limiti_kernel, contratto, interruzione)\n                    .map_err(|errore| diagnostica_nella_base(errore, passo))\n                    .and_then(|(uscita, effetti)| {\n                        validate_batch(&uscita, &self.limiti_kernel, interruzione)?;\n                        let righe_out = righe(&uscita)?;\n                        // Come a `190c493` (`blocking.rs`), l'arco d'uscita del\n                        // piano ha solo `max_output_rows`, controllato alla fine.\n                        if !self.outputs.contains(&passo.out) {\n                            check_edge_counts(&self.limiti, righe_out)?;\n                        }\n                        check_expansion(passo, &self.limiti, &righe_in, righe_out)?;\n                        conforma(&uscita, contratto).map(|uscita| (uscita, effetti))\n                    })\n                    .map_err(nel)?;\n            let righe_out = righe(&uscita)?;\n\n            let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;\n            let byte_output_esclusivi = con_uscita.checked_sub(residenti).ok_or_else(|| {\n                PlenoraError::Internal(\"byte vivi diminuiti aggiungendo una tabella\".to_owned())\n            })?;\n            if con_uscita > budget {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\"\n                ))));\n            }\n            vivi.insert(passo.out.clone(), uscita);\n\n            let liberati: Vec<String> = ultimo_uso\n                .iter()\n                .filter(|(_, ultimo)| **ultimo == indice)\n                .map(|(nome, _)| (*nome).to_owned())\n                .collect();\n            for nome in &liberati {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                vivi.remove(nome);\n            }\n            passi.push(ReportPasso {\n                effetti_localizzati: passo.effetti_localizzati.clone(),\n                out: passo.out.clone(),\n                op,\n                righe_in,\n                righe_out,\n                byte_previsti,\n                margine_kernel: margine,\n                byte_output_esclusivi,\n                byte_vivi_con_uscita: con_uscita,\n                liberati,\n                byte_vivi: byte_vivi(vivi.values())?,\n                righe_divisione_per_zero: effetti.righe_divisione_per_zero,\n            });\n        }"
   },
@@ -32011,7 +32011,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 665,
+    "line": 670,
     "path": "format",
     "source": null,
     "tokens": "\"prima del passo `{}` ({op})\" , passo . out"
@@ -32025,7 +32025,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 677,
+    "line": 682,
     "source": null
   },
   {
@@ -32037,7 +32037,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 670,
+    "line": 675,
     "source": null
   },
   {
@@ -32049,7 +32049,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 672,
+    "line": 677,
     "path": "format",
     "source": null,
     "tokens": "\"`{sorgente}` non residente al passo che lo usa\""
@@ -32063,7 +32063,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 678,
+    "line": 683,
     "source": null
   },
   {
@@ -32075,7 +32075,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 678,
+    "line": 683,
     "source": null
   },
   {
@@ -32087,7 +32087,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 680,
+    "line": 685,
     "path": "format",
     "source": null,
     "tokens": "\"contratto di `{}` assente\" , passo . out"
@@ -32101,10 +32101,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 695,
+    "line": 700,
     "path": "format",
     "source": null,
-    "tokens": "\"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\""
+    "tokens": "\"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\r\n                     oltre il budget {budget} (max_governed_memory_bytes)\""
   },
   {
     "body": null,
@@ -32115,7 +32115,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 705,
+    "line": 710,
     "source": null
   },
   {
@@ -32127,7 +32127,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 720,
+    "line": 725,
     "source": null
   },
   {
@@ -32139,10 +32139,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 730,
+    "line": 735,
     "path": "format",
     "source": null,
-    "tokens": "\"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\""
+    "tokens": "\"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\r\n                     (max_governed_memory_bytes)\""
   },
   {
     "body": null,
@@ -32153,30 +32153,6 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 735,
-    "source": null
-  },
-  {
-    "body": null,
-    "column": 17,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "run_interrompibile",
-    "kind": "method:collect",
-    "line": 741,
-    "source": null
-  },
-  {
-    "body": null,
-    "column": 17,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "run_interrompibile",
-    "kind": "method:map",
     "line": 740,
     "source": null
   },
@@ -32188,14 +32164,38 @@
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
+    "kind": "method:collect",
+    "line": 746,
+    "source": null
+  },
+  {
+    "body": null,
+    "column": 17,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/esecuzione.rs",
+    "function": "run_interrompibile",
+    "kind": "method:map",
+    "line": 745,
+    "source": null
+  },
+  {
+    "body": null,
+    "column": 17,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/esecuzione.rs",
+    "function": "run_interrompibile",
     "kind": "method:filter",
-    "line": 739,
+    "line": 744,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      742,
+      747,
       35
     ],
     "column": 12,
@@ -32205,7 +32205,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 742,
+    "line": 747,
     "literal_iteration_bound": null,
     "source": "for nome in &liberati {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                vivi.remove(nome);\n            }"
   },
@@ -32218,7 +32218,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 747,
+    "line": 752,
     "source": null
   },
   {
@@ -32230,7 +32230,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 748,
+    "line": 753,
     "source": null
   },
   {
@@ -32242,15 +32242,15 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 765,
+    "line": 770,
     "path": "format",
     "source": null,
-    "tokens": "\"output: byte vivi finali {finali} oltre il budget {budget} \\\n                 (max_governed_memory_bytes)\""
+    "tokens": "\"output: byte vivi finali {finali} oltre il budget {budget} \\\r\n                 (max_governed_memory_bytes)\""
   },
   {
     "array_iteration_bound": null,
     "body": [
-      771,
+      776,
       35
     ],
     "column": 8,
@@ -32260,7 +32260,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 771,
+    "line": 776,
     "literal_iteration_bound": null,
     "source": "for nome in &self.outputs {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let tabella = vivi.remove(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"output `{nome}` non residente a fine piano\"))\n            })?;\n            let righe_output = righe(&tabella)?;\n            if righe_output > self.limiti.rows.max_output_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"output `{nome}`: {righe_output} righe oltre max_output_rows {}\",\n                    self.limiti.rows.max_output_rows\n                )));\n            }\n            // Lo schema pubblicato (versione e identità dei campi), deciso\n            // in validazione: stesse colonne, solo metadati in più.\n            let pubblicato = self.schemi_uscita.get(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"schema pubblicato dell'output `{nome}` assente\"))\n            })?;\n            let tabella = plenora_core::batch_with_rows(\n                pubblicato.clone(),\n                tabella.columns().to_vec(),\n                tabella.num_rows(),\n            )\n            .map_err(|_| {\n                PlenoraError::Internal(format!(\n                    \"output `{nome}`: la tabella non rispetta lo schema pubblicato\"\n                ))\n            })?;\n            outputs.push((nome.clone(), tabella));\n        }"
   },
@@ -32273,7 +32273,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 774,
+    "line": 779,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}` non residente a fine piano\""
@@ -32287,7 +32287,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 778,
+    "line": 783,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}`: {righe_output} righe oltre max_output_rows {}\" , self . limiti . rows . max_output_rows"
@@ -32301,7 +32301,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 786,
+    "line": 791,
     "path": "format",
     "source": null,
     "tokens": "\"schema pubblicato dell'output `{nome}` assente\""
@@ -32315,7 +32315,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 789,
+    "line": 794,
     "source": null
   },
   {
@@ -32327,7 +32327,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:to_vec",
-    "line": 790,
+    "line": 795,
     "source": null
   },
   {
@@ -32339,7 +32339,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 794,
+    "line": 799,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}`: la tabella non rispetta lo schema pubblicato\""
@@ -32353,7 +32353,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 798,
+    "line": 803,
     "source": null
   },
   {
@@ -32365,7 +32365,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 139,
+    "line": 140,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: {superato}\""
@@ -32379,7 +32379,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:fold",
-    "line": 147,
+    "line": 148,
     "source": null
   },
   {
@@ -32391,7 +32391,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:fold",
-    "line": 148,
+    "line": 149,
     "source": null
   },
   {
@@ -32403,7 +32403,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 164,
+    "line": 165,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: {superato}\""
@@ -32417,7 +32417,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 177,
+    "line": 178,
     "source": null
   },
   {
@@ -32429,7 +32429,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 180,
+    "line": 181,
     "source": null
   },
   {
@@ -32441,7 +32441,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 196,
+    "line": 197,
     "source": null
   },
   {
@@ -32453,7 +32453,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 199,
+    "line": 200,
     "source": null
   },
   {
@@ -32465,7 +32465,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 202,
+    "line": 203,
     "source": null
   },
   {
@@ -32477,7 +32477,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 215,
+    "line": 216,
     "source": null
   },
   {
@@ -32489,7 +32489,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 223,
+    "line": 224,
     "source": null
   },
   {
@@ -32501,7 +32501,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 219,
+    "line": 220,
     "source": null
   },
   {
@@ -32513,7 +32513,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 221,
+    "line": 222,
     "source": null
   },
   {
@@ -32525,7 +32525,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:to_vec",
-    "line": 224,
+    "line": 225,
     "source": null
   },
   {
@@ -32537,7 +32537,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 239,
+    "line": 240,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: il kernel non ha reso un conteggio per ogni riga di left\""
@@ -32551,7 +32551,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 247,
+    "line": 248,
     "source": null
   },
   {
@@ -32563,7 +32563,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 246,
+    "line": 247,
     "source": null
   },
   {
@@ -32575,7 +32575,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 246,
+    "line": 247,
     "source": null
   },
   {
@@ -32587,7 +32587,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:to_vec",
-    "line": 248,
+    "line": 249,
     "source": null
   },
   {
@@ -32599,7 +32599,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 253,
+    "line": 254,
     "source": null
   },
   {
@@ -32611,7 +32611,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:flatten",
-    "line": 253,
+    "line": 254,
     "source": null
   },
   {
@@ -32623,7 +32623,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 259,
+    "line": 260,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: il kernel non ha reso un risultato per ogni riga non nulla\""
@@ -32637,7 +32637,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 263,
+    "line": 264,
     "path": "vec",
     "source": null,
     "tokens": "None ; righe_sx"
@@ -32645,19 +32645,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      264,
+      265,
       81
     ],
     "column": 16,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "for",
-    "line": 264,
+    "line": 265,
     "literal_iteration_bound": null,
-    "source": "for (riga, ritagliata) in posizioni.into_iter().zip(ritagliate) {\n                    let cella = celle.get_mut(riga).ok_or_else(|| {\n                        PlenoraError::Internal(format!(\"{op}: posizione oltre le righe\"))\n                    })?;\n                    *cella = ritagliata.as_ref().map(encode_geometry).transpose()?;\n                }"
+    "source": "for (riga, ritagliata) in posizioni.into_iter().zip(ritagliate) {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    let cella = celle.get_mut(riga).ok_or_else(|| {\n                        PlenoraError::Internal(format!(\"{op}: posizione oltre le righe\"))\n                    })?;\n                    *cella = ritagliata.as_ref().map(encode_geometry).transpose()?;\n                }"
   },
   {
     "body": null,
@@ -32668,7 +32668,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 266,
+    "line": 268,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: posizione oltre le righe\""
@@ -32682,7 +32682,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 268,
+    "line": 270,
     "source": null
   },
   {
@@ -32694,7 +32694,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:to_vec",
-    "line": 270,
+    "line": 272,
     "source": null
   },
   {
@@ -32706,7 +32706,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 271,
+    "line": 273,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& celle)"
@@ -32720,7 +32720,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 290,
+    "line": 292,
     "source": null
   },
   {
@@ -32732,7 +32732,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 296,
+    "line": 298,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: indice di un pezzo oltre le righe\""
@@ -32740,19 +32740,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      306,
+      308,
       37
     ],
     "column": 16,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "for",
-    "line": 306,
+    "line": 308,
     "literal_iteration_bound": null,
-    "source": "for pezzo in &pezzi {\n                    celle.push(Some(encode_geometry(&pezzo.geometry)?));\n                    indici_sx.push(riga_di(&posizioni_sx, pezzo.left)?);\n                    indici_dx.push(riga_di(&posizioni_dx, pezzo.right)?);\n                }"
+    "source": "for pezzo in &pezzi {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    celle.push(Some(encode_geometry(&pezzo.geometry)?));\n                    indici_sx.push(riga_di(&posizioni_sx, pezzo.left)?);\n                    indici_dx.push(riga_di(&posizioni_dx, pezzo.right)?);\n                }"
   },
   {
     "body": null,
@@ -32763,7 +32763,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 312,
+    "line": 315,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& celle) , Arc :: new (UInt64Array :: from (indici_sx)) , Arc :: new (UInt64Array :: from (indici_dx)) ,"
@@ -32777,7 +32777,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 322,
+    "line": 325,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: le due tabelle devono avere le stesse righe (riga i con riga i)\""
@@ -32791,7 +32791,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 347,
+    "line": 350,
     "source": null
   },
   {
@@ -32803,7 +32803,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 329,
+    "line": 332,
     "source": null
   },
   {
@@ -32815,7 +32815,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 342,
+    "line": 345,
     "source": null
   },
   {
@@ -32827,7 +32827,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "method:to_vec",
-    "line": 348,
+    "line": 351,
     "source": null
   },
   {
@@ -32839,7 +32839,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 349,
+    "line": 352,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& risultati)"
@@ -32853,7 +32853,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "byte_riga_massima",
     "kind": "method:fold",
-    "line": 364,
+    "line": 367,
     "source": null
   },
   {
@@ -32865,7 +32865,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "byte_decodificate_previste",
     "kind": "method:fold",
-    "line": 394,
+    "line": 397,
     "source": null
   },
   {
@@ -32877,7 +32877,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "righe_di",
     "kind": "method:collect",
-    "line": 410,
+    "line": 413,
     "source": null
   },
   {
@@ -32889,7 +32889,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "righe_di",
     "kind": "method:map",
-    "line": 409,
+    "line": 412,
     "source": null
   },
   {
@@ -32901,7 +32901,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "presenti",
     "kind": "method:filter_map",
-    "line": 418,
+    "line": 421,
     "source": null
   },
   {
@@ -32913,7 +32913,7 @@
     "file": "crates/plenora-pipeline/src/geo/binari.rs",
     "function": "presenti",
     "kind": "method:map",
-    "line": 418,
+    "line": 421,
     "source": null
   },
   {
@@ -32991,7 +32991,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 292,
+    "line": 293,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: operazione senza colonna geometria\""
@@ -33005,7 +33005,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 303,
+    "line": 306,
     "source": null
   },
   {
@@ -33017,7 +33017,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 303,
+    "line": 306,
     "source": null
   },
   {
@@ -33029,7 +33029,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 327,
+    "line": 330,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: l'adapter non ha reso la colonna\""
@@ -33043,7 +33043,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:to_vec",
-    "line": 329,
+    "line": 332,
     "source": null
   },
   {
@@ -33055,7 +33055,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 330,
+    "line": 333,
     "path": "vec",
     "source": null,
     "tokens": "riparate"
@@ -33069,7 +33069,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 335,
+    "line": 338,
     "source": null
   },
   {
@@ -33081,7 +33081,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:flatten",
-    "line": 335,
+    "line": 338,
     "source": null
   },
   {
@@ -33093,7 +33093,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 358,
+    "line": 361,
     "source": null
   },
   {
@@ -33105,7 +33105,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:flatten",
-    "line": 358,
+    "line": 361,
     "source": null
   },
   {
@@ -33117,7 +33117,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 368,
+    "line": 371,
     "source": null
   },
   {
@@ -33129,7 +33129,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 367,
+    "line": 370,
     "source": null
   },
   {
@@ -33141,7 +33141,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 367,
+    "line": 370,
     "source": null
   },
   {
@@ -33153,7 +33153,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 370,
+    "line": 373,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& celle)"
@@ -33167,7 +33167,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 387,
+    "line": 390,
     "source": null
   },
   {
@@ -33179,7 +33179,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 387,
+    "line": 390,
     "source": null
   },
   {
@@ -33191,7 +33191,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 387,
+    "line": 390,
     "source": null
   },
   {
@@ -33203,7 +33203,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "method:to_vec",
-    "line": 410,
+    "line": 413,
     "source": null
   },
   {
@@ -33215,7 +33215,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 429,
+    "line": 432,
     "path": "vec",
     "source": null,
     "tokens": "Arc :: new (StringArray :: from (problemi . iter () . map (| p | p . issue_type) . collect ::< Vec < _ >> () ,)) , Arc :: new (UInt64Array :: from_iter_values (problemi . iter () . map (| p | p . index_a) ,)) , Arc :: new (UInt64Array :: from_iter_values (problemi . iter () . map (| p | p . index_b) ,)) , Arc :: new (Float64Array :: from_iter_values (problemi . iter () . map (| p | p . area) ,)) , Arc :: new (problemi . iter () . map (| p | Some (p . wkb . as_slice ())) . collect ::< BinaryArray > () ,) ,"
@@ -33229,7 +33229,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 459,
+    "line": 462,
     "path": "vec",
     "source": null,
     "tokens": "Arc :: new (UInt64Array :: from_iter_values (tratti . iter () . map (| t | t . index_a) ,)) , Arc :: new (UInt64Array :: from_iter_values (tratti . iter () . map (| t | t . index_b) ,)) , Arc :: new (Float64Array :: from_iter_values (tratti . iter () . map (| t | t . shared_length) ,)) , Arc :: new (tratti . iter () . map (| t | Some (t . wkb . as_slice ())) . collect ::< BinaryArray > () ,) ,"
@@ -33243,7 +33243,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 479,
+    "line": 482,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: griglia sul percorso delle geometrie\""
@@ -33257,7 +33257,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "decodifica",
     "kind": "method:map",
-    "line": 488,
+    "line": 491,
     "source": null
   },
   {
@@ -33269,7 +33269,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "una_geometria",
     "kind": "method:map",
-    "line": 493,
+    "line": 496,
     "source": null
   },
   {
@@ -33281,7 +33281,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "una_geometria",
     "kind": "macro",
-    "line": 494,
+    "line": 497,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& [cella])"
@@ -33295,7 +33295,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "un_batch",
     "kind": "macro",
-    "line": 500,
+    "line": 503,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: l'adapter non ha reso un solo batch\""
@@ -33309,7 +33309,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "un_batch",
     "kind": "method:to_vec",
-    "line": 504,
+    "line": 507,
     "source": null
   },
   {
@@ -33321,7 +33321,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "method:collect",
-    "line": 530,
+    "line": 534,
     "source": null
   },
   {
@@ -33333,7 +33333,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "method:map",
-    "line": 529,
+    "line": 533,
     "source": null
   },
   {
@@ -33345,7 +33345,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "method:collect",
-    "line": 538,
+    "line": 542,
     "source": null
   },
   {
@@ -33357,7 +33357,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "method:map",
-    "line": 537,
+    "line": 541,
     "source": null
   },
   {
@@ -33369,7 +33369,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "macro",
-    "line": 543,
+    "line": 547,
     "path": "matches",
     "source": null,
     "tokens": "espansione , Espansione :: Suddividi { .. }"
@@ -33377,19 +33377,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      546,
+      550,
       56
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "for",
-    "line": 546,
+    "line": 550,
     "literal_iteration_bound": null,
-    "source": "for (riga, parti) in parti.into_iter().enumerate() {\n        let madre = u64::try_from(riga)\n            .map_err(|_| PlenoraError::Internal(format!(\"{op}: riga non rappresentabile\")))?;\n        match parti {\n            Some(parti) => {\n                for parte in parti {\n                    madri.push(madre);\n                    celle.push(Some(parte));\n                }\n            }\n            None if tiene_i_null => {\n                madri.push(madre);\n                celle.push(None);\n            }\n            None => {}\n        }\n        let prodotte = u64::try_from(celle.len())\n            .map_err(|_| PlenoraError::Internal(format!(\"{op}: righe non rappresentabili\")))?;\n        if prodotte > righe_massime {\n            return Err(PlenoraError::ResourceLimit(format!(\n                \"{op}: righe prodotte oltre il limite {righe_massime} dell'arco\"\n            )));\n        }\n    }"
+    "source": "for (riga, parti) in parti.into_iter().enumerate() {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let madre = u64::try_from(riga)\n            .map_err(|_| PlenoraError::Internal(format!(\"{op}: riga non rappresentabile\")))?;\n        match parti {\n            Some(parti) => {\n                for parte in parti {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    madri.push(madre);\n                    celle.push(Some(parte));\n                }\n            }\n            None if tiene_i_null => {\n                madri.push(madre);\n                celle.push(None);\n            }\n            None => {}\n        }\n        let prodotte = u64::try_from(celle.len())\n            .map_err(|_| PlenoraError::Internal(format!(\"{op}: righe non rappresentabili\")))?;\n        if prodotte > righe_massime {\n            return Err(PlenoraError::ResourceLimit(format!(\n                \"{op}: righe prodotte oltre il limite {righe_massime} dell'arco\"\n            )));\n        }\n    }"
   },
   {
     "body": null,
@@ -33400,7 +33400,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "macro",
-    "line": 548,
+    "line": 553,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: riga non rappresentabile\""
@@ -33408,19 +33408,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      551,
+      556,
       36
     ],
     "column": 16,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "for",
-    "line": 551,
+    "line": 556,
     "literal_iteration_bound": null,
-    "source": "for parte in parti {\n                    madri.push(madre);\n                    celle.push(Some(parte));\n                }"
+    "source": "for parte in parti {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    madri.push(madre);\n                    celle.push(Some(parte));\n                }"
   },
   {
     "body": null,
@@ -33431,7 +33431,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "macro",
-    "line": 563,
+    "line": 569,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: righe non rappresentabili\""
@@ -33445,7 +33445,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "macro",
-    "line": 565,
+    "line": 571,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: righe prodotte oltre il limite {righe_massime} dell'arco\""
@@ -33453,36 +33453,36 @@
   {
     "array_iteration_bound": null,
     "body": [
-      572,
+      578,
       65
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "espandi",
     "kind": "for",
-    "line": 572,
+    "line": 578,
     "literal_iteration_bound": null,
-    "source": "for (indice, colonna) in batch.columns().iter().enumerate() {\n        if indice == lato.indice {\n            colonne.push(binaria(&celle));\n        } else {\n            colonne.push(take(colonna.as_ref(), &indici, None)?);\n        }\n    }"
+    "source": "for (indice, colonna) in batch.columns().iter().enumerate() {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        if indice == lato.indice {\n            colonne.push(binaria(&celle));\n        } else {\n            colonne.push(take(colonna.as_ref(), &indici, None)?);\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      596,
+      604,
       60
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "for",
-    "line": 596,
+    "line": 604,
     "literal_iteration_bound": null,
-    "source": "for (riga, geometria) in tutte.into_iter().enumerate() {\n        if let Some(geometria) = geometria {\n            posizioni.push(riga);\n            presenti.push(geometria);\n        }\n    }"
+    "source": "for (riga, geometria) in tutte.into_iter().enumerate() {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        if let Some(geometria) = geometria {\n            posizioni.push(riga);\n            presenti.push(geometria);\n        }\n    }"
   },
   {
     "body": null,
@@ -33493,7 +33493,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "macro",
-    "line": 604,
+    "line": 613,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: il kernel non ha reso un risultato per ogni riga non nulla\""
@@ -33507,7 +33507,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "macro",
-    "line": 608,
+    "line": 617,
     "path": "vec",
     "source": null,
     "tokens": "None ; batch . num_rows ()"
@@ -33515,19 +33515,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      609,
+      618,
       67
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "for",
-    "line": 609,
+    "line": 618,
     "literal_iteration_bound": null,
-    "source": "for (riga, risultato) in posizioni.into_iter().zip(risultati) {\n        let cella = celle\n            .get_mut(riga)\n            .ok_or_else(|| PlenoraError::Internal(format!(\"{op}: posizione oltre le righe\")))?;\n        *cella = risultato.as_ref().map(encode_geometry).transpose()?;\n    }"
+    "source": "for (riga, risultato) in posizioni.into_iter().zip(risultati) {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let cella = celle\n            .get_mut(riga)\n            .ok_or_else(|| PlenoraError::Internal(format!(\"{op}: posizione oltre le righe\")))?;\n        *cella = risultato.as_ref().map(encode_geometry).transpose()?;\n    }"
   },
   {
     "body": null,
@@ -33538,7 +33538,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "macro",
-    "line": 612,
+    "line": 622,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: posizione oltre le righe\""
@@ -33552,7 +33552,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "method:map",
-    "line": 613,
+    "line": 623,
     "source": null
   },
   {
@@ -33564,7 +33564,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "method:to_vec",
-    "line": 615,
+    "line": 625,
     "source": null
   },
   {
@@ -33576,7 +33576,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "allineate_alle_righe",
     "kind": "macro",
-    "line": 616,
+    "line": 626,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& celle)"
@@ -33584,19 +33584,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      645,
+      656,
       26
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "for",
-    "line": 645,
+    "line": 656,
     "literal_iteration_bound": null,
-    "source": "for righe in &gruppi {\n        let gruppo: Vec<Option<Geometry<f64>>> = righe\n            .iter()\n            .map(|&riga| geometrie.get(riga).cloned().flatten())\n            .collect();\n        let raccolta = extensions::collect_geometries(&gruppo).map_err(|e| del_kernel(op, &e))?;\n        raccolte.push(raccolta.as_ref().map(encode_geometry).transpose()?);\n        let prima = righe\n            .first()\n            .copied()\n            .ok_or_else(|| PlenoraError::Internal(format!(\"{op}: gruppo senza righe\")))?;\n        rappresentanti.push(\n            u64::try_from(prima)\n                .map_err(|_| PlenoraError::Internal(format!(\"{op}: riga non rappresentabile\")))?,\n        );\n    }"
+    "source": "for righe in &gruppi {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let gruppo: Vec<Option<Geometry<f64>>> = righe\n            .iter()\n            .map(|&riga| geometrie.get(riga).cloned().flatten())\n            .collect();\n        let raccolta = extensions::collect_geometries(&gruppo).map_err(|e| del_kernel(op, &e))?;\n        raccolte.push(raccolta.as_ref().map(encode_geometry).transpose()?);\n        let prima = righe\n            .first()\n            .copied()\n            .ok_or_else(|| PlenoraError::Internal(format!(\"{op}: gruppo senza righe\")))?;\n        rappresentanti.push(\n            u64::try_from(prima)\n                .map_err(|_| PlenoraError::Internal(format!(\"{op}: riga non rappresentabile\")))?,\n        );\n    }"
   },
   {
     "body": null,
@@ -33607,7 +33607,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "method:collect",
-    "line": 649,
+    "line": 661,
     "source": null
   },
   {
@@ -33619,7 +33619,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "method:map",
-    "line": 648,
+    "line": 660,
     "source": null
   },
   {
@@ -33631,7 +33631,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "method:flatten",
-    "line": 648,
+    "line": 660,
     "source": null
   },
   {
@@ -33643,7 +33643,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "method:map",
-    "line": 651,
+    "line": 663,
     "source": null
   },
   {
@@ -33655,7 +33655,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "macro",
-    "line": 655,
+    "line": 667,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: gruppo senza righe\""
@@ -33669,7 +33669,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "macro",
-    "line": 658,
+    "line": 670,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: riga non rappresentabile\""
@@ -33677,19 +33677,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      664,
+      676,
       27
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "for",
-    "line": 664,
+    "line": 676,
     "literal_iteration_bound": null,
-    "source": "for &indice in chiavi {\n        let colonna = batch.columns().get(indice).ok_or_else(|| {\n            PlenoraError::Internal(format!(\"{op}: colonna chiave oltre lo schema\"))\n        })?;\n        colonne.push(take(colonna.as_ref(), &indici, None)?);\n    }"
+    "source": "for &indice in chiavi {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let colonna = batch.columns().get(indice).ok_or_else(|| {\n            PlenoraError::Internal(format!(\"{op}: colonna chiave oltre lo schema\"))\n        })?;\n        colonne.push(take(colonna.as_ref(), &indici, None)?);\n    }"
   },
   {
     "body": null,
@@ -33700,7 +33700,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "raccogli",
     "kind": "macro",
-    "line": 666,
+    "line": 679,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna chiave oltre lo schema\""
@@ -33708,19 +33708,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      680,
+      698,
       59
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "for",
-    "line": 680,
+    "line": 698,
     "literal_iteration_bound": null,
-    "source": "for (posizione, &indice) in chiavi.iter().enumerate() {\n        let colonna = batch.columns().get(indice).ok_or_else(|| {\n            PlenoraError::Internal(format!(\"{op}: colonna chiave oltre lo schema\"))\n        })?;\n        // Nomi posizionali: nessuna collisione con l'indice ne' fra chiavi.\n        let nome = format!(\"k{posizione}\");\n        campi.push(Field::new(&nome, colonna.data_type().clone(), true));\n        colonne.push(Arc::clone(colonna));\n        nomi.push(nome);\n    }"
+    "source": "for (posizione, &indice) in chiavi.iter().enumerate() {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let colonna = batch.columns().get(indice).ok_or_else(|| {\n            PlenoraError::Internal(format!(\"{op}: colonna chiave oltre lo schema\"))\n        })?;\n        // Nomi posizionali: nessuna collisione con l'indice ne' fra chiavi.\n        let nome = format!(\"k{posizione}\");\n        campi.push(Field::new(&nome, colonna.data_type().clone(), true));\n        colonne.push(Arc::clone(colonna));\n        nomi.push(nome);\n    }"
   },
   {
     "body": null,
@@ -33731,7 +33731,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "macro",
-    "line": 682,
+    "line": 701,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna chiave oltre lo schema\""
@@ -33745,7 +33745,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "macro",
-    "line": 685,
+    "line": 704,
     "path": "format",
     "source": null,
     "tokens": "\"k{posizione}\""
@@ -33759,7 +33759,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "method:clone",
-    "line": 686,
+    "line": 705,
     "source": null
   },
   {
@@ -33771,7 +33771,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "macro",
-    "line": 691,
+    "line": 710,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: righe non rappresentabili\""
@@ -33785,7 +33785,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "macro",
-    "line": 707,
+    "line": 726,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: indice di riga non UInt64\""
@@ -33793,19 +33793,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      709,
+      728,
       45
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "for",
-    "line": 709,
+    "line": 728,
     "literal_iteration_bound": null,
-    "source": "for posizione in 0..ordinata.num_rows() {\n        let riga = usize::try_from(indici.value(posizione))\n            .map_err(|_| PlenoraError::Internal(format!(\"{op}: riga non rappresentabile\")))?;\n        let stesso_gruppo = match posizione.checked_sub(1) {\n            None => false,\n            Some(precedente) => {\n                let mut uguali = true;\n                for colonna in &ordinata.columns()[..chiavi.len()] {\n                    if plenora_kernels_table::aggregation::compare_cells_typed(\n                        colonna, precedente, colonna, posizione,\n                    )? != std::cmp::Ordering::Equal\n                    {\n                        uguali = false;\n                        break;\n                    }\n                }\n                uguali\n            }\n        };\n        match gruppi.last_mut() {\n            Some(gruppo) if stesso_gruppo => gruppo.push(riga),\n            _ => gruppi.push(vec![riga]),\n        }\n    }"
+    "source": "for posizione in 0..ordinata.num_rows() {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let riga = usize::try_from(indici.value(posizione))\n            .map_err(|_| PlenoraError::Internal(format!(\"{op}: riga non rappresentabile\")))?;\n        let stesso_gruppo = match posizione.checked_sub(1) {\n            None => false,\n            Some(precedente) => {\n                let mut uguali = true;\n                for colonna in &ordinata.columns()[..chiavi.len()] {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    if plenora_kernels_table::aggregation::compare_cells_typed(\n                        colonna, precedente, colonna, posizione,\n                    )? != std::cmp::Ordering::Equal\n                    {\n                        uguali = false;\n                        break;\n                    }\n                }\n                uguali\n            }\n        };\n        match gruppi.last_mut() {\n            Some(gruppo) if stesso_gruppo => gruppo.push(riga),\n            _ => gruppi.push(vec![riga]),\n        }\n    }"
   },
   {
     "body": null,
@@ -33816,7 +33816,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "macro",
-    "line": 711,
+    "line": 731,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: riga non rappresentabile\""
@@ -33824,19 +33824,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      716,
+      736,
       68
     ],
     "column": 16,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "for",
-    "line": 716,
+    "line": 736,
     "literal_iteration_bound": null,
-    "source": "for colonna in &ordinata.columns()[..chiavi.len()] {\n                    if plenora_kernels_table::aggregation::compare_cells_typed(\n                        colonna, precedente, colonna, posizione,\n                    )? != std::cmp::Ordering::Equal\n                    {\n                        uguali = false;\n                        break;\n                    }\n                }"
+    "source": "for colonna in &ordinata.columns()[..chiavi.len()] {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    if plenora_kernels_table::aggregation::compare_cells_typed(\n                        colonna, precedente, colonna, posizione,\n                    )? != std::cmp::Ordering::Equal\n                    {\n                        uguali = false;\n                        break;\n                    }\n                }"
   },
   {
     "body": null,
@@ -33847,7 +33847,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "gruppi_in_ordine",
     "kind": "macro",
-    "line": 730,
+    "line": 751,
     "path": "vec",
     "source": null,
     "tokens": "riga"
@@ -33861,7 +33861,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "griglia",
     "kind": "macro",
-    "line": 745,
+    "line": 766,
     "path": "vec",
     "source": null,
     "tokens": "Arc :: new (celle . iter () . map (| cella | Some (cella . wkb . as_slice ())) . collect ::< BinaryArray > () ,) , Arc :: new (UInt64Array :: from_iter_values (celle . iter () . map (| c | c . cell_i) ,)) , Arc :: new (UInt64Array :: from_iter_values (celle . iter () . map (| c | c . cell_j) ,)) ,"
@@ -33875,7 +33875,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "griglia",
     "kind": "method:map",
-    "line": 761,
+    "line": 782,
     "source": null
   },
   {
@@ -33887,7 +33887,7 @@
     "file": "crates/plenora-pipeline/src/geo/collettivi.rs",
     "function": "griglia",
     "kind": "method:map",
-    "line": 764,
+    "line": 785,
     "source": null
   },
   {
@@ -34267,7 +34267,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "celle_nel_margine",
     "kind": "macro",
-    "line": 557,
+    "line": 558,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: {superato}\""
@@ -34281,25 +34281,25 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "celle_nel_margine",
     "kind": "macro",
-    "line": 563,
+    "line": 564,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: allocazione delle celle\""
   },
   {
     "body": [
-      570,
+      571,
       26
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "celle_nel_margine",
     "kind": "while",
-    "line": 570,
-    "source": "while inizio < righe {\n        let fine = (inizio + RIGHE_IN_VOLO).min(righe);\n        let per_riga = (margine.byte_disponibili() - usati) / RIGHE_IN_VOLO as u64;\n        let fetta = celle.slice(inizio, fine - inizio);\n        let blocco = map_nullable(&fetta, |payload| {\n            // Prima di decodificare, dalle intestazioni del WKB.\n            MargineMemoria::byte(per_riga)\n                .verifica(plenora_kernels_geo::decoded_size::decoded_size_xy(payload).unwrap_or(0))\n                .map_err(oltre)?;\n            let geometria = plenora_kernels_geo::wkb_decoder::decode_validated(payload)?;\n            // La geometria decodificata vive per tutta la riga.\n            let decodificata = byte_heap_geometria(&geometria);\n            MargineMemoria::byte(per_riga)\n                .verifica(decodificata)\n                .map_err(oltre)?;\n            kernel(&geometria, MargineMemoria::byte(per_riga - decodificata))?\n                .map(|risultato| encode_geometry(&risultato))\n                .transpose()\n        })?;\n        for risultato in blocco {\n            if let Some(wkb) = &risultato {\n                // La cella (capacita' vera) e la sua copia nella colonna.\n                usati = usati\n                    .saturating_add(u64::try_from(wkb.capacity()).unwrap_or(u64::MAX))\n                    .saturating_add(u64::try_from(wkb.len()).unwrap_or(u64::MAX));\n                margine.verifica(usati).map_err(oltre)?;\n            }\n            uscita.push(risultato);\n        }\n        inizio = fine;\n    }"
+    "line": 571,
+    "source": "while inizio < righe {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let fine = (inizio + RIGHE_IN_VOLO).min(righe);\n        let per_riga = (margine.byte_disponibili() - usati) / RIGHE_IN_VOLO as u64;\n        let fetta = celle.slice(inizio, fine - inizio);\n        let blocco = map_nullable(&fetta, |payload| {\n            // Prima di decodificare, dalle intestazioni del WKB.\n            MargineMemoria::byte(per_riga)\n                .verifica(plenora_kernels_geo::decoded_size::decoded_size_xy(payload).unwrap_or(0))\n                .map_err(oltre)?;\n            let geometria = plenora_kernels_geo::wkb_decoder::decode_validated(payload)?;\n            // La geometria decodificata vive per tutta la riga.\n            let decodificata = byte_heap_geometria(&geometria);\n            MargineMemoria::byte(per_riga)\n                .verifica(decodificata)\n                .map_err(oltre)?;\n            kernel(&geometria, MargineMemoria::byte(per_riga - decodificata))?\n                .map(|risultato| encode_geometry(&risultato))\n                .transpose()\n        })?;\n        for risultato in blocco {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            if let Some(wkb) = &risultato {\n                // La cella (capacita' vera) e la sua copia nella colonna.\n                usati = usati\n                    .saturating_add(u64::try_from(wkb.capacity()).unwrap_or(u64::MAX))\n                    .saturating_add(u64::try_from(wkb.len()).unwrap_or(u64::MAX));\n                margine.verifica(usati).map_err(oltre)?;\n            }\n            uscita.push(risultato);\n        }\n        inizio = fine;\n    }"
   },
   {
     "body": null,
@@ -34310,25 +34310,25 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "celle_nel_margine",
     "kind": "method:map",
-    "line": 586,
+    "line": 588,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      589,
+      591,
       33
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "celle_nel_margine",
     "kind": "for",
-    "line": 589,
+    "line": 591,
     "literal_iteration_bound": null,
-    "source": "for risultato in blocco {\n            if let Some(wkb) = &risultato {\n                // La cella (capacita' vera) e la sua copia nella colonna.\n                usati = usati\n                    .saturating_add(u64::try_from(wkb.capacity()).unwrap_or(u64::MAX))\n                    .saturating_add(u64::try_from(wkb.len()).unwrap_or(u64::MAX));\n                margine.verifica(usati).map_err(oltre)?;\n            }\n            uscita.push(risultato);\n        }"
+    "source": "for risultato in blocco {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            if let Some(wkb) = &risultato {\n                // La cella (capacita' vera) e la sua copia nella colonna.\n                usati = usati\n                    .saturating_add(u64::try_from(wkb.capacity()).unwrap_or(u64::MAX))\n                    .saturating_add(u64::try_from(wkb.len()).unwrap_or(u64::MAX));\n                margine.verifica(usati).map_err(oltre)?;\n            }\n            uscita.push(risultato);\n        }"
   },
   {
     "body": null,
@@ -34339,7 +34339,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "indice_colonna",
     "kind": "macro",
-    "line": 607,
+    "line": 610,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna `{nome}` assente dallo schema dopo l'analisi\""
@@ -34353,7 +34353,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "prepara",
     "kind": "method:find",
-    "line": 630,
+    "line": 633,
     "source": null
   },
   {
@@ -34365,7 +34365,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "prepara",
     "kind": "method:any",
-    "line": 634,
+    "line": 637,
     "source": null
   },
   {
@@ -34377,7 +34377,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "prepara",
     "kind": "macro",
-    "line": 638,
+    "line": 641,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: produttore senza CRS dopo l'analisi\""
@@ -34391,7 +34391,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "prepara",
     "kind": "macro",
-    "line": 689,
+    "line": 692,
     "path": "vec",
     "source": null,
     "tokens": "AccessorFieldParam :: GeometryType , AccessorFieldParam :: NumGeometries , AccessorFieldParam :: NumInteriorRings , AccessorFieldParam :: StartPoint , AccessorFieldParam :: EndPoint , AccessorFieldParam :: IsClosed ,"
@@ -34405,7 +34405,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "method:to_vec",
-    "line": 716,
+    "line": 721,
     "source": null
   },
   {
@@ -34417,7 +34417,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 733,
+    "line": 738,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: operazione senza colonna geometria\""
@@ -34431,7 +34431,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 737,
+    "line": 742,
     "path": "matches",
     "source": null,
     "tokens": "trasformazione , Trasformazione :: Buffer { .. }"
@@ -34445,7 +34445,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 745,
+    "line": 754,
     "source": null
   },
   {
@@ -34457,7 +34457,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 749,
+    "line": 758,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& celle)"
@@ -34471,7 +34471,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 762,
+    "line": 771,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: l'adapter non ha reso un batch per l'ingresso\""
@@ -34485,7 +34485,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 771,
+    "line": 780,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna geometria riproiettata assente\""
@@ -34499,7 +34499,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 775,
+    "line": 784,
     "path": "vec",
     "source": null,
     "tokens": "geometrie"
@@ -34513,7 +34513,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 782,
+    "line": 791,
     "path": "vec",
     "source": null,
     "tokens": "binaria (& celle)"
@@ -34521,19 +34521,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      789,
+      798,
       34
     ],
     "column": 16,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "for",
-    "line": 789,
+    "line": 798,
     "literal_iteration_bound": "4",
-    "source": "for asse in 0..4 {\n                    colonne.push(Arc::new(Float64Array::from(\n                        limiti\n                            .iter()\n                            .map(|valore| valore.map(|limite| limite[asse]))\n                            .collect::<Vec<_>>(),\n                    )));\n                }"
+    "source": "for asse in 0..4 {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    colonne.push(Arc::new(Float64Array::from(\n                        limiti\n                            .iter()\n                            .map(|valore| valore.map(|limite| limite[asse]))\n                            .collect::<Vec<_>>(),\n                    )));\n                }"
   },
   {
     "body": null,
@@ -34544,7 +34544,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "method:collect",
-    "line": 794,
+    "line": 804,
     "source": null
   },
   {
@@ -34556,7 +34556,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 793,
+    "line": 803,
     "source": null
   },
   {
@@ -34568,7 +34568,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 793,
+    "line": 803,
     "source": null
   },
   {
@@ -34580,25 +34580,25 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "method:map",
-    "line": 801,
+    "line": 811,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      804,
+      814,
       37
     ],
     "column": 16,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "esegui",
     "kind": "for",
-    "line": 804,
+    "line": 814,
     "literal_iteration_bound": null,
-    "source": "for campo in scelti {\n                    colonne.push(colonna_accessoria(*campo, &accessori));\n                }"
+    "source": "for campo in scelti {\n                    interruzione.verifica(\"esecuzione pipeline\")?;\n                    colonne.push(colonna_accessoria(*campo, &accessori));\n                }"
   },
   {
     "body": null,
@@ -34609,7 +34609,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 822,
+    "line": 833,
     "source": null
   },
   {
@@ -34621,7 +34621,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:collect",
-    "line": 827,
+    "line": 838,
     "source": null
   },
   {
@@ -34633,7 +34633,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 826,
+    "line": 837,
     "source": null
   },
   {
@@ -34645,54 +34645,6 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 826,
-    "source": null
-  },
-  {
-    "body": null,
-    "column": 17,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/geo/unari.rs",
-    "function": "colonna_accessoria",
-    "kind": "method:collect",
-    "line": 832,
-    "source": null
-  },
-  {
-    "body": null,
-    "column": 17,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/geo/unari.rs",
-    "function": "colonna_accessoria",
-    "kind": "method:map",
-    "line": 831,
-    "source": null
-  },
-  {
-    "body": null,
-    "column": 27,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/geo/unari.rs",
-    "function": "colonna_accessoria",
-    "kind": "method:map",
-    "line": 831,
-    "source": null
-  },
-  {
-    "body": null,
-    "column": 17,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/geo/unari.rs",
-    "function": "colonna_accessoria",
-    "kind": "method:collect",
     "line": 837,
     "source": null
   },
@@ -34704,8 +34656,20 @@
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
+    "kind": "method:collect",
+    "line": 843,
+    "source": null
+  },
+  {
+    "body": null,
+    "column": 17,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/geo/unari.rs",
+    "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 836,
+    "line": 842,
     "source": null
   },
   {
@@ -34717,18 +34681,6 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 836,
-    "source": null
-  },
-  {
-    "body": null,
-    "column": 17,
-    "constant": false,
-    "counter": null,
-    "entry_checkpoint": null,
-    "file": "crates/plenora-pipeline/src/geo/unari.rs",
-    "function": "colonna_accessoria",
-    "kind": "method:collect",
     "line": 842,
     "source": null
   },
@@ -34740,8 +34692,8 @@
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
-    "kind": "method:map",
-    "line": 841,
+    "kind": "method:collect",
+    "line": 848,
     "source": null
   },
   {
@@ -34752,7 +34704,19 @@
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
-    "kind": "method:collect",
+    "kind": "method:map",
+    "line": 847,
+    "source": null
+  },
+  {
+    "body": null,
+    "column": 27,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/geo/unari.rs",
+    "function": "colonna_accessoria",
+    "kind": "method:map",
     "line": 847,
     "source": null
   },
@@ -34764,8 +34728,44 @@
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
+    "kind": "method:collect",
+    "line": 853,
+    "source": null
+  },
+  {
+    "body": null,
+    "column": 17,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/geo/unari.rs",
+    "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 846,
+    "line": 852,
+    "source": null
+  },
+  {
+    "body": null,
+    "column": 17,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/geo/unari.rs",
+    "function": "colonna_accessoria",
+    "kind": "method:collect",
+    "line": 858,
+    "source": null
+  },
+  {
+    "body": null,
+    "column": 17,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/geo/unari.rs",
+    "function": "colonna_accessoria",
+    "kind": "method:map",
+    "line": 857,
     "source": null
   },
   {
@@ -34777,7 +34777,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:collect",
-    "line": 850,
+    "line": 861,
     "source": null
   },
   {
@@ -34789,7 +34789,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 850,
+    "line": 861,
     "source": null
   },
   {
@@ -34801,7 +34801,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "colonna_accessoria",
     "kind": "method:map",
-    "line": 850,
+    "line": 861,
     "source": null
   },
   {
@@ -34813,7 +34813,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "diagnostica",
     "kind": "method:map",
-    "line": 861,
+    "line": 872,
     "source": null
   },
   {
@@ -34825,7 +34825,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "diagnostica",
     "kind": "method:collect",
-    "line": 869,
+    "line": 880,
     "source": null
   },
   {
@@ -34837,7 +34837,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "diagnostica",
     "kind": "method:map",
-    "line": 868,
+    "line": 879,
     "source": null
   },
   {
@@ -34849,7 +34849,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "diagnostica",
     "kind": "macro",
-    "line": 872,
+    "line": 883,
     "path": "vec",
     "source": null,
     "tokens": "Arc :: new (StringArray :: from (valori . iter () . map (| v | v . as_ref () . map (| v | v . geometry_type)) . collect ::< Vec < _ >> () ,)) , Arc :: new (UInt64Array :: from (valori . iter () . map (| v | v . as_ref () . map (| v | v . coordinate_count)) . collect ::< Vec < _ >> () ,)) , Arc :: new (BooleanArray :: from (valori . iter () . map (| v | v . as_ref () . map (| v | v . is_empty)) . collect ::< Vec < _ >> () ,)) , Arc :: new (BooleanArray :: from (valori . iter () . map (| v | v . as_ref () . map (| v | v . is_finite)) . collect ::< Vec < _ >> () ,)) , Arc :: new (BooleanArray :: from (valori . iter () . map (| v | v . as_ref () . map (| v | v . is_valid)) . collect ::< Vec < _ >> () ,)) , Arc :: new (StringArray :: from (valori . iter () . map (| v | v . as_ref () . and_then (| v | v . validity_reason . as_deref ())) . collect ::< Vec < _ >> () ,)) , di (&| v | v . bounds . map (| b | b [0])) , di (&| v | v . bounds . map (| b | b [1])) , di (&| v | v . bounds . map (| b | b [2])) , di (&| v | v . bounds . map (| b | b [3])) ,"
@@ -34863,7 +34863,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "method:collect",
-    "line": 926,
+    "line": 937,
     "source": null
   },
   {
@@ -34875,7 +34875,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "macro",
-    "line": 924,
+    "line": 935,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna non Float64\""
@@ -34889,7 +34889,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "method:collect",
-    "line": 950,
+    "line": 961,
     "source": null
   },
   {
@@ -34901,7 +34901,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "method:map",
-    "line": 934,
+    "line": 945,
     "source": null
   },
   {
@@ -34913,7 +34913,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "macro",
-    "line": 932,
+    "line": 943,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna non Int64\""
@@ -34927,7 +34927,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "method:map",
-    "line": 936,
+    "line": 947,
     "source": null
   },
   {
@@ -34939,10 +34939,10 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "macro",
-    "line": 938,
+    "line": 949,
     "path": "format",
     "source": null,
-    "tokens": "\"{op}: coordinata intera oltre 2^53 in modulo, non \\\n                                     rappresentabile esattamente come f64\""
+    "tokens": "\"{op}: coordinata intera oltre 2^53 in modulo, non \\\r\n                                     rappresentabile esattamente come f64\""
   },
   {
     "body": null,
@@ -34953,7 +34953,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "coordinate",
     "kind": "macro",
-    "line": 952,
+    "line": 963,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna di coordinate di tipo {} dopo l'analisi\" , plenora_core :: tipo_arrow :: descrivi_tipo (altro)"
@@ -34961,19 +34961,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      972,
+      984,
       42
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "da_coordinate",
     "kind": "for",
-    "line": 972,
+    "line": 984,
     "literal_iteration_bound": null,
-    "source": "for (x, y) in xs.into_iter().zip(ys) {\n        let (Some(x), Some(y)) = (x, y) else {\n            return Err(PlenoraError::InvalidPlan(format!(\n                \"{op}: coordinata null: la colonna geometria prodotta non ammette null\"\n            )));\n        };\n        let punto = construction::point_from_lon_lat(x, y).map_err(|e| del_kernel(op, &e))?;\n        nel_dominio(op, &punto, crs)?;\n        celle.push(Some(encode_geometry(&punto)?));\n    }"
+    "source": "for (x, y) in xs.into_iter().zip(ys) {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let (Some(x), Some(y)) = (x, y) else {\n            return Err(PlenoraError::InvalidPlan(format!(\n                \"{op}: coordinata null: la colonna geometria prodotta non ammette null\"\n            )));\n        };\n        let punto = construction::point_from_lon_lat(x, y).map_err(|e| del_kernel(op, &e))?;\n        nel_dominio(op, &punto, crs)?;\n        celle.push(Some(encode_geometry(&punto)?));\n    }"
   },
   {
     "body": null,
@@ -34984,7 +34984,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "da_coordinate",
     "kind": "macro",
-    "line": 974,
+    "line": 987,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: coordinata null: la colonna geometria prodotta non ammette null\""
@@ -34998,7 +34998,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "da_wkt",
     "kind": "macro",
-    "line": 998,
+    "line": 1011,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna WKT non Utf8\""
@@ -35012,7 +35012,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "da_wkt",
     "kind": "method:clone",
-    "line": 999,
+    "line": 1012,
     "source": null
   },
   {
@@ -35024,7 +35024,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "da_wkt",
     "kind": "method:collect",
-    "line": 1002,
+    "line": 1015,
     "source": null
   },
   {
@@ -35036,7 +35036,7 @@
     "file": "crates/plenora-pipeline/src/geo/unari.rs",
     "function": "da_wkt",
     "kind": "method:map",
-    "line": 1002,
+    "line": 1015,
     "source": null
   },
   {
@@ -35088,7 +35088,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "verifica",
     "kind": "macro",
-    "line": 116,
+    "line": 121,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: una geometria della colonna `{}` ha un tipo che il contratto \\\n                 dell'ingresso non dichiara\" , self . nome"
@@ -35102,7 +35102,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "verifica_dominio",
     "kind": "method:map",
-    "line": 138,
+    "line": 143,
     "source": null
   },
   {
@@ -35114,25 +35114,25 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "tipi_con_elenco",
     "kind": "method:to_vec",
-    "line": 146,
+    "line": 151,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      185,
+      192,
       32
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "verifica_tipi_dichiarati",
     "kind": "for",
-    "line": 185,
+    "line": 192,
     "literal_iteration_bound": null,
-    "source": "for riga in 0..celle.len() {\n        if celle.is_null(riga) {\n            continue;\n        }\n        match tipo_wkb(celle.value(riga)) {\n            Some(tipo) if ammessi.contains(&tipo) => {}\n            _ => return Err(()),\n        }\n    }"
+    "source": "for riga in 0..celle.len() {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        if celle.is_null(riga) {\n            continue;\n        }\n        match tipo_wkb(celle.value(riga)) {\n            Some(tipo) if ammessi.contains(&tipo) => {}\n            _ => return Err(errore_tipo()),\n        }\n    }"
   },
   {
     "body": null,
@@ -35143,7 +35143,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "monta",
     "kind": "macro",
-    "line": 211,
+    "line": 220,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonne calcolate diverse da quelle del contratto\""
@@ -35151,19 +35151,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      215,
+      224,
       41
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "monta",
     "kind": "for",
-    "line": 215,
+    "line": 224,
     "literal_iteration_bound": null,
-    "source": "for geometria in &uscita.geometries {\n        let indice = uscita.schema.index_of(&geometria.name).map_err(|_| {\n            PlenoraError::Internal(format!(\n                \"{op}: geometria del contratto assente dallo schema\"\n            ))\n        })?;\n        let celle = colonne\n            .get(indice)\n            .and_then(|colonna| colonna.as_any().downcast_ref::<BinaryArray>())\n            .ok_or_else(|| {\n                PlenoraError::Internal(format!(\"{op}: colonna geometria calcolata non Binary\"))\n            })?;\n        if !geometria.nullable && celle.null_count() > 0 {\n            return Err(PlenoraError::InvalidPlan(format!(\n                \"{op}: il risultato di una riga e' vuoto (null), ma la colonna geometria \\\n                 `{}` del contratto non ammette null\",\n                geometria.name\n            )));\n        }\n        verifica_tipi_dichiarati(celle, tipi_con_elenco(geometria).as_deref()).map_err(|()| {\n            PlenoraError::Internal(format!(\n                \"{op}: una geometria prodotta ha un tipo che il contratto d'uscita non \\\n                     dichiara (analisi e kernel divergono)\"\n            ))\n        })?;\n    }"
+    "source": "for geometria in &uscita.geometries {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        let indice = uscita.schema.index_of(&geometria.name).map_err(|_| {\n            PlenoraError::Internal(format!(\n                \"{op}: geometria del contratto assente dallo schema\"\n            ))\n        })?;\n        let celle = colonne\n            .get(indice)\n            .and_then(|colonna| colonna.as_any().downcast_ref::<BinaryArray>())\n            .ok_or_else(|| {\n                PlenoraError::Internal(format!(\"{op}: colonna geometria calcolata non Binary\"))\n            })?;\n        if !geometria.nullable && celle.null_count() > 0 {\n            return Err(PlenoraError::InvalidPlan(format!(\n                \"{op}: il risultato di una riga e' vuoto (null), ma la colonna geometria \\\n                 `{}` del contratto non ammette null\",\n                geometria.name\n            )));\n        }\n        verifica_tipi_dichiarati(\n            celle,\n            tipi_con_elenco(geometria).as_deref(),\n            interruzione,\n            || {\n                PlenoraError::Internal(format!(\n                    \"{op}: una geometria prodotta ha un tipo che il contratto d'uscita non \\\n                     dichiara (analisi e kernel divergono)\"\n                ))\n            },\n        )?;\n    }"
   },
   {
     "body": null,
@@ -35174,7 +35174,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "monta",
     "kind": "macro",
-    "line": 217,
+    "line": 227,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: geometria del contratto assente dallo schema\""
@@ -35188,7 +35188,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "monta",
     "kind": "macro",
-    "line": 225,
+    "line": 235,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna geometria calcolata non Binary\""
@@ -35202,21 +35202,21 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "monta",
     "kind": "macro",
-    "line": 228,
+    "line": 238,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: il risultato di una riga e' vuoto (null), ma la colonna geometria \\\n                 `{}` del contratto non ammette null\" , geometria . name"
   },
   {
     "body": null,
-    "column": 35,
+    "column": 39,
     "constant": false,
     "counter": null,
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "monta",
     "kind": "macro",
-    "line": 235,
+    "line": 249,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: una geometria prodotta ha un tipo che il contratto d'uscita non \\\n                     dichiara (analisi e kernel divergono)\""
@@ -35230,7 +35230,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "monta",
     "kind": "method:clone",
-    "line": 241,
+    "line": 256,
     "source": null
   },
   {
@@ -35242,7 +35242,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "sostituisci",
     "kind": "macro",
-    "line": 253,
+    "line": 268,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: colonna geometria oltre le colonne dell'ingresso\""
@@ -35256,7 +35256,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "sostituisci",
     "kind": "method:for_each",
-    "line": 257,
+    "line": 272,
     "source": null
   },
   {
@@ -35268,7 +35268,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "binaria",
     "kind": "method:collect",
-    "line": 263,
+    "line": 278,
     "source": null
   },
   {
@@ -35280,7 +35280,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "binaria",
     "kind": "method:map",
-    "line": 263,
+    "line": 278,
     "source": null
   },
   {
@@ -35292,7 +35292,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "config",
     "kind": "macro",
-    "line": 271,
+    "line": 286,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: config non valida: {}\" , plenora_core :: json :: descrivi_errore_config (& errore)"
@@ -35306,7 +35306,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "prepara",
     "kind": "method:collect",
-    "line": 335,
+    "line": 350,
     "source": null
   },
   {
@@ -35318,7 +35318,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "prepara",
     "kind": "method:map",
-    "line": 330,
+    "line": 345,
     "source": null
   },
   {
@@ -35330,7 +35330,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "prepara",
     "kind": "method:map",
-    "line": 332,
+    "line": 347,
     "source": null
   },
   {
@@ -35342,7 +35342,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "prepara",
     "kind": "macro",
-    "line": 346,
+    "line": 361,
     "path": "format",
     "source": null,
     "tokens": "\"{op}: operazione geo senza dispatch nel runner\""
@@ -35350,19 +35350,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      381,
+      397,
       37
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "esegui",
     "kind": "for",
-    "line": 381,
+    "line": 397,
     "literal_iteration_bound": null,
-    "source": "for batch_arrow in ingressi {\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
+    "source": "for batch_arrow in ingressi {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
   {
     "body": null,
@@ -35373,7 +35373,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 386,
+    "line": 403,
     "path": "format",
     "source": null,
     "tokens": "\"{}: numero di ingressi diverso da quello validato\" , self . op"
@@ -35381,19 +35381,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      391,
+      408,
       61
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "esegui",
     "kind": "for",
-    "line": 391,
+    "line": 408,
     "literal_iteration_bound": null,
-    "source": "for (lato, batch) in self.lati.iter().zip(ingressi) {\n            if let Some(lato) = lato {\n                lato.verifica(self.op, batch)?;\n            }\n        }"
+    "source": "for (lato, batch) in self.lati.iter().zip(ingressi) {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            if let Some(lato) = lato {\n                lato.verifica(self.op, batch, interruzione)?;\n            }\n        }"
   },
   {
     "body": null,
@@ -35404,7 +35404,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 399,
+    "line": 417,
     "path": "format",
     "source": null,
     "tokens": "\"{}: operazione unaria con piu' ingressi\" , self . op"
@@ -35418,7 +35418,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 414,
+    "line": 433,
     "path": "format",
     "source": null,
     "tokens": "\"{}: operazione unaria con piu' ingressi\" , self . op"
@@ -35432,7 +35432,7 @@
     "file": "crates/plenora-pipeline/src/geo/mod.rs",
     "function": "esegui",
     "kind": "macro",
-    "line": 431,
+    "line": 451,
     "path": "format",
     "source": null,
     "tokens": "\"{}: operazione binaria senza due ingressi geometrici\" , self . op"

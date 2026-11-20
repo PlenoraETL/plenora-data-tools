@@ -71,6 +71,11 @@ all'ingresso di ogni iterazione, anche durante preparazione e raccolta
 degli output. Anche i tre helper di esecuzione ricevono la stessa interruzione; `run`
 riusa il proprio controllo di default per tutta la chiamata. Tutti i
 tredici cicli di `esecuzione.rs` sono coperti localmente.
+Il dispatch geo propaga lo stesso riferimento ai moduli `geo/mod.rs`,
+`geo/binari.rs`, `geo/collettivi.rs` e `geo/unari.rs`: tutti i loro 21 cicli
+espliciti controllano l'interruzione all'ingresso del corpo. Il controllo
+dei tipi mantiene distinte cancellazione, timeout ed errore di schema.
+Non e' ancora una prova del costo dei kernel chiamati o degli iteratori.
 Il [registro delle prove statiche](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-static-proofs.json)
 vincola i cicli e gli item AST da cui dipende la loro cardinalita': costanti,
 funzioni, tipi e macro locali. Registra `registered_iteration_bound` e la
@@ -80,7 +85,7 @@ celle DE-9IM, i due metadati di schema e le dieci colonne diagnostiche o
 sei accessori. Sono limiti delle entrate nei corpi, non maggioranti composti.
 Il batch coordinate e i quattro cicli di `noding::exact::sum_sign` hanno
 checkpoint condivisi gia' presenti e ora riconosciuti; il gcd resta aperto.
-I moduli chiusi sono elencati in `CLOSED_MODULES` nel test: ogni loro ciclo
+I moduli chiusi sono elencati in `CLOSED_MODULES` e `CLOSED_PIPELINE_MODULES` nel test: ogni loro ciclo
 deve superare una di queste verifiche, anche rigenerando la fixture.
 Il [debito esplicito](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json)
 conserva gli altri cicli con sorgente esatto e molteplicita'; non e' una

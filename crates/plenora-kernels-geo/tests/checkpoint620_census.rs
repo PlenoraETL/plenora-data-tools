@@ -147,6 +147,15 @@ const CLOSED_MODULES: &[&str] = &[
     "preserve_shape_measure/certificate/transverse.rs",
 ];
 
+/// Moduli pipeline con propagazione del controllo condiviso verificata.
+const CLOSED_PIPELINE_MODULES: &[&str] = &[
+    "crates/plenora-pipeline/src/esecuzione.rs",
+    "crates/plenora-pipeline/src/geo/mod.rs",
+    "crates/plenora-pipeline/src/geo/binari.rs",
+    "crates/plenora-pipeline/src/geo/collettivi.rs",
+    "crates/plenora-pipeline/src/geo/unari.rs",
+];
+
 /// Percorsi letti fino a `noding::check_interruption`: `DensifyWork`,
 /// `geodesic_surface::metric::Work` e `noding::Work`. Non basta il nome step
 /// in un modulo arbitrario per considerarlo un checkpoint condiviso.
@@ -235,7 +244,7 @@ fn entry_checkpoint(file: &str, body: &syn::Block) -> Option<String> {
     let syn::Expr::Path(receiver) = call.receiver.as_ref() else {
         return None;
     };
-    if file == "crates/plenora-pipeline/src/esecuzione.rs"
+    if CLOSED_PIPELINE_MODULES.contains(&file)
         && receiver.path.is_ident("interruzione")
         && call.method == "verifica"
         && call.args.len() == 1
@@ -286,7 +295,7 @@ fn verify_closed_modules(records: &[serde_json::Value]) {
         let file = record["file"].as_str().unwrap();
         let relative = file.strip_prefix("crates/plenora-kernels-geo/src/");
         if relative.is_some_and(|relative| CLOSED_MODULES.contains(&relative))
-            || file == "crates/plenora-pipeline/src/esecuzione.rs"
+            || CLOSED_PIPELINE_MODULES.contains(&file)
         {
             assert!(
                 locally_covered(record),
@@ -899,6 +908,22 @@ fn checkpoint620_callbacks_receivers_and_pipeline_require_propagation() {
         ),
         (
             "crates/plenora-pipeline/src/esecuzione.rs",
+            "interruzione.verifica(\"esecuzione pipeline\")",
+        ),
+        (
+            "crates/plenora-pipeline/src/geo/mod.rs",
+            "interruzione.verifica(\"esecuzione pipeline\")",
+        ),
+        (
+            "crates/plenora-pipeline/src/geo/binari.rs",
+            "interruzione.verifica(\"esecuzione pipeline\")",
+        ),
+        (
+            "crates/plenora-pipeline/src/geo/collettivi.rs",
+            "interruzione.verifica(\"esecuzione pipeline\")",
+        ),
+        (
+            "crates/plenora-pipeline/src/geo/unari.rs",
             "interruzione.verifica(\"esecuzione pipeline\")",
         ),
     ] {
