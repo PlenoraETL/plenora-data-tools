@@ -64,6 +64,11 @@ visitate separatamente. `entry_checkpoint` registra un controllo condiviso
 incondizionato come prima istruzione di produzione nei moduli verificati.
 Il controllo `noding::Work::checkpoint` osserva deadline e cancellazione
 con la stessa precedenza di `step`, senza aumentare gli addebiti di lavoro.
+Nel buffer puntuale il callback `checkpoint` di pianificazione, costruzione
+e verifica del ventaglio delega al controllo condiviso del chiamante.
+Nel runner i nove cicli di `run_interrompibile` osservano l'interruzione
+all'ingresso di ogni iterazione, anche durante preparazione e raccolta
+degli output. Gli altri cicli del modulo restano nel debito esplicito.
 I moduli chiusi sono elencati in `CLOSED_MODULES` nel test: ogni loro ciclo
 deve superare una di queste verifiche, anche rigenerando la fixture.
 Il [debito esplicito](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json)

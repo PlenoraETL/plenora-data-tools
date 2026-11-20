@@ -543,13 +543,24 @@ impl PipelineValidata {
         tables: Vec<(String, RecordBatch)>,
         interruzione: &Interruzione,
     ) -> Result<Esito> {
+        // Conserva contesto e fase per un'interruzione gia presente all'ingresso.
+        if let Some(passo) = self.passi.first() {
+            let op = passo.descrittore.id;
+            interruzione.verifica(&format!("prima del passo `{}` ({op})", passo.out))?;
+        } else {
+            interruzione
+                .verifica("prima di consegnare gli output")
+                .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;
+        }
         for (_, batch_arrow) in &tables {
+            interruzione.verifica("esecuzione pipeline")?;
             plenora_core::valida_arrow::batch(batch_arrow)?;
         }
         let budget = self.limiti.max_governed_memory_bytes;
         // Input: esattamente quelli dichiarati, con lo schema validato.
         let mut vivi: BTreeMap<String, RecordBatch> = BTreeMap::new();
         for (nome, tabella) in tables {
+            interruzione.verifica("esecuzione pipeline")?;
             let Some(atteso) = self.schemi_input.get(&nome) else {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "tabella `{nome}` non dichiarata tra gli input del piano"
@@ -601,10 +612,13 @@ impl PipelineValidata {
         // output del piano non muoiono.
         let mut ultimo_uso: BTreeMap<&str, usize> = BTreeMap::new();
         for nome in &self.outputs {
+            interruzione.verifica("esecuzione pipeline")?;
             ultimo_uso.insert(nome, USO_SENZA_FINE);
         }
         for (indice, passo) in self.passi.iter().enumerate().rev() {
+            interruzione.verifica("esecuzione pipeline")?;
             for sorgente in &passo.inputs {
+                interruzione.verifica("esecuzione pipeline")?;
                 ultimo_uso.entry(sorgente).or_insert(indice);
             }
             ultimo_uso.entry(&passo.out).or_insert(indice);
@@ -617,6 +631,7 @@ impl PipelineValidata {
             .cloned()
             .collect();
         for nome in &liberati_all_avvio {
+            interruzione.verifica("esecuzione pipeline")?;
             vivi.remove(nome);
         }
         let byte_vivi_iniziali = byte_vivi(vivi.values())?;
@@ -631,6 +646,7 @@ impl PipelineValidata {
 
         let mut passi = Vec::with_capacity(self.passi.len());
         for (indice, passo) in self.passi.iter().enumerate() {
+            interruzione.verifica("esecuzione pipeline")?;
             let op = passo.descrittore.id;
             #[cfg(feature = "sonde-di-prova")]
             if indice > 0 {
@@ -713,6 +729,7 @@ impl PipelineValidata {
                 .map(|(nome, _)| (*nome).to_owned())
                 .collect();
             for nome in &liberati {
+                interruzione.verifica("esecuzione pipeline")?;
                 vivi.remove(nome);
             }
             passi.push(ReportPasso {
@@ -741,6 +758,7 @@ impl PipelineValidata {
         }
         let mut outputs = Vec::with_capacity(self.outputs.len());
         for nome in &self.outputs {
+            interruzione.verifica("esecuzione pipeline")?;
             let tabella = vivi.remove(nome).ok_or_else(|| {
                 PlenoraError::Internal(format!("output `{nome}` non residente a fine piano"))
             })?;

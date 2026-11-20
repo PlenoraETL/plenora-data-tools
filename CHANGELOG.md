@@ -56,6 +56,13 @@ la cui versione non ha qui una voce datata.
 
 ### Correzioni
 
+- Terzo lotto: copertura locale completa di noding, buffer degenere e
+  puntuale, validazione della densificazione e misure preserve-shape.
+  Controllati anche i nove cicli di `run_interrompibile`, inclusa la
+  preparazione e la raccolta degli output. Il censimento verifica callback
+  e ricevitori condivisi con controprove sulla propagazione degli errori.
+  Restano aperti gli altri cicli censiti e i maggioranti composti delle API.
+
 - GOP-028 nella pipeline e in tutto il workspace: quando scadenza e
   annullamento sono entrambi attivi prevale sempre la scadenza, anche ai
   confini IO, CLI e SDK. Controllo condiviso con i kernel in `plenora-core`.

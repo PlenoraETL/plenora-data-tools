@@ -2279,7 +2279,8 @@
       "checkpoint620_ast_keeps_runtime_const_functions_and_loop_source",
       "checkpoint620_literal_bounds_are_structural",
       "checkpoint620_entry_requires_unconditional_shared_call",
-      "checkpoint620_new_cycles_cannot_hide_in_regeneration"
+      "checkpoint620_new_cycles_cannot_hide_in_regeneration",
+      "checkpoint620_callbacks_receivers_and_pipeline_require_propagation"
     ],
     "crates/plenora-kernels-geo/tests/concave_scavo.rs": [
       "divergenza_dodici_punti",

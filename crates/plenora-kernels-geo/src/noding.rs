@@ -173,6 +173,7 @@ pub fn sorted_with_work<T>(
         while root < values.len() / 2 {
             #[cfg(test)]
             crate::noding::gop028::cycle("noding.rs::sift:1");
+            work.checkpoint()?;
             let mut child = root * 2 + 1;
             if child + 1 < values.len() {
                 work.step()?;
@@ -193,6 +194,7 @@ pub fn sorted_with_work<T>(
     for root in (0..values.len() / 2).rev() {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding.rs::sorted_with_work:1");
+        work.checkpoint()?;
         sift(values, root, &compare, work)?;
     }
     for end in (1..values.len()).rev() {
@@ -305,6 +307,7 @@ fn intersections(
     for p in [&a.a, &a.b, &b.a, &b.b] {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding.rs::intersections:1");
+        work.checkpoint()?;
         if a.contains(p)? && b.contains(p)? {
             if match first {
                 None => true,
@@ -403,6 +406,7 @@ pub fn visit(
         for point in [&edge.a, &edge.b] {
             #[cfg(test)]
             crate::noding::gop028::cycle("noding.rs::visit:2");
+            work.checkpoint()?;
             if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {
                 return Err(PredicateError::CalcoloNonConcluso(
                     "proprietario del budget",
@@ -414,6 +418,7 @@ pub fn visit(
     for root in (0..index.len() / 2).rev() {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding.rs::visit:3");
+        work.checkpoint()?;
         sift(&mut index, root, edges, work)?;
     }
     for end in (1..index.len()).rev() {
@@ -426,6 +431,7 @@ pub fn visit(
     for (position, &i) in index.iter().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding.rs::visit:5");
+        work.checkpoint()?;
         let a = edges[i];
         for &j in &index[position + 1..] {
             #[cfg(test)]
@@ -472,6 +478,7 @@ pub fn node(
     for edge in edges {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding.rs::node:1");
+        work.checkpoint()?;
         let mut points = CountedVec::new();
         work.nodes(2)?;
         work.push(&mut points, edge.a.try_clone()?)?;
@@ -482,6 +489,7 @@ pub fn node(
         for p in hits.into_iter().flatten() {
             #[cfg(test)]
             crate::noding::gop028::cycle("noding.rs::node:2");
+            work.checkpoint()?;
             work.push(&mut result[i], p.try_clone()?)?;
             work.push(&mut result[j], p)?;
         }
@@ -490,6 +498,7 @@ pub fn node(
     for (points, edge) in result.iter_mut().zip(edges) {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding.rs::node:3");
+        work.checkpoint()?;
         sorted(points, point_cmp, work)?;
         let mut kept = 0;
         for read in 0..points.len() {

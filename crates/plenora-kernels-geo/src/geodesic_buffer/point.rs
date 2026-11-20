@@ -102,6 +102,7 @@ fn center(input: &Geometry, work: &mut BufferWork<'_>) -> Result<Coord, Degenera
             for p in &points.0 {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("geodesic_buffer/point.rs::center:1");
+                work.checkpoint()?;
                 work.coordinate(p.0)?;
                 if p.0 != first {
                     return Err(DegenerateBufferError::UnsupportedProfile);
@@ -129,6 +130,7 @@ fn plan(
     radius: f64,
     tolerance_m: f64,
     crs: &ResolvedCrs,
+    mut checkpoint: impl FnMut() -> Result<(), DegenerateBufferError>,
 ) -> Result<(u32, PointBufferCertificate<'_>), DegenerateBufferError> {
     if !radius.is_finite() || radius <= 0.0 {
         return Err(DegenerateBufferError::InvalidRadius);
@@ -144,6 +146,7 @@ fn plan(
     loop {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/point.rs::plan:1");
+        checkpoint()?;
         // 4 > pi; n potenza di due, conversione u32 -> f64 esatta.
         let discretization_m = (4.0 * radius / f64::from(n)).next_up();
         // 8 > 2*pi; include lo spostamento di entrambi gli estremi numerici.
@@ -304,12 +307,13 @@ pub fn geodesic_point_buffer_with_limits<'a>(
             "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:1",
         );
         work.step()?;
-        let (n, _) = plan(radius, tolerance_m, crs)?;
+        let (n, _) = plan(radius, tolerance_m, crs, || work.checkpoint())?;
         for input in inputs {
             #[cfg(test)]
             crate::noding::gop028::cycle(
                 "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:2",
             );
+            work.checkpoint()?;
             domain(center(input, &mut work)?, radius)?;
             vertices = vertices
                 .checked_add(u64::from(n) + 1)
@@ -342,12 +346,13 @@ pub fn geodesic_point_buffer_with_limits<'a>(
             "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:3",
         );
         work.step()?;
-        let (n, certificate) = plan(radius, tolerance_m, crs)?;
+        let (n, certificate) = plan(radius, tolerance_m, crs, || work.checkpoint())?;
         for input in inputs {
             #[cfg(test)]
             crate::noding::gop028::cycle(
                 "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:4",
             );
+            work.checkpoint()?;
             let p = center(input, &mut work)?;
             let polygon = ring(p, radius, n, &ellipsoid, || work.step())?;
             work.step()?;
@@ -378,6 +383,7 @@ pub fn geodesic_point_buffer_with_limits<'a>(
         crate::noding::gop028::cycle(
             "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:5",
         );
+        work.checkpoint()?;
         let geometry = Geometry::Polygon(std::mem::replace(&mut disk.polygon, Polygon::empty()));
         super::verify_surface(&geometry, &mut topology).map_err(verification_error)?;
         super::verify_coverage(&geometry, &inputs[index % inputs.len()], &mut topology)

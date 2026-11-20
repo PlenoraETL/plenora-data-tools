@@ -165,7 +165,10 @@ fn execute<'a>(
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:3");
         work.step()?;
-        let (n, _) = plan(radius, disk_tolerance, crs)?;
+        let (n, _) = plan(radius, disk_tolerance, crs, || {
+            work.checkpoint()
+                .map_err(|error| super::topology_error(&error))
+        })?;
         let mut west = f64::INFINITY;
         let mut east = f64::NEG_INFINITY;
         for input in inputs {
@@ -203,7 +206,10 @@ fn execute<'a>(
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:6");
         work.step()?;
-        let (n, certificate) = plan(radius, disk_tolerance, crs)?;
+        let (n, certificate) = plan(radius, disk_tolerance, crs, || {
+            work.checkpoint()
+                .map_err(|error| super::topology_error(&error))
+        })?;
         let mut accumulated = CountedVec::new();
         let mut error = 0.0;
         for input in inputs {

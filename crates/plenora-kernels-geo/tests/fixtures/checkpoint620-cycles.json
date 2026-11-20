@@ -9510,43 +9510,43 @@
     "column": 12,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::center:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "center",
     "kind": "for",
     "line": 102,
     "literal_iteration_bound": null,
-    "source": "for p in &points.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point.rs::center:1\");\n                work.coordinate(p.0)?;\n                if p.0 != first {\n                    return Err(DegenerateBufferError::UnsupportedProfile);\n                }\n            }"
+    "source": "for p in &points.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point.rs::center:1\");\n                work.checkpoint()?;\n                work.coordinate(p.0)?;\n                if p.0 != first {\n                    return Err(DegenerateBufferError::UnsupportedProfile);\n                }\n            }"
   },
   {
     "body": [
-      144,
+      146,
       10
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::plan:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "plan",
     "kind": "loop",
-    "line": 144,
-    "source": "loop {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point.rs::plan:1\");\n        // 4 > pi; n potenza di due, conversione u32 -> f64 esatta.\n        let discretization_m = (4.0 * radius / f64::from(n)).next_up();\n        // 8 > 2*pi; include lo spostamento di entrambi gli estremi numerici.\n        let h = ((8.0 * radius / f64::from(n)).next_up() + NUMERIC_M).next_up();\n        let model_change_m = side_model_error_m((h + ROUNDING_M).next_up())?;\n        let absolute_m = (((discretization_m + NUMERIC_M).next_up() + ROUNDING_M).next_up()\n            + model_change_m)\n            .next_up();\n        if absolute_m <= tolerance_m.min(0.01) {\n            return Ok((\n                n,\n                PointBufferCertificate {\n                    crs,\n                    absolute_m,\n                    relative: (absolute_m / radius).next_up(),\n                    discretization_m,\n                    model_change_m,\n                    geographiclib_m: NUMERIC_M,\n                    rounding_m: ROUNDING_M,\n                },\n            ));\n        }\n        n = n\n            .checked_mul(2)\n            .ok_or(DegenerateBufferError::AccuracyUnproven)?;\n    }"
+    "line": 146,
+    "source": "loop {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point.rs::plan:1\");\n        checkpoint()?;\n        // 4 > pi; n potenza di due, conversione u32 -> f64 esatta.\n        let discretization_m = (4.0 * radius / f64::from(n)).next_up();\n        // 8 > 2*pi; include lo spostamento di entrambi gli estremi numerici.\n        let h = ((8.0 * radius / f64::from(n)).next_up() + NUMERIC_M).next_up();\n        let model_change_m = side_model_error_m((h + ROUNDING_M).next_up())?;\n        let absolute_m = (((discretization_m + NUMERIC_M).next_up() + ROUNDING_M).next_up()\n            + model_change_m)\n            .next_up();\n        if absolute_m <= tolerance_m.min(0.01) {\n            return Ok((\n                n,\n                PointBufferCertificate {\n                    crs,\n                    absolute_m,\n                    relative: (absolute_m / radius).next_up(),\n                    discretization_m,\n                    model_change_m,\n                    geographiclib_m: NUMERIC_M,\n                    rounding_m: ROUNDING_M,\n                },\n            ));\n        }\n        n = n\n            .checked_mul(2)\n            .ok_or(DegenerateBufferError::AccuracyUnproven)?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      202,
+      205,
       19
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::ring_shared:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "ring_shared",
     "kind": "for",
-    "line": 202,
+    "line": 205,
     "literal_iteration_bound": null,
     "source": "for k in 0..n {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point.rs::ring_shared:1\");\n        checkpoint()?;\n        // Azimut da nord in senso orario: il segno meno rende l'esterno antiorario.\n        let azimuth = -360.0 * f64::from(k) / f64::from(n);\n        #[cfg(test)]\n        crate::noding::gop028::unit();\n        let (lat, lon): (f64, f64) = ellipsoid.geodetica().direct(p.y, p.x, azimuth, radius);\n        if !(lat.is_finite() && lon.is_finite() && lat.abs() < 81.0 && lon.abs() < 180.0) {\n            return Err(DegenerateBufferError::AccuracyUnproven.into());\n        }\n        vertices.push(Coord { x: lon, y: lat });\n    }"
   },
@@ -9559,7 +9559,7 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "ring_shared",
     "kind": "method:direct",
-    "line": 210,
+    "line": 213,
     "source": null
   },
   {
@@ -9571,110 +9571,110 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "ring_shared",
     "kind": "polygon-constructor",
-    "line": 223,
+    "line": 226,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      233,
+      236,
       37
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::verify_planar_fan:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "verify_planar_fan",
     "kind": "for",
-    "line": 233,
+    "line": 236,
     "literal_iteration_bound": null,
     "source": "for edge in vertices.windows(2) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point.rs::verify_planar_fan:1\");\n        checkpoint()?;\n        let [a, b] = [edge[0], edge[1]];\n        if RobustKernel::orient2d(center, a, b) != Orientation::CounterClockwise {\n            return Err(DegenerateBufferError::AccuracyUnproven.into());\n        }\n        // Ogni attraversamento crescente della semiretta est conta un giro.\n        if a.y <= center.y && b.y > center.y {\n            crossings = crossings\n                .checked_add(1)\n                .ok_or(DegenerateBufferError::AccuracyUnproven)?;\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      301,
+      304,
       28
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "geodesic_point_buffer_with_limits",
     "kind": "for",
-    "line": 301,
+    "line": 304,
     "literal_iteration_bound": null,
-    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:1\",\n        );\n        work.step()?;\n        let (n, _) = plan(radius, tolerance_m, crs)?;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:2\",\n            );\n            domain(center(input, &mut work)?, radius)?;\n            vertices = vertices\n                .checked_add(u64::from(n) + 1)\n                .ok_or(DegenerateBufferError::VertexLimit)?;\n            if vertices > limits.max_vertices {\n                return Err(DegenerateBufferError::VertexLimit);\n            }\n        }\n    }"
+    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:1\",\n        );\n        work.step()?;\n        let (n, _) = plan(radius, tolerance_m, crs, || work.checkpoint())?;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:2\",\n            );\n            work.checkpoint()?;\n            domain(center(input, &mut work)?, radius)?;\n            vertices = vertices\n                .checked_add(u64::from(n) + 1)\n                .ok_or(DegenerateBufferError::VertexLimit)?;\n            if vertices > limits.max_vertices {\n                return Err(DegenerateBufferError::VertexLimit);\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      308,
+      311,
       29
     ],
     "column": 8,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "geodesic_point_buffer_with_limits",
     "kind": "for",
-    "line": 308,
+    "line": 311,
     "literal_iteration_bound": null,
-    "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:2\",\n            );\n            domain(center(input, &mut work)?, radius)?;\n            vertices = vertices\n                .checked_add(u64::from(n) + 1)\n                .ok_or(DegenerateBufferError::VertexLimit)?;\n            if vertices > limits.max_vertices {\n                return Err(DegenerateBufferError::VertexLimit);\n            }\n        }"
+    "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:2\",\n            );\n            work.checkpoint()?;\n            domain(center(input, &mut work)?, radius)?;\n            vertices = vertices\n                .checked_add(u64::from(n) + 1)\n                .ok_or(DegenerateBufferError::VertexLimit)?;\n            if vertices > limits.max_vertices {\n                return Err(DegenerateBufferError::VertexLimit);\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      339,
+      343,
       28
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "geodesic_point_buffer_with_limits",
     "kind": "for",
-    "line": 339,
+    "line": 343,
     "literal_iteration_bound": null,
-    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:3\",\n        );\n        work.step()?;\n        let (n, certificate) = plan(radius, tolerance_m, crs)?;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:4\",\n            );\n            let p = center(input, &mut work)?;\n            let polygon = ring(p, radius, n, &ellipsoid, || work.step())?;\n            work.step()?;\n            disks.push(PointBufferDisk {\n                polygon,\n                certificate,\n            });\n        }\n    }"
+    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:3\",\n        );\n        work.step()?;\n        let (n, certificate) = plan(radius, tolerance_m, crs, || work.checkpoint())?;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:4\",\n            );\n            work.checkpoint()?;\n            let p = center(input, &mut work)?;\n            let polygon = ring(p, radius, n, &ellipsoid, || work.step())?;\n            work.step()?;\n            disks.push(PointBufferDisk {\n                polygon,\n                certificate,\n            });\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      346,
+      350,
       29
     ],
     "column": 8,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:4",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "geodesic_point_buffer_with_limits",
     "kind": "for",
-    "line": 346,
+    "line": 350,
     "literal_iteration_bound": null,
-    "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:4\",\n            );\n            let p = center(input, &mut work)?;\n            let polygon = ring(p, radius, n, &ellipsoid, || work.step())?;\n            work.step()?;\n            disks.push(PointBufferDisk {\n                polygon,\n                certificate,\n            });\n        }"
+    "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:4\",\n            );\n            work.checkpoint()?;\n            let p = center(input, &mut work)?;\n            let polygon = ring(p, radius, n, &ellipsoid, || work.step())?;\n            work.step()?;\n            disks.push(PointBufferDisk {\n                polygon,\n                certificate,\n            });\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      376,
+      381,
       55
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:5",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
     "function": "geodesic_point_buffer_with_limits",
     "kind": "for",
-    "line": 376,
+    "line": 381,
     "literal_iteration_bound": null,
-    "source": "for (index, disk) in disks.iter_mut().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:5\",\n        );\n        let geometry = Geometry::Polygon(std::mem::replace(&mut disk.polygon, Polygon::empty()));\n        super::verify_surface(&geometry, &mut topology).map_err(verification_error)?;\n        super::verify_coverage(&geometry, &inputs[index % inputs.len()], &mut topology)\n            .map_err(verification_error)?;\n        let Geometry::Polygon(polygon) = geometry else {\n            return Err(DegenerateBufferError::InvalidTopology);\n        };\n        disk.polygon = polygon;\n    }"
+    "source": "for (index, disk) in disks.iter_mut().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:5\",\n        );\n        work.checkpoint()?;\n        let geometry = Geometry::Polygon(std::mem::replace(&mut disk.polygon, Polygon::empty()));\n        super::verify_surface(&geometry, &mut topology).map_err(verification_error)?;\n        super::verify_coverage(&geometry, &inputs[index % inputs.len()], &mut topology)\n            .map_err(verification_error)?;\n        let Geometry::Polygon(polygon) = geometry else {\n            return Err(DegenerateBufferError::InvalidTopology);\n        };\n        disk.polygon = polygon;\n    }"
   },
   {
     "body": null,
@@ -9737,12 +9737,12 @@
     "kind": "for",
     "line": 164,
     "literal_iteration_bound": null,
-    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:3\");\n        work.step()?;\n        let (n, _) = plan(radius, disk_tolerance, crs)?;\n        let mut west = f64::INFINITY;\n        let mut east = f64::NEG_INFINITY;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:4\");\n            work.step()?;\n            for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:5\");\n                work.step()?;\n                domain(p, radius)?;\n                // La barriera del disco usa 15000 m/grado fino a 81 gradi.\n                // Una fascia <180 gradi contiene meno di mezzo ellissoide.\n                let extent = ((radius + 1.0).next_up() / 15000.0).next_up();\n                west = west.min((p.x - extent).next_down());\n                east = east.max((p.x + extent).next_up());\n                if (east - west).next_up() >= 180.0 {\n                    return Err(DegenerateBufferError::UnsupportedSurface.into());\n                }\n                vertices = vertices\n                    .checked_add(u64::from(n) + 1)\n                    .ok_or(DegenerateBufferError::VertexLimit)?;\n                if vertices > limits.max_vertices {\n                    return Err(DegenerateBufferError::VertexLimit.into());\n                }\n            }\n            if !union_per_distance {\n                west = f64::INFINITY;\n                east = f64::NEG_INFINITY;\n            }\n        }\n    }"
+    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:3\");\n        work.step()?;\n        let (n, _) = plan(radius, disk_tolerance, crs, || {\n            work.checkpoint()\n                .map_err(|error| super::topology_error(&error))\n        })?;\n        let mut west = f64::INFINITY;\n        let mut east = f64::NEG_INFINITY;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:4\");\n            work.step()?;\n            for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:5\");\n                work.step()?;\n                domain(p, radius)?;\n                // La barriera del disco usa 15000 m/grado fino a 81 gradi.\n                // Una fascia <180 gradi contiene meno di mezzo ellissoide.\n                let extent = ((radius + 1.0).next_up() / 15000.0).next_up();\n                west = west.min((p.x - extent).next_down());\n                east = east.max((p.x + extent).next_up());\n                if (east - west).next_up() >= 180.0 {\n                    return Err(DegenerateBufferError::UnsupportedSurface.into());\n                }\n                vertices = vertices\n                    .checked_add(u64::from(n) + 1)\n                    .ok_or(DegenerateBufferError::VertexLimit)?;\n                if vertices > limits.max_vertices {\n                    return Err(DegenerateBufferError::VertexLimit.into());\n                }\n            }\n            if !union_per_distance {\n                west = f64::INFINITY;\n                east = f64::NEG_INFINITY;\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      171,
+      174,
       29
     ],
     "column": 8,
@@ -9752,14 +9752,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs",
     "function": "execute",
     "kind": "for",
-    "line": 171,
+    "line": 174,
     "literal_iteration_bound": null,
     "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:4\");\n            work.step()?;\n            for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:5\");\n                work.step()?;\n                domain(p, radius)?;\n                // La barriera del disco usa 15000 m/grado fino a 81 gradi.\n                // Una fascia <180 gradi contiene meno di mezzo ellissoide.\n                let extent = ((radius + 1.0).next_up() / 15000.0).next_up();\n                west = west.min((p.x - extent).next_down());\n                east = east.max((p.x + extent).next_up());\n                if (east - west).next_up() >= 180.0 {\n                    return Err(DegenerateBufferError::UnsupportedSurface.into());\n                }\n                vertices = vertices\n                    .checked_add(u64::from(n) + 1)\n                    .ok_or(DegenerateBufferError::VertexLimit)?;\n                if vertices > limits.max_vertices {\n                    return Err(DegenerateBufferError::VertexLimit.into());\n                }\n            }\n            if !union_per_distance {\n                west = f64::INFINITY;\n                east = f64::NEG_INFINITY;\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      175,
+      178,
       37
     ],
     "column": 12,
@@ -9769,14 +9769,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs",
     "function": "execute",
     "kind": "for",
-    "line": 175,
+    "line": 178,
     "literal_iteration_bound": null,
     "source": "for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:5\");\n                work.step()?;\n                domain(p, radius)?;\n                // La barriera del disco usa 15000 m/grado fino a 81 gradi.\n                // Una fascia <180 gradi contiene meno di mezzo ellissoide.\n                let extent = ((radius + 1.0).next_up() / 15000.0).next_up();\n                west = west.min((p.x - extent).next_down());\n                east = east.max((p.x + extent).next_up());\n                if (east - west).next_up() >= 180.0 {\n                    return Err(DegenerateBufferError::UnsupportedSurface.into());\n                }\n                vertices = vertices\n                    .checked_add(u64::from(n) + 1)\n                    .ok_or(DegenerateBufferError::VertexLimit)?;\n                if vertices > limits.max_vertices {\n                    return Err(DegenerateBufferError::VertexLimit.into());\n                }\n            }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      202,
+      205,
       28
     ],
     "column": 4,
@@ -9786,14 +9786,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs",
     "function": "execute",
     "kind": "for",
-    "line": 202,
+    "line": 205,
     "literal_iteration_bound": null,
-    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:6\");\n        work.step()?;\n        let (n, certificate) = plan(radius, disk_tolerance, crs)?;\n        let mut accumulated = CountedVec::new();\n        let mut error = 0.0;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:7\");\n            work.step()?;\n            for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:8\");\n                work.step()?;\n                let bytes = (u64::from(n) + 1)\n                    .checked_mul(\n                        u64::try_from(size_of::<Coord>())\n                            .map_err(|_| DegenerateBufferError::MemoryLimit)?,\n                    )\n                    .ok_or(DegenerateBufferError::MemoryLimit)?;\n                work.reserve_export(bytes)?;\n                let disk = Geometry::Polygon(ring_shared(p, radius, n, &ellipsoid, || {\n                    work.step().map_err(UnionBufferError::from)\n                })?);\n                work.push(&mut accumulated, disk)?;\n                error = (error + overlay_error_m()).next_up();\n            }\n            if !union_per_distance {\n                publish(\n                    &mut accumulated,\n                    &mut output,\n                    certificate,\n                    error,\n                    radius,\n                    tolerance_m,\n                    limits,\n                    work,\n                )?;\n                if let Some(surface) = output.last() {\n                    super::super::verify_coverage(&surface.geometry, input, work)?;\n                }\n                error = 0.0;\n            }\n        }\n        if union_per_distance {\n            publish(\n                &mut accumulated,\n                &mut output,\n                certificate,\n                error,\n                radius,\n                tolerance_m,\n                limits,\n                work,\n            )?;\n            if let Some(surface) = output.last() {\n                for input in inputs {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:9\");\n                    work.step()?;\n                    super::super::verify_coverage(&surface.geometry, input, work)?;\n                }\n            }\n        }\n    }"
+    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:6\");\n        work.step()?;\n        let (n, certificate) = plan(radius, disk_tolerance, crs, || {\n            work.checkpoint()\n                .map_err(|error| super::topology_error(&error))\n        })?;\n        let mut accumulated = CountedVec::new();\n        let mut error = 0.0;\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:7\");\n            work.step()?;\n            for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:8\");\n                work.step()?;\n                let bytes = (u64::from(n) + 1)\n                    .checked_mul(\n                        u64::try_from(size_of::<Coord>())\n                            .map_err(|_| DegenerateBufferError::MemoryLimit)?,\n                    )\n                    .ok_or(DegenerateBufferError::MemoryLimit)?;\n                work.reserve_export(bytes)?;\n                let disk = Geometry::Polygon(ring_shared(p, radius, n, &ellipsoid, || {\n                    work.step().map_err(UnionBufferError::from)\n                })?);\n                work.push(&mut accumulated, disk)?;\n                error = (error + overlay_error_m()).next_up();\n            }\n            if !union_per_distance {\n                publish(\n                    &mut accumulated,\n                    &mut output,\n                    certificate,\n                    error,\n                    radius,\n                    tolerance_m,\n                    limits,\n                    work,\n                )?;\n                if let Some(surface) = output.last() {\n                    super::super::verify_coverage(&surface.geometry, input, work)?;\n                }\n                error = 0.0;\n            }\n        }\n        if union_per_distance {\n            publish(\n                &mut accumulated,\n                &mut output,\n                certificate,\n                error,\n                radius,\n                tolerance_m,\n                limits,\n                work,\n            )?;\n            if let Some(surface) = output.last() {\n                for input in inputs {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:9\");\n                    work.step()?;\n                    super::super::verify_coverage(&surface.geometry, input, work)?;\n                }\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      209,
+      215,
       29
     ],
     "column": 8,
@@ -9803,14 +9803,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs",
     "function": "execute",
     "kind": "for",
-    "line": 209,
+    "line": 215,
     "literal_iteration_bound": null,
     "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:7\");\n            work.step()?;\n            for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:8\");\n                work.step()?;\n                let bytes = (u64::from(n) + 1)\n                    .checked_mul(\n                        u64::try_from(size_of::<Coord>())\n                            .map_err(|_| DegenerateBufferError::MemoryLimit)?,\n                    )\n                    .ok_or(DegenerateBufferError::MemoryLimit)?;\n                work.reserve_export(bytes)?;\n                let disk = Geometry::Polygon(ring_shared(p, radius, n, &ellipsoid, || {\n                    work.step().map_err(UnionBufferError::from)\n                })?);\n                work.push(&mut accumulated, disk)?;\n                error = (error + overlay_error_m()).next_up();\n            }\n            if !union_per_distance {\n                publish(\n                    &mut accumulated,\n                    &mut output,\n                    certificate,\n                    error,\n                    radius,\n                    tolerance_m,\n                    limits,\n                    work,\n                )?;\n                if let Some(surface) = output.last() {\n                    super::super::verify_coverage(&surface.geometry, input, work)?;\n                }\n                error = 0.0;\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      213,
+      219,
       37
     ],
     "column": 12,
@@ -9820,14 +9820,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs",
     "function": "execute",
     "kind": "for",
-    "line": 213,
+    "line": 219,
     "literal_iteration_bound": null,
     "source": "for p in points(input)? {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:8\");\n                work.step()?;\n                let bytes = (u64::from(n) + 1)\n                    .checked_mul(\n                        u64::try_from(size_of::<Coord>())\n                            .map_err(|_| DegenerateBufferError::MemoryLimit)?,\n                    )\n                    .ok_or(DegenerateBufferError::MemoryLimit)?;\n                work.reserve_export(bytes)?;\n                let disk = Geometry::Polygon(ring_shared(p, radius, n, &ellipsoid, || {\n                    work.step().map_err(UnionBufferError::from)\n                })?);\n                work.push(&mut accumulated, disk)?;\n                error = (error + overlay_error_m()).next_up();\n            }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      259,
+      265,
       37
     ],
     "column": 16,
@@ -9837,7 +9837,7 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs",
     "function": "execute",
     "kind": "for",
-    "line": 259,
+    "line": 265,
     "literal_iteration_bound": null,
     "source": "for input in inputs {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer/point/union.rs::execute:9\");\n                    work.step()?;\n                    super::super::verify_coverage(&surface.geometry, input, work)?;\n                }"
   },
@@ -11557,28 +11557,28 @@
     "column": 8,
     "constant": false,
     "counter": "geodesic_buffer.rs::line:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "self.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "line",
     "kind": "for",
     "line": 217,
     "literal_iteration_bound": null,
-    "source": "for &point in &line.0 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::line:1\");\n            self.coordinate(point)?;\n        }"
+    "source": "for &point in &line.0 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::line:1\");\n            self.checkpoint()?;\n            self.coordinate(point)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      222,
+      223,
       39
     ],
     "column": 8,
     "constant": false,
     "counter": "geodesic_buffer.rs::line:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "self.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "line",
     "kind": "for",
-    "line": 222,
+    "line": 223,
     "literal_iteration_bound": null,
     "source": "for edge in line.0.windows(2) {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::line:2\");\n            self.step()?;\n            let a = edge[0];\n            let b = edge[1];\n            let (length, azimuth, final_azimuth, _): (f64, f64, f64, f64) =\n                ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);\n            if !(length.is_finite() && azimuth.is_finite() && final_azimuth.is_finite()) {\n                return Err(DegenerateBufferError::AccuracyUnproven);\n            }\n            // G2: latitudini opposte e azimut distinti sull'ellissoide oblato.\n            if length > 0.0 && a.y == -b.y && (a.y.abs() == 90.0 || azimuth != final_azimuth) {\n                return Err(DegenerateBufferError::AmbiguousGeodesic);\n            }\n            let delta = (a.x - b.x).abs();\n            if delta.min(360.0 - delta) > 178.0\n                && a.y != -b.y\n                && (a.y + b.y).abs() < 1e-12\n                && azimuth != final_azimuth\n            {\n                return Err(DegenerateBufferError::AccuracyUnproven);\n            }\n        }"
   },
@@ -11591,159 +11591,159 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "line",
     "kind": "method:inverse",
-    "line": 229,
+    "line": 230,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      270,
+      271,
       44
     ],
     "column": 16,
     "constant": false,
     "counter": "geodesic_buffer.rs::geometry:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "self.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geometry",
     "kind": "for",
-    "line": 270,
+    "line": 271,
     "literal_iteration_bound": null,
-    "source": "for polygon in &polygons.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:1\");\n                    self.empty_surface(polygon)?;\n                }"
+    "source": "for polygon in &polygons.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:1\");\n                    self.checkpoint()?;\n                    self.empty_surface(polygon)?;\n                }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      282,
+      284,
       40
     ],
     "column": 16,
     "constant": false,
     "counter": "geodesic_buffer.rs::geometry:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "self.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geometry",
     "kind": "for",
-    "line": 282,
+    "line": 284,
     "literal_iteration_bound": null,
-    "source": "for point in &points.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:2\");\n                    self.coordinate(point.0)?;\n                }"
+    "source": "for point in &points.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:2\");\n                    self.checkpoint()?;\n                    self.coordinate(point.0)?;\n                }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      295,
+      298,
       38
     ],
     "column": 16,
     "constant": false,
     "counter": "geodesic_buffer.rs::geometry:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "self.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geometry",
     "kind": "for",
-    "line": 295,
+    "line": 298,
     "literal_iteration_bound": null,
-    "source": "for line in &lines.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:3\");\n                    self.line(line, ellipsoid)?;\n                    empty &= line.0.is_empty();\n                }"
+    "source": "for line in &lines.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:3\");\n                    self.checkpoint()?;\n                    self.line(line, ellipsoid)?;\n                    empty &= line.0.is_empty();\n                }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      362,
+      366,
       28
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer.rs::geodesic_empty_buffer_with_limits:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geodesic_empty_buffer_with_limits",
     "kind": "for",
-    "line": 362,
+    "line": 366,
     "literal_iteration_bound": null,
-    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:1\");\n        work.step()?;\n        if !radius.is_finite() {\n            return Err(DegenerateBufferError::InvalidRadius);\n        }\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2\");\n            work.geometry(input, radius, &ellipsoid)?;\n        }\n        let count = if union_results {\n            1\n        } else {\n            u64::try_from(inputs.len()).map_err(|_| DegenerateBufferError::OutputLimit)?\n        };\n        items = items\n            .checked_add(count)\n            .ok_or(DegenerateBufferError::OutputLimit)?;\n        if items > limits.max_output_items {\n            return Err(DegenerateBufferError::OutputLimit);\n        }\n    }"
+    "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:1\");\n        work.step()?;\n        if !radius.is_finite() {\n            return Err(DegenerateBufferError::InvalidRadius);\n        }\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2\");\n            work.checkpoint()?;\n            work.geometry(input, radius, &ellipsoid)?;\n        }\n        let count = if union_results {\n            1\n        } else {\n            u64::try_from(inputs.len()).map_err(|_| DegenerateBufferError::OutputLimit)?\n        };\n        items = items\n            .checked_add(count)\n            .ok_or(DegenerateBufferError::OutputLimit)?;\n        if items > limits.max_output_items {\n            return Err(DegenerateBufferError::OutputLimit);\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      369,
+      373,
       29
     ],
     "column": 8,
     "constant": false,
     "counter": "geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geodesic_empty_buffer_with_limits",
     "kind": "for",
-    "line": 369,
+    "line": 373,
     "literal_iteration_bound": null,
-    "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2\");\n            work.geometry(input, radius, &ellipsoid)?;\n        }"
+    "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2\");\n            work.checkpoint()?;\n            work.geometry(input, radius, &ellipsoid)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      388,
+      393,
       23
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer.rs::geodesic_empty_buffer_with_limits:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geodesic_empty_buffer_with_limits",
     "kind": "for",
-    "line": 388,
+    "line": 393,
     "literal_iteration_bound": null,
     "source": "for _ in 0..count {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:3\");\n        work.step()?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      424,
+      429,
       29
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer.rs::verify_surface:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "verify_surface",
     "kind": "for",
-    "line": 424,
+    "line": 429,
     "literal_iteration_bound": null,
     "source": "for polygon in polygons {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::verify_surface:1\");\n        work.step()?;\n        for (index, ring) in std::iter::once(polygon.exterior())\n            .chain(polygon.interiors())\n            .enumerate()\n        {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::verify_surface:2\");\n            work.step()?;\n            if ring.0.is_empty() {\n                continue;\n            }\n            let expected = if index == 0 {\n                std::cmp::Ordering::Greater\n            } else {\n                std::cmp::Ordering::Less\n            };\n            if ring_orientation(ring, work)? != expected {\n                return Err(DegenerateBufferError::InvalidTopology.into());\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      431,
+      436,
       9
     ],
     "column": 8,
     "constant": false,
     "counter": "geodesic_buffer.rs::verify_surface:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "verify_surface",
     "kind": "for",
-    "line": 428,
+    "line": 433,
     "literal_iteration_bound": null,
     "source": "for (index, ring) in std::iter::once(polygon.exterior())\n            .chain(polygon.interiors())\n            .enumerate()\n        {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::verify_surface:2\");\n            work.step()?;\n            if ring.0.is_empty() {\n                continue;\n            }\n            let expected = if index == 0 {\n                std::cmp::Ordering::Greater\n            } else {\n                std::cmp::Ordering::Less\n            };\n            if ring_orientation(ring, work)? != expected {\n                return Err(DegenerateBufferError::InvalidTopology.into());\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      457,
+      462,
       35
     ],
     "column": 4,
     "constant": false,
     "counter": "geodesic_buffer.rs::ring_orientation:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "ring_orientation",
     "kind": "for",
-    "line": 457,
+    "line": 462,
     "literal_iteration_bound": null,
     "source": "for edge in ring.0.windows(2) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::ring_orientation:1\");\n        work.step()?;\n        let a = P::of_in(edge[0], work)?;\n        let b = P::of_in(edge[1], work)?;\n        area = area.try_add(&a.try_cross(&b)?)?;\n    }"
   },
@@ -11901,13 +11901,13 @@
     "column": 12,
     "constant": false,
     "counter": "geodesic_densify/validation.rs::validate_surface:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/geodesic_densify/validation.rs",
     "function": "validate_surface",
     "kind": "for",
     "line": 74,
     "literal_iteration_bound": null,
-    "source": "for value in values {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_densify/validation.rs::validate_surface:1\");\n                polygon(value)?;\n            }"
+    "source": "for value in values {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"geodesic_densify/validation.rs::validate_surface:1\");\n                work.checkpoint()?;\n                polygon(value, &mut work)?;\n            }"
   },
   {
     "body": null,
@@ -13903,63 +13903,63 @@
     "column": 8,
     "constant": false,
     "counter": "noding.rs::sift:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "sift",
     "kind": "while",
     "line": 173,
-    "source": "while root < values.len() / 2 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::sift:1\");\n            let mut child = root * 2 + 1;\n            if child + 1 < values.len() {\n                work.step()?;\n                if compare(&values[child], &values[child + 1], work)?.is_lt() {\n                    child += 1;\n                }\n            }\n            work.step()?;\n            if !compare(&values[root], &values[child], work)?.is_lt() {\n                break;\n            }\n            values.swap(root, child);\n            root = child;\n        }"
+    "source": "while root < values.len() / 2 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::sift:1\");\n            work.checkpoint()?;\n            let mut child = root * 2 + 1;\n            if child + 1 < values.len() {\n                work.step()?;\n                if compare(&values[child], &values[child + 1], work)?.is_lt() {\n                    child += 1;\n                }\n            }\n            work.step()?;\n            if !compare(&values[root], &values[child], work)?.is_lt() {\n                break;\n            }\n            values.swap(root, child);\n            root = child;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      193,
+      194,
       45
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::sorted_with_work:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "sorted_with_work",
     "kind": "for",
-    "line": 193,
+    "line": 194,
     "literal_iteration_bound": null,
-    "source": "for root in (0..values.len() / 2).rev() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::sorted_with_work:1\");\n        sift(values, root, &compare, work)?;\n    }"
+    "source": "for root in (0..values.len() / 2).rev() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::sorted_with_work:1\");\n        work.checkpoint()?;\n        sift(values, root, &compare, work)?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      198,
+      200,
       40
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::sorted_with_work:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "sorted_with_work",
     "kind": "for",
-    "line": 198,
+    "line": 200,
     "literal_iteration_bound": null,
     "source": "for end in (1..values.len()).rev() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::sorted_with_work:2\");\n        work.step()?;\n        values.swap(0, end);\n        sift(&mut values[..end], 0, &compare, work)?;\n    }"
   },
   {
     "array_iteration_bound": "4",
     "body": [
-      305,
+      307,
       39
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::intersections:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "intersections",
     "kind": "for",
-    "line": 305,
+    "line": 307,
     "literal_iteration_bound": null,
-    "source": "for p in [&a.a, &a.b, &b.a, &b.b] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::intersections:1\");\n        if a.contains(p)? && b.contains(p)? {\n            if match first {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_lt(),\n            } {\n                first = Some(p);\n            }\n            if match last {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_gt(),\n            } {\n                last = Some(p);\n            }\n        }\n    }"
+    "source": "for p in [&a.a, &a.b, &b.a, &b.b] {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::intersections:1\");\n        work.checkpoint()?;\n        if a.contains(p)? && b.contains(p)? {\n            if match first {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_lt(),\n            } {\n                first = Some(p);\n            }\n            if match last {\n                None => true,\n                Some(q) => point_cmp(p, q)?.is_gt(),\n            } {\n                last = Some(p);\n            }\n        }\n    }"
   },
   {
     "body": null,
@@ -13970,7 +13970,7 @@
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "intersections",
     "kind": "method:map",
-    "line": 328,
+    "line": 331,
     "source": null
   },
   {
@@ -13982,159 +13982,159 @@
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "intersections",
     "kind": "method:map",
-    "line": 329,
+    "line": 332,
     "source": null
   },
   {
     "body": [
-      373,
+      376,
       34
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::sift:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "sift",
     "kind": "while",
-    "line": 373,
+    "line": 376,
     "source": "while root < index.len() / 2 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::sift:2\");\n        work.step()?;\n        let mut child = root * 2 + 1;\n        if child + 1 < index.len() && index_cmp(index[child], index[child + 1], edges)?.is_lt() {\n            child += 1;\n        }\n        if !index_cmp(index[root], index[child], edges)?.is_lt() {\n            break;\n        }\n        index.swap(root, child);\n        root = child;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      399,
+      402,
       47
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::visit:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "visit",
     "kind": "for",
-    "line": 399,
+    "line": 402,
     "literal_iteration_bound": null,
-    "source": "for (i, edge) in edges.iter().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::visit:1\");\n        work.step()?;\n        for point in [&edge.a, &edge.b] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:2\");\n            if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {\n                return Err(PredicateError::CalcoloNonConcluso(\n                    \"proprietario del budget\",\n                ));\n            }\n        }\n        work.push(&mut index, i)?;\n    }"
+    "source": "for (i, edge) in edges.iter().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::visit:1\");\n        work.step()?;\n        for point in [&edge.a, &edge.b] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:2\");\n            work.checkpoint()?;\n            if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {\n                return Err(PredicateError::CalcoloNonConcluso(\n                    \"proprietario del budget\",\n                ));\n            }\n        }\n        work.push(&mut index, i)?;\n    }"
   },
   {
     "array_iteration_bound": "2",
     "body": [
-      403,
+      406,
       41
     ],
     "column": 8,
     "constant": false,
     "counter": "noding.rs::visit:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "visit",
     "kind": "for",
-    "line": 403,
+    "line": 406,
     "literal_iteration_bound": null,
-    "source": "for point in [&edge.a, &edge.b] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:2\");\n            if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {\n                return Err(PredicateError::CalcoloNonConcluso(\n                    \"proprietario del budget\",\n                ));\n            }\n        }"
+    "source": "for point in [&edge.a, &edge.b] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:2\");\n            work.checkpoint()?;\n            if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {\n                return Err(PredicateError::CalcoloNonConcluso(\n                    \"proprietario del budget\",\n                ));\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      414,
+      418,
       44
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::visit:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "visit",
     "kind": "for",
-    "line": 414,
+    "line": 418,
     "literal_iteration_bound": null,
-    "source": "for root in (0..index.len() / 2).rev() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::visit:3\");\n        sift(&mut index, root, edges, work)?;\n    }"
+    "source": "for root in (0..index.len() / 2).rev() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::visit:3\");\n        work.checkpoint()?;\n        sift(&mut index, root, edges, work)?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      419,
+      424,
       39
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::visit:4",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "visit",
     "kind": "for",
-    "line": 419,
+    "line": 424,
     "literal_iteration_bound": null,
     "source": "for end in (1..index.len()).rev() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::visit:4\");\n        work.step()?;\n        index.swap(0, end);\n        sift(&mut index[..end], 0, edges, work)?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      426,
+      431,
       52
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::visit:5",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "visit",
     "kind": "for",
-    "line": 426,
+    "line": 431,
     "literal_iteration_bound": null,
-    "source": "for (position, &i) in index.iter().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::visit:5\");\n        let a = edges[i];\n        for &j in &index[position + 1..] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:6\");\n            work.step()?;\n            let b = edges[j];\n            if b.a\n                .x\n                .min_ref(&b.b.x)?\n                .try_cmp(a.a.x.max_ref(&a.b.x)?)?\n                .is_gt()\n            {\n                break;\n            }\n            if b.a\n                .y\n                .min_ref(&b.b.y)?\n                .try_cmp(a.a.y.max_ref(&a.b.y)?)?\n                .is_gt()\n                || b.a\n                    .y\n                    .max_ref(&b.b.y)?\n                    .try_cmp(a.a.y.min_ref(&a.b.y)?)?\n                    .is_lt()\n            {\n                continue;\n            }\n            work.pair()?;\n            let hits = intersections(a, b, work)?;\n            emit(i, j, hits, work)?;\n        }\n    }"
+    "source": "for (position, &i) in index.iter().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::visit:5\");\n        work.checkpoint()?;\n        let a = edges[i];\n        for &j in &index[position + 1..] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:6\");\n            work.step()?;\n            let b = edges[j];\n            if b.a\n                .x\n                .min_ref(&b.b.x)?\n                .try_cmp(a.a.x.max_ref(&a.b.x)?)?\n                .is_gt()\n            {\n                break;\n            }\n            if b.a\n                .y\n                .min_ref(&b.b.y)?\n                .try_cmp(a.a.y.max_ref(&a.b.y)?)?\n                .is_gt()\n                || b.a\n                    .y\n                    .max_ref(&b.b.y)?\n                    .try_cmp(a.a.y.min_ref(&a.b.y)?)?\n                    .is_lt()\n            {\n                continue;\n            }\n            work.pair()?;\n            let hits = intersections(a, b, work)?;\n            emit(i, j, hits, work)?;\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      430,
+      436,
       42
     ],
     "column": 8,
     "constant": false,
     "counter": "noding.rs::visit:6",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "visit",
     "kind": "for",
-    "line": 430,
+    "line": 436,
     "literal_iteration_bound": null,
     "source": "for &j in &index[position + 1..] {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::visit:6\");\n            work.step()?;\n            let b = edges[j];\n            if b.a\n                .x\n                .min_ref(&b.b.x)?\n                .try_cmp(a.a.x.max_ref(&a.b.x)?)?\n                .is_gt()\n            {\n                break;\n            }\n            if b.a\n                .y\n                .min_ref(&b.b.y)?\n                .try_cmp(a.a.y.max_ref(&a.b.y)?)?\n                .is_gt()\n                || b.a\n                    .y\n                    .max_ref(&b.b.y)?\n                    .try_cmp(a.a.y.min_ref(&a.b.y)?)?\n                    .is_lt()\n            {\n                continue;\n            }\n            work.pair()?;\n            let hits = intersections(a, b, work)?;\n            emit(i, j, hits, work)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      472,
+      478,
       23
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::node:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "node",
     "kind": "for",
-    "line": 472,
+    "line": 478,
     "literal_iteration_bound": null,
-    "source": "for edge in edges {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::node:1\");\n        let mut points = CountedVec::new();\n        work.nodes(2)?;\n        work.push(&mut points, edge.a.try_clone()?)?;\n        work.push(&mut points, edge.b.try_clone()?)?;\n        work.push(&mut result, points)?;\n    }"
+    "source": "for edge in edges {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::node:1\");\n        work.checkpoint()?;\n        let mut points = CountedVec::new();\n        work.nodes(2)?;\n        work.push(&mut points, edge.a.try_clone()?)?;\n        work.push(&mut points, edge.b.try_clone()?)?;\n        work.push(&mut result, points)?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      482,
+      489,
       45
     ],
     "column": 8,
     "constant": false,
     "counter": "noding.rs::node:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "node",
     "kind": "for",
-    "line": 482,
+    "line": 489,
     "literal_iteration_bound": null,
-    "source": "for p in hits.into_iter().flatten() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:2\");\n            work.push(&mut result[i], p.try_clone()?)?;\n            work.push(&mut result[j], p)?;\n        }"
+    "source": "for p in hits.into_iter().flatten() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:2\");\n            work.checkpoint()?;\n            work.push(&mut result[i], p.try_clone()?)?;\n            work.push(&mut result[j], p)?;\n        }"
   },
   {
     "body": null,
@@ -14145,72 +14145,72 @@
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "node",
     "kind": "method:flatten",
-    "line": 482,
+    "line": 489,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      490,
+      498,
       56
     ],
     "column": 4,
     "constant": false,
     "counter": "noding.rs::node:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "node",
     "kind": "for",
-    "line": 490,
+    "line": 498,
     "literal_iteration_bound": null,
-    "source": "for (points, edge) in result.iter_mut().zip(edges) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::node:3\");\n        sorted(points, point_cmp, work)?;\n        let mut kept = 0;\n        for read in 0..points.len() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:4\");\n            work.step()?;\n            if kept == 0 || points[read] != points[kept - 1] {\n                points.swap(kept, read);\n                kept += 1;\n            }\n        }\n        while points.len() > kept {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:5\");\n            work.step()?;\n            points.pop();\n        }\n        if point_cmp(&edge.a, &edge.b)?.is_gt() {\n            for i in 0..points.len() / 2 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"noding.rs::node:6\");\n                work.step()?;\n                let other = points.len() - 1 - i;\n                points.swap(i, other);\n            }\n        }\n    }"
+    "source": "for (points, edge) in result.iter_mut().zip(edges) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding.rs::node:3\");\n        work.checkpoint()?;\n        sorted(points, point_cmp, work)?;\n        let mut kept = 0;\n        for read in 0..points.len() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:4\");\n            work.step()?;\n            if kept == 0 || points[read] != points[kept - 1] {\n                points.swap(kept, read);\n                kept += 1;\n            }\n        }\n        while points.len() > kept {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:5\");\n            work.step()?;\n            points.pop();\n        }\n        if point_cmp(&edge.a, &edge.b)?.is_gt() {\n            for i in 0..points.len() / 2 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"noding.rs::node:6\");\n                work.step()?;\n                let other = points.len() - 1 - i;\n                points.swap(i, other);\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      495,
+      504,
       37
     ],
     "column": 8,
     "constant": false,
     "counter": "noding.rs::node:4",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "node",
     "kind": "for",
-    "line": 495,
+    "line": 504,
     "literal_iteration_bound": null,
     "source": "for read in 0..points.len() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:4\");\n            work.step()?;\n            if kept == 0 || points[read] != points[kept - 1] {\n                points.swap(kept, read);\n                kept += 1;\n            }\n        }"
   },
   {
     "body": [
-      504,
+      513,
       35
     ],
     "column": 8,
     "constant": false,
     "counter": "noding.rs::node:5",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "node",
     "kind": "while",
-    "line": 504,
+    "line": 513,
     "source": "while points.len() > kept {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding.rs::node:5\");\n            work.step()?;\n            points.pop();\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      511,
+      520,
       42
     ],
     "column": 12,
     "constant": false,
     "counter": "noding.rs::node:6",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding.rs",
     "function": "node",
     "kind": "for",
-    "line": 511,
+    "line": 520,
     "literal_iteration_bound": null,
     "source": "for i in 0..points.len() / 2 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"noding.rs::node:6\");\n                work.step()?;\n                let other = points.len() - 1 - i;\n                points.swap(i, other);\n            }"
   },
@@ -20442,80 +20442,80 @@
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::preserve_shape_length_with_limits:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "preserve_shape_length_with_limits",
     "kind": "loop",
     "line": 467,
-    "source": "loop {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure.rs::preserve_shape_length_with_limits:1\",\n        );\n        let mut value = MeasureSum::default();\n        let mut error = MeasureErrors::default();\n        for part in parts {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_length_with_limits:2\",\n            );\n            work.charge()?;\n            for &point in &part.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:3\",\n                );\n                context.convert(point, &mut work)?;\n            }\n            for pair in part.0.windows(2) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:4\",\n                );\n                length_edge(\n                    &context, pair[0], pair[1], divisions, &mut work, &mut value, &mut error,\n                )?;\n            }\n        }\n        error\n            .numerical\n            .add(value.value().abs() * 64.0 * f64::EPSILON);\n        let bound = error.value();\n        if accepted(value.value(), bound, tolerance) {\n            return result(&context, value.value(), &error, &mut work);\n        }\n        divisions = divisions\n            .checked_mul(2)\n            .ok_or(ShapeMeasureError::AccuracyUnproven)?;\n    }"
+    "source": "loop {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure.rs::preserve_shape_length_with_limits:1\",\n        );\n        work.checkpoint()?;\n        let mut value = MeasureSum::default();\n        let mut error = MeasureErrors::default();\n        for part in parts {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_length_with_limits:2\",\n            );\n            work.charge()?;\n            for &point in &part.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:3\",\n                );\n                work.checkpoint()?;\n                context.convert(point, &mut work)?;\n            }\n            for pair in part.0.windows(2) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:4\",\n                );\n                work.checkpoint()?;\n                length_edge(\n                    &context, pair[0], pair[1], divisions, &mut work, &mut value, &mut error,\n                )?;\n            }\n        }\n        error\n            .numerical\n            .add(value.value().abs() * 64.0 * f64::EPSILON);\n        let bound = error.value();\n        if accepted(value.value(), bound, tolerance) {\n            return result(&context, value.value(), &error, &mut work);\n        }\n        divisions = divisions\n            .checked_mul(2)\n            .ok_or(ShapeMeasureError::AccuracyUnproven)?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      474,
+      475,
       27
     ],
     "column": 8,
     "constant": false,
     "counter": "preserve_shape_measure.rs::preserve_shape_length_with_limits:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.charge()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "preserve_shape_length_with_limits",
     "kind": "for",
-    "line": 474,
+    "line": 475,
     "literal_iteration_bound": null,
-    "source": "for part in parts {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_length_with_limits:2\",\n            );\n            work.charge()?;\n            for &point in &part.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:3\",\n                );\n                context.convert(point, &mut work)?;\n            }\n            for pair in part.0.windows(2) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:4\",\n                );\n                length_edge(\n                    &context, pair[0], pair[1], divisions, &mut work, &mut value, &mut error,\n                )?;\n            }\n        }"
+    "source": "for part in parts {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_length_with_limits:2\",\n            );\n            work.charge()?;\n            for &point in &part.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:3\",\n                );\n                work.checkpoint()?;\n                context.convert(point, &mut work)?;\n            }\n            for pair in part.0.windows(2) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:4\",\n                );\n                work.checkpoint()?;\n                length_edge(\n                    &context, pair[0], pair[1], divisions, &mut work, &mut value, &mut error,\n                )?;\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      480,
+      481,
       35
     ],
     "column": 12,
     "constant": false,
     "counter": "preserve_shape_measure.rs::preserve_shape_length_with_limits:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "preserve_shape_length_with_limits",
     "kind": "for",
-    "line": 480,
+    "line": 481,
     "literal_iteration_bound": null,
-    "source": "for &point in &part.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:3\",\n                );\n                context.convert(point, &mut work)?;\n            }"
+    "source": "for &point in &part.0 {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:3\",\n                );\n                work.checkpoint()?;\n                context.convert(point, &mut work)?;\n            }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      487,
+      489,
       43
     ],
     "column": 12,
     "constant": false,
     "counter": "preserve_shape_measure.rs::preserve_shape_length_with_limits:4",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "preserve_shape_length_with_limits",
     "kind": "for",
-    "line": 487,
+    "line": 489,
     "literal_iteration_bound": null,
-    "source": "for pair in part.0.windows(2) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:4\",\n                );\n                length_edge(\n                    &context, pair[0], pair[1], divisions, &mut work, &mut value, &mut error,\n                )?;\n            }"
+    "source": "for pair in part.0.windows(2) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_length_with_limits:4\",\n                );\n                work.checkpoint()?;\n                length_edge(\n                    &context, pair[0], pair[1], divisions, &mut work, &mut value, &mut error,\n                )?;\n            }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      544,
+      547,
       28
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::length_edge:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "length_edge",
     "kind": "for",
-    "line": 544,
+    "line": 547,
     "literal_iteration_bound": null,
-    "source": "for i in 1..=divisions {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::length_edge:1\");\n        let point = context.convert(\n            interpolated(start, end, f64::from(i) / f64::from(divisions)),\n            work,\n        )?;\n        work.charge()?;\n        let distance: f64 = context\n            .ellipsoid\n            .geodetica()\n            .inverse(previous.y, previous.x, point.y, point.x);\n        if !distance.is_finite() {\n            return Err(ShapeMeasureError::AccuracyUnproven);\n        }\n        // G1/G2: 15 nm per inverse; 1 micrometro include conversione e interpolazione.\n        let lower = distance - numerical;\n        if lower <= 0.0 {\n            // Il maggiorante della velocita' resta valido anche ai poli o ai coincidenti.\n            error.discretization.add(1.1 * a * speed);\n        } else {\n            // Varianza della velocita' ECEF: L-d <= A^2/(12d), senza test di convergenza.\n            error\n                .discretization\n                .add(acceleration.powi(2) / (12.0 * lower));\n        }\n        error.numerical.add(numerical);\n        value.add(distance);\n        previous = point;\n    }"
+    "source": "for i in 1..=divisions {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::length_edge:1\");\n        work.checkpoint()?;\n        let point = context.convert(\n            interpolated(start, end, f64::from(i) / f64::from(divisions)),\n            work,\n        )?;\n        work.charge()?;\n        let distance: f64 = context\n            .ellipsoid\n            .geodetica()\n            .inverse(previous.y, previous.x, point.y, point.x);\n        if !distance.is_finite() {\n            return Err(ShapeMeasureError::AccuracyUnproven);\n        }\n        // G1/G2: 15 nm per inverse; 1 micrometro include conversione e interpolazione.\n        let lower = distance - numerical;\n        if lower <= 0.0 {\n            // Il maggiorante della velocita' resta valido anche ai poli o ai coincidenti.\n            error.discretization.add(1.1 * a * speed);\n        } else {\n            // Varianza della velocita' ECEF: L-d <= A^2/(12d), senza test di convergenza.\n            error\n                .discretization\n                .add(acceleration.powi(2) / (12.0 * lower));\n        }\n        error.numerical.add(numerical);\n        value.add(distance);\n        previous = point;\n    }"
   },
   {
     "body": null,
@@ -20526,79 +20526,79 @@
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "length_edge",
     "kind": "method:inverse",
-    "line": 555,
+    "line": 559,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      599,
+      603,
       29
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::preserve_shape_area_with_limits:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "preserve_shape_area_with_limits",
     "kind": "for",
-    "line": 599,
+    "line": 603,
     "literal_iteration_bound": null,
-    "source": "for polygon in polygons {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure.rs::preserve_shape_area_with_limits:1\",\n        );\n        validate_polygon(polygon, &context, &mut work)?;\n    }"
+    "source": "for polygon in polygons {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure.rs::preserve_shape_area_with_limits:1\",\n        );\n        work.checkpoint()?;\n        validate_polygon(polygon, &context, &mut work)?;\n    }"
   },
   {
     "body": [
-      607,
+      612,
       10
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::preserve_shape_area_with_limits:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "preserve_shape_area_with_limits",
     "kind": "loop",
-    "line": 607,
-    "source": "loop {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure.rs::preserve_shape_area_with_limits:2\",\n        );\n        let mut value = MeasureSum::default();\n        let mut error = MeasureErrors::default();\n        for polygon in polygons {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_area_with_limits:3\",\n            );\n            work.charge()?;\n            for (index, ring) in std::iter::once(polygon.exterior())\n                .chain(polygon.interiors())\n                .enumerate()\n            {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_area_with_limits:4\",\n                );\n                let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;\n                value.add(if index == 0 { area.abs() } else { -area.abs() });\n                error.merge(&bound);\n            }\n        }\n        error\n            .numerical\n            .add(value.value().abs() * 64.0 * f64::EPSILON);\n        let bound = error.value();\n        if value.value() >= 0.0 && accepted(value.value(), bound, tolerance) {\n            return result(&context, value.value(), &error, &mut work);\n        }\n        divisions = divisions\n            .checked_mul(2)\n            .ok_or(ShapeMeasureError::AccuracyUnproven)?;\n    }"
+    "line": 612,
+    "source": "loop {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\n            \"preserve_shape_measure.rs::preserve_shape_area_with_limits:2\",\n        );\n        work.checkpoint()?;\n        let mut value = MeasureSum::default();\n        let mut error = MeasureErrors::default();\n        for polygon in polygons {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_area_with_limits:3\",\n            );\n            work.charge()?;\n            for (index, ring) in std::iter::once(polygon.exterior())\n                .chain(polygon.interiors())\n                .enumerate()\n            {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_area_with_limits:4\",\n                );\n                work.checkpoint()?;\n                let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;\n                value.add(if index == 0 { area.abs() } else { -area.abs() });\n                error.merge(&bound);\n            }\n        }\n        error\n            .numerical\n            .add(value.value().abs() * 64.0 * f64::EPSILON);\n        let bound = error.value();\n        if value.value() >= 0.0 && accepted(value.value(), bound, tolerance) {\n            return result(&context, value.value(), &error, &mut work);\n        }\n        divisions = divisions\n            .checked_mul(2)\n            .ok_or(ShapeMeasureError::AccuracyUnproven)?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      614,
+      620,
       33
     ],
     "column": 8,
     "constant": false,
     "counter": "preserve_shape_measure.rs::preserve_shape_area_with_limits:3",
-    "entry_checkpoint": null,
-    "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
-    "function": "preserve_shape_area_with_limits",
-    "kind": "for",
-    "line": 614,
-    "literal_iteration_bound": null,
-    "source": "for polygon in polygons {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_area_with_limits:3\",\n            );\n            work.charge()?;\n            for (index, ring) in std::iter::once(polygon.exterior())\n                .chain(polygon.interiors())\n                .enumerate()\n            {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_area_with_limits:4\",\n                );\n                let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;\n                value.add(if index == 0 { area.abs() } else { -area.abs() });\n                error.merge(&bound);\n            }\n        }"
-  },
-  {
-    "array_iteration_bound": null,
-    "body": [
-      623,
-      13
-    ],
-    "column": 12,
-    "constant": false,
-    "counter": "preserve_shape_measure.rs::preserve_shape_area_with_limits:4",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.charge()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "preserve_shape_area_with_limits",
     "kind": "for",
     "line": 620,
     "literal_iteration_bound": null,
-    "source": "for (index, ring) in std::iter::once(polygon.exterior())\n                .chain(polygon.interiors())\n                .enumerate()\n            {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_area_with_limits:4\",\n                );\n                let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;\n                value.add(if index == 0 { area.abs() } else { -area.abs() });\n                error.merge(&bound);\n            }"
+    "source": "for polygon in polygons {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\n                \"preserve_shape_measure.rs::preserve_shape_area_with_limits:3\",\n            );\n            work.charge()?;\n            for (index, ring) in std::iter::once(polygon.exterior())\n                .chain(polygon.interiors())\n                .enumerate()\n            {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_area_with_limits:4\",\n                );\n                work.checkpoint()?;\n                let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;\n                value.add(if index == 0 { area.abs() } else { -area.abs() });\n                error.merge(&bound);\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      655,
+      629,
+      13
+    ],
+    "column": 12,
+    "constant": false,
+    "counter": "preserve_shape_measure.rs::preserve_shape_area_with_limits:4",
+    "entry_checkpoint": "work.checkpoint()?",
+    "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
+    "function": "preserve_shape_area_with_limits",
+    "kind": "for",
+    "line": 626,
+    "literal_iteration_bound": null,
+    "source": "for (index, ring) in std::iter::once(polygon.exterior())\n                .chain(polygon.interiors())\n                .enumerate()\n            {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\n                    \"preserve_shape_measure.rs::preserve_shape_area_with_limits:4\",\n                );\n                work.checkpoint()?;\n                let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;\n                value.add(if index == 0 { area.abs() } else { -area.abs() });\n                error.merge(&bound);\n            }"
+  },
+  {
+    "array_iteration_bound": null,
+    "body": [
+      662,
       19
     ],
     "column": 4,
@@ -20608,194 +20608,194 @@
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "area_primitive",
     "kind": "for",
-    "line": 655,
+    "line": 662,
     "literal_iteration_bound": "9",
     "source": "for n in 0..9 {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::area_primitive:1\");\n        sum.add(f64::from(n + 1) / f64::from(2 * n + 1) * power);\n        power *= ratio;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      674,
+      681,
       35
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::ring_area:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "ring_area",
     "kind": "for",
-    "line": 674,
+    "line": 681,
     "literal_iteration_bound": null,
-    "source": "for pair in ring.0.windows(2) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::ring_area:1\");\n        let (dx, dy) = context.deltas(pair[0], pair[1], divisions)?;\n        for i in 0..divisions {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::ring_area:2\");\n            let point = context.convert(\n                interpolated(pair[0], pair[1], f64::from(i) / f64::from(divisions)),\n                work,\n            )?;\n            let midpoint = context.convert(\n                interpolated(\n                    pair[0],\n                    pair[1],\n                    (f64::from(i) + 0.5) / f64::from(divisions),\n                ),\n                work,\n            )?;\n            work.charge()?;\n            polygon.add_point(point.y, point.x);\n            match &context.derivatives {\n                ShapeDerivatives::Separable(bounds) => {\n                    integral.add(-area_primitive(midpoint.y, parameters) * dx);\n                    let derivative_bound =\n                        1.1 * (bounds.latitude_first.powi(2) + bounds.latitude_second);\n                    let scale = dx.abs() * parameters.semi_major_axis_metre.powi(2);\n                    error\n                        .discretization\n                        .add(scale * derivative_bound * dy * dy / 24.0);\n                    error.numerical.add(scale * 512.0 * f64::EPSILON);\n                }\n                ShapeDerivatives::Transverse(_)\n                | ShapeDerivatives::Lambert(_)\n                | ShapeDerivatives::Azimuthal(_)\n                | ShapeDerivatives::Stereographic(_)\n                | ShapeDerivatives::Hotine(_) => {\n                    let end = context.convert(\n                        interpolated(pair[0], pair[1], f64::from(i + 1) / f64::from(divisions)),\n                        work,\n                    )?;\n                    let longitude_delta = (end.x - point.x).to_radians();\n                    integral.add(-area_primitive(midpoint.y, parameters) * longitude_delta);\n                    // Taylor di Q(phi) attorno al centro; lambda' non e' costante.\n                    let delta = dx.abs() + dy.abs();\n                    let scale = parameters.semi_major_axis_metre.powi(2);\n                    error.discretization.add(scale * 8.25 * delta.powi(3));\n                    error.numerical.add(scale * 16384.0 * f64::EPSILON);\n                }\n            }\n        }\n    }"
+    "source": "for pair in ring.0.windows(2) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::ring_area:1\");\n        work.checkpoint()?;\n        let (dx, dy) = context.deltas(pair[0], pair[1], divisions)?;\n        for i in 0..divisions {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::ring_area:2\");\n            work.checkpoint()?;\n            let point = context.convert(\n                interpolated(pair[0], pair[1], f64::from(i) / f64::from(divisions)),\n                work,\n            )?;\n            let midpoint = context.convert(\n                interpolated(\n                    pair[0],\n                    pair[1],\n                    (f64::from(i) + 0.5) / f64::from(divisions),\n                ),\n                work,\n            )?;\n            work.charge()?;\n            polygon.add_point(point.y, point.x);\n            match &context.derivatives {\n                ShapeDerivatives::Separable(bounds) => {\n                    integral.add(-area_primitive(midpoint.y, parameters) * dx);\n                    let derivative_bound =\n                        1.1 * (bounds.latitude_first.powi(2) + bounds.latitude_second);\n                    let scale = dx.abs() * parameters.semi_major_axis_metre.powi(2);\n                    error\n                        .discretization\n                        .add(scale * derivative_bound * dy * dy / 24.0);\n                    error.numerical.add(scale * 512.0 * f64::EPSILON);\n                }\n                ShapeDerivatives::Transverse(_)\n                | ShapeDerivatives::Lambert(_)\n                | ShapeDerivatives::Azimuthal(_)\n                | ShapeDerivatives::Stereographic(_)\n                | ShapeDerivatives::Hotine(_) => {\n                    let end = context.convert(\n                        interpolated(pair[0], pair[1], f64::from(i + 1) / f64::from(divisions)),\n                        work,\n                    )?;\n                    let longitude_delta = (end.x - point.x).to_radians();\n                    integral.add(-area_primitive(midpoint.y, parameters) * longitude_delta);\n                    // Taylor di Q(phi) attorno al centro; lambda' non e' costante.\n                    let delta = dx.abs() + dy.abs();\n                    let scale = parameters.semi_major_axis_metre.powi(2);\n                    error.discretization.add(scale * 8.25 * delta.powi(3));\n                    error.numerical.add(scale * 16384.0 * f64::EPSILON);\n                }\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      678,
+      686,
       31
     ],
     "column": 8,
     "constant": false,
     "counter": "preserve_shape_measure.rs::ring_area:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "ring_area",
     "kind": "for",
-    "line": 678,
+    "line": 686,
     "literal_iteration_bound": null,
-    "source": "for i in 0..divisions {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::ring_area:2\");\n            let point = context.convert(\n                interpolated(pair[0], pair[1], f64::from(i) / f64::from(divisions)),\n                work,\n            )?;\n            let midpoint = context.convert(\n                interpolated(\n                    pair[0],\n                    pair[1],\n                    (f64::from(i) + 0.5) / f64::from(divisions),\n                ),\n                work,\n            )?;\n            work.charge()?;\n            polygon.add_point(point.y, point.x);\n            match &context.derivatives {\n                ShapeDerivatives::Separable(bounds) => {\n                    integral.add(-area_primitive(midpoint.y, parameters) * dx);\n                    let derivative_bound =\n                        1.1 * (bounds.latitude_first.powi(2) + bounds.latitude_second);\n                    let scale = dx.abs() * parameters.semi_major_axis_metre.powi(2);\n                    error\n                        .discretization\n                        .add(scale * derivative_bound * dy * dy / 24.0);\n                    error.numerical.add(scale * 512.0 * f64::EPSILON);\n                }\n                ShapeDerivatives::Transverse(_)\n                | ShapeDerivatives::Lambert(_)\n                | ShapeDerivatives::Azimuthal(_)\n                | ShapeDerivatives::Stereographic(_)\n                | ShapeDerivatives::Hotine(_) => {\n                    let end = context.convert(\n                        interpolated(pair[0], pair[1], f64::from(i + 1) / f64::from(divisions)),\n                        work,\n                    )?;\n                    let longitude_delta = (end.x - point.x).to_radians();\n                    integral.add(-area_primitive(midpoint.y, parameters) * longitude_delta);\n                    // Taylor di Q(phi) attorno al centro; lambda' non e' costante.\n                    let delta = dx.abs() + dy.abs();\n                    let scale = parameters.semi_major_axis_metre.powi(2);\n                    error.discretization.add(scale * 8.25 * delta.powi(3));\n                    error.numerical.add(scale * 16384.0 * f64::EPSILON);\n                }\n            }\n        }"
+    "source": "for i in 0..divisions {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::ring_area:2\");\n            work.checkpoint()?;\n            let point = context.convert(\n                interpolated(pair[0], pair[1], f64::from(i) / f64::from(divisions)),\n                work,\n            )?;\n            let midpoint = context.convert(\n                interpolated(\n                    pair[0],\n                    pair[1],\n                    (f64::from(i) + 0.5) / f64::from(divisions),\n                ),\n                work,\n            )?;\n            work.charge()?;\n            polygon.add_point(point.y, point.x);\n            match &context.derivatives {\n                ShapeDerivatives::Separable(bounds) => {\n                    integral.add(-area_primitive(midpoint.y, parameters) * dx);\n                    let derivative_bound =\n                        1.1 * (bounds.latitude_first.powi(2) + bounds.latitude_second);\n                    let scale = dx.abs() * parameters.semi_major_axis_metre.powi(2);\n                    error\n                        .discretization\n                        .add(scale * derivative_bound * dy * dy / 24.0);\n                    error.numerical.add(scale * 512.0 * f64::EPSILON);\n                }\n                ShapeDerivatives::Transverse(_)\n                | ShapeDerivatives::Lambert(_)\n                | ShapeDerivatives::Azimuthal(_)\n                | ShapeDerivatives::Stereographic(_)\n                | ShapeDerivatives::Hotine(_) => {\n                    let end = context.convert(\n                        interpolated(pair[0], pair[1], f64::from(i + 1) / f64::from(divisions)),\n                        work,\n                    )?;\n                    let longitude_delta = (end.x - point.x).to_radians();\n                    integral.add(-area_primitive(midpoint.y, parameters) * longitude_delta);\n                    // Taylor di Q(phi) attorno al centro; lambda' non e' costante.\n                    let delta = dx.abs() + dy.abs();\n                    let scale = parameters.semi_major_axis_metre.powi(2);\n                    error.discretization.add(scale * 8.25 * delta.powi(3));\n                    error.numerical.add(scale * 16384.0 * f64::EPSILON);\n                }\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      756,
+      765,
       67
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::validate_polygon:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "validate_polygon",
     "kind": "for",
-    "line": 756,
+    "line": 765,
     "literal_iteration_bound": null,
-    "source": "for ring in std::iter::once(shell).chain(polygon.interiors()) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:1\");\n        if ring.0.len() < 4 || ring.0.first() != ring.0.last() {\n            return Err(ShapeMeasureError::UnsupportedTopology);\n        }\n        for &point in &ring.0 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:2\");\n            let geographic = context.convert(point, work)?;\n            if geographic.y.abs() >= 90.0 {\n                return Err(ShapeMeasureError::UnsupportedSurface);\n            }\n            west = west.min(geographic.x);\n            east = east.max(geographic.x);\n        }\n        for (i, first) in ring.lines().enumerate() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:3\");\n            work.charge()?;\n            if first.start == first.end {\n                return Err(ShapeMeasureError::UnsupportedTopology);\n            }\n            for (j, second) in ring.lines().enumerate().skip(i + 1) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:4\");\n                work.charge()?;\n                let adjacent = j == i + 1 || (i == 0 && j == ring.0.len() - 2);\n                if adjacent {\n                    let (outer_start, common, outer_end) = if j == i + 1 {\n                        (first.start, first.end, second.end)\n                    } else {\n                        (first.end, first.start, second.start)\n                    };\n                    if Line::new(common, outer_start).intersects(&outer_end)\n                        || Line::new(common, outer_end).intersects(&outer_start)\n                    {\n                        return Err(ShapeMeasureError::UnsupportedTopology);\n                    }\n                } else if first.intersects(&second) {\n                    return Err(ShapeMeasureError::UnsupportedTopology);\n                }\n            }\n        }\n    }"
-  },
-  {
-    "array_iteration_bound": null,
-    "body": [
-      762,
-      31
-    ],
-    "column": 8,
-    "constant": false,
-    "counter": "preserve_shape_measure.rs::validate_polygon:2",
-    "entry_checkpoint": null,
-    "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
-    "function": "validate_polygon",
-    "kind": "for",
-    "line": 762,
-    "literal_iteration_bound": null,
-    "source": "for &point in &ring.0 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:2\");\n            let geographic = context.convert(point, work)?;\n            if geographic.y.abs() >= 90.0 {\n                return Err(ShapeMeasureError::UnsupportedSurface);\n            }\n            west = west.min(geographic.x);\n            east = east.max(geographic.x);\n        }"
+    "source": "for ring in std::iter::once(shell).chain(polygon.interiors()) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:1\");\n        work.checkpoint()?;\n        if ring.0.len() < 4 || ring.0.first() != ring.0.last() {\n            return Err(ShapeMeasureError::UnsupportedTopology);\n        }\n        for &point in &ring.0 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:2\");\n            work.checkpoint()?;\n            let geographic = context.convert(point, work)?;\n            if geographic.y.abs() >= 90.0 {\n                return Err(ShapeMeasureError::UnsupportedSurface);\n            }\n            west = west.min(geographic.x);\n            east = east.max(geographic.x);\n        }\n        for (i, first) in ring.lines().enumerate() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:3\");\n            work.charge()?;\n            if first.start == first.end {\n                return Err(ShapeMeasureError::UnsupportedTopology);\n            }\n            for (j, second) in ring.lines().enumerate().skip(i + 1) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:4\");\n                work.charge()?;\n                let adjacent = j == i + 1 || (i == 0 && j == ring.0.len() - 2);\n                if adjacent {\n                    let (outer_start, common, outer_end) = if j == i + 1 {\n                        (first.start, first.end, second.end)\n                    } else {\n                        (first.end, first.start, second.start)\n                    };\n                    if Line::new(common, outer_start).intersects(&outer_end)\n                        || Line::new(common, outer_end).intersects(&outer_start)\n                    {\n                        return Err(ShapeMeasureError::UnsupportedTopology);\n                    }\n                } else if first.intersects(&second) {\n                    return Err(ShapeMeasureError::UnsupportedTopology);\n                }\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
       772,
+      31
+    ],
+    "column": 8,
+    "constant": false,
+    "counter": "preserve_shape_measure.rs::validate_polygon:2",
+    "entry_checkpoint": "work.checkpoint()?",
+    "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
+    "function": "validate_polygon",
+    "kind": "for",
+    "line": 772,
+    "literal_iteration_bound": null,
+    "source": "for &point in &ring.0 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:2\");\n            work.checkpoint()?;\n            let geographic = context.convert(point, work)?;\n            if geographic.y.abs() >= 90.0 {\n                return Err(ShapeMeasureError::UnsupportedSurface);\n            }\n            west = west.min(geographic.x);\n            east = east.max(geographic.x);\n        }"
+  },
+  {
+    "array_iteration_bound": null,
+    "body": [
+      783,
       52
     ],
     "column": 8,
     "constant": false,
     "counter": "preserve_shape_measure.rs::validate_polygon:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.charge()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "validate_polygon",
     "kind": "for",
-    "line": 772,
+    "line": 783,
     "literal_iteration_bound": null,
     "source": "for (i, first) in ring.lines().enumerate() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:3\");\n            work.charge()?;\n            if first.start == first.end {\n                return Err(ShapeMeasureError::UnsupportedTopology);\n            }\n            for (j, second) in ring.lines().enumerate().skip(i + 1) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:4\");\n                work.charge()?;\n                let adjacent = j == i + 1 || (i == 0 && j == ring.0.len() - 2);\n                if adjacent {\n                    let (outer_start, common, outer_end) = if j == i + 1 {\n                        (first.start, first.end, second.end)\n                    } else {\n                        (first.end, first.start, second.start)\n                    };\n                    if Line::new(common, outer_start).intersects(&outer_end)\n                        || Line::new(common, outer_end).intersects(&outer_start)\n                    {\n                        return Err(ShapeMeasureError::UnsupportedTopology);\n                    }\n                } else if first.intersects(&second) {\n                    return Err(ShapeMeasureError::UnsupportedTopology);\n                }\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      779,
+      790,
       69
     ],
     "column": 12,
     "constant": false,
     "counter": "preserve_shape_measure.rs::validate_polygon:4",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.charge()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "validate_polygon",
     "kind": "for",
-    "line": 779,
+    "line": 790,
     "literal_iteration_bound": null,
     "source": "for (j, second) in ring.lines().enumerate().skip(i + 1) {\n                #[cfg(test)]\n                crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:4\");\n                work.charge()?;\n                let adjacent = j == i + 1 || (i == 0 && j == ring.0.len() - 2);\n                if adjacent {\n                    let (outer_start, common, outer_end) = if j == i + 1 {\n                        (first.start, first.end, second.end)\n                    } else {\n                        (first.end, first.start, second.start)\n                    };\n                    if Line::new(common, outer_start).intersects(&outer_end)\n                        || Line::new(common, outer_end).intersects(&outer_start)\n                    {\n                        return Err(ShapeMeasureError::UnsupportedTopology);\n                    }\n                } else if first.intersects(&second) {\n                    return Err(ShapeMeasureError::UnsupportedTopology);\n                }\n            }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      804,
+      815,
       61
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::validate_polygon:5",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "validate_polygon",
     "kind": "for",
-    "line": 804,
+    "line": 815,
     "literal_iteration_bound": null,
-    "source": "for (i, hole) in polygon.interiors().iter().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:5\");\n        inside(hole, shell, true, work)?;\n        disjoint_boundaries(hole, shell, work)?;\n        for other in polygon.interiors().iter().skip(i + 1) {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:6\");\n            disjoint_boundaries(hole, other, work)?;\n            inside(hole, other, false, work)?;\n            inside(other, hole, false, work)?;\n        }\n    }"
+    "source": "for (i, hole) in polygon.interiors().iter().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:5\");\n        work.checkpoint()?;\n        inside(hole, shell, true, work)?;\n        disjoint_boundaries(hole, shell, work)?;\n        for other in polygon.interiors().iter().skip(i + 1) {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:6\");\n            work.checkpoint()?;\n            disjoint_boundaries(hole, other, work)?;\n            inside(hole, other, false, work)?;\n            inside(other, hole, false, work)?;\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      809,
+      821,
       61
     ],
     "column": 8,
     "constant": false,
     "counter": "preserve_shape_measure.rs::validate_polygon:6",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "validate_polygon",
     "kind": "for",
-    "line": 809,
+    "line": 821,
     "literal_iteration_bound": null,
-    "source": "for other in polygon.interiors().iter().skip(i + 1) {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:6\");\n            disjoint_boundaries(hole, other, work)?;\n            inside(hole, other, false, work)?;\n            inside(other, hole, false, work)?;\n        }"
+    "source": "for other in polygon.interiors().iter().skip(i + 1) {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::validate_polygon:6\");\n            work.checkpoint()?;\n            disjoint_boundaries(hole, other, work)?;\n            inside(hole, other, false, work)?;\n            inside(other, hole, false, work)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      830,
+      843,
       34
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::inside:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.charge()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "inside",
     "kind": "for",
-    "line": 830,
+    "line": 843,
     "literal_iteration_bound": null,
     "source": "for line in boundary.lines() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::inside:1\");\n        work.charge()?;\n        if line.intersects(&point) {\n            return Err(ShapeMeasureError::UnsupportedTopology);\n        }\n        if (line.start.y > point.y) != (line.end.y > point.y) {\n            let orientation = RobustKernel::orient2d(line.start, line.end, point);\n            if (orientation == Orientation::CounterClockwise) == (line.end.y > line.start.y) {\n                contained = !contained;\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      855,
+      868,
       28
     ],
     "column": 4,
     "constant": false,
     "counter": "preserve_shape_measure.rs::disjoint_boundaries:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.checkpoint()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "disjoint_boundaries",
     "kind": "for",
-    "line": 855,
+    "line": 868,
     "literal_iteration_bound": null,
-    "source": "for a in first.lines() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::disjoint_boundaries:1\");\n        for b in second.lines() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::disjoint_boundaries:2\");\n            work.charge()?;\n            if a.intersects(&b) {\n                return Err(ShapeMeasureError::UnsupportedTopology);\n            }\n        }\n    }"
+    "source": "for a in first.lines() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"preserve_shape_measure.rs::disjoint_boundaries:1\");\n        work.checkpoint()?;\n        for b in second.lines() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::disjoint_boundaries:2\");\n            work.charge()?;\n            if a.intersects(&b) {\n                return Err(ShapeMeasureError::UnsupportedTopology);\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      858,
+      872,
       33
     ],
     "column": 8,
     "constant": false,
     "counter": "preserve_shape_measure.rs::disjoint_boundaries:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.charge()?",
     "file": "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
     "function": "disjoint_boundaries",
     "kind": "for",
-    "line": 858,
+    "line": 872,
     "literal_iteration_bound": null,
     "source": "for b in second.lines() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"preserve_shape_measure.rs::disjoint_boundaries:2\");\n            work.charge()?;\n            if a.intersects(&b) {\n                return Err(ShapeMeasureError::UnsupportedTopology);\n            }\n        }"
   },
@@ -31443,7 +31443,7 @@
     "line": 338,
     "path": "format",
     "source": null,
-    "tokens": "\"max_expansion_factor superato (vincolo {:?}): soglia {}, output={righe_out}, \\\n             input={righe_in:?}\" , descrittore . expansion_constraint , descrittore . expansion_constraint . binding_threshold (fattore) ,"
+    "tokens": "\"max_expansion_factor superato (vincolo {:?}): soglia {}, output={righe_out}, \\\r\n             input={righe_in:?}\" , descrittore . expansion_constraint , descrittore . expansion_constraint . binding_threshold (fattore) ,"
   },
   {
     "array_iteration_bound": null,
@@ -31600,7 +31600,7 @@
     "line": 435,
     "path": "format",
     "source": null,
-    "tokens": "\"passo `{}`: righe rifiutate nell'ingresso `{ingresso}` del passo, \\\n                 non riconducibili alla sorgente (diagnostica senza esempi)\" , passo . out"
+    "tokens": "\"passo `{}`: righe rifiutate nell'ingresso `{ingresso}` del passo, \\\r\n                 non riconducibili alla sorgente (diagnostica senza esempi)\" , passo . out"
   },
   {
     "body": null,
@@ -31644,38 +31644,52 @@
     "source": "for (_, batch_arrow) in &tables {\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
   {
+    "body": null,
+    "column": 35,
+    "constant": false,
+    "counter": null,
+    "entry_checkpoint": null,
+    "file": "crates/plenora-pipeline/src/esecuzione.rs",
+    "function": "run_interrompibile",
+    "kind": "macro",
+    "line": 549,
+    "path": "format",
+    "source": null,
+    "tokens": "\"prima del passo `{}` ({op})\" , passo . out"
+  },
+  {
     "array_iteration_bound": null,
     "body": [
-      546,
+      555,
       41
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 546,
+    "line": 555,
     "literal_iteration_bound": null,
-    "source": "for (_, batch_arrow) in &tables {\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
+    "source": "for (_, batch_arrow) in &tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      552,
+      562,
       39
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 552,
+    "line": 562,
     "literal_iteration_bound": null,
-    "source": "for (nome, tabella) in tables {\n            let Some(atteso) = self.schemi_input.get(&nome) else {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` non dichiarata tra gli input del piano\"\n                )));\n            };\n            let tabella = normalize_large_utf8(tabella)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            if tabella.schema().as_ref() != atteso.as_ref() {\n                return Err(PlenoraError::Schema(format!(\n                    \"input `{nome}`: schema diverso da quello dato in validazione\"\n                )));\n            }\n            // Lo schema del contratto dell'input (blocco canonico delle\n            // geometrie, `validazione::canonico`): stesse colonne, solo\n            // metadati in piu'.\n            let canonico = self.contratti.get(&nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto dell'input `{nome}` assente\"))\n            })?;\n            let righe_tabella = tabella.num_rows();\n            let tabella = plenora_core::batch_with_rows(\n                canonico.schema.clone(),\n                tabella.columns().to_vec(),\n                righe_tabella,\n            )\n            .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            validate_batch(&tabella, &self.limiti_kernel)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            let righe_input = righe(&tabella)?;\n            if righe_input > self.limiti.rows.max_input_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"input `{nome}`: {righe_input} righe oltre max_input_rows {}\",\n                    self.limiti.rows.max_input_rows\n                )));\n            }\n            if vivi.insert(nome.clone(), tabella).is_some() {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` fornita due volte\"\n                )));\n            }\n        }"
+    "source": "for (nome, tabella) in tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let Some(atteso) = self.schemi_input.get(&nome) else {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` non dichiarata tra gli input del piano\"\n                )));\n            };\n            let tabella = normalize_large_utf8(tabella)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            if tabella.schema().as_ref() != atteso.as_ref() {\n                return Err(PlenoraError::Schema(format!(\n                    \"input `{nome}`: schema diverso da quello dato in validazione\"\n                )));\n            }\n            // Lo schema del contratto dell'input (blocco canonico delle\n            // geometrie, `validazione::canonico`): stesse colonne, solo\n            // metadati in piu'.\n            let canonico = self.contratti.get(&nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto dell'input `{nome}` assente\"))\n            })?;\n            let righe_tabella = tabella.num_rows();\n            let tabella = plenora_core::batch_with_rows(\n                canonico.schema.clone(),\n                tabella.columns().to_vec(),\n                righe_tabella,\n            )\n            .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            validate_batch(&tabella, &self.limiti_kernel)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            let righe_input = righe(&tabella)?;\n            if righe_input > self.limiti.rows.max_input_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"input `{nome}`: {righe_input} righe oltre max_input_rows {}\",\n                    self.limiti.rows.max_input_rows\n                )));\n            }\n            if vivi.insert(nome.clone(), tabella).is_some() {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` fornita due volte\"\n                )));\n            }\n        }"
   },
   {
     "body": null,
@@ -31686,7 +31700,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 554,
+    "line": 565,
     "path": "format",
     "source": null,
     "tokens": "\"tabella `{nome}` non dichiarata tra gli input del piano\""
@@ -31700,7 +31714,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 559,
+    "line": 570,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`\""
@@ -31714,7 +31728,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 561,
+    "line": 572,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`: schema diverso da quello dato in validazione\""
@@ -31728,7 +31742,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 569,
+    "line": 580,
     "path": "format",
     "source": null,
     "tokens": "\"contratto dell'input `{nome}` assente\""
@@ -31742,7 +31756,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 573,
+    "line": 584,
     "source": null
   },
   {
@@ -31754,7 +31768,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:to_vec",
-    "line": 574,
+    "line": 585,
     "source": null
   },
   {
@@ -31766,7 +31780,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 577,
+    "line": 588,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`\""
@@ -31780,7 +31794,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 579,
+    "line": 590,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`\""
@@ -31794,7 +31808,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 582,
+    "line": 593,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`: {righe_input} righe oltre max_input_rows {}\" , self . limiti . rows . max_input_rows"
@@ -31808,7 +31822,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 587,
+    "line": 598,
     "source": null
   },
   {
@@ -31820,7 +31834,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 588,
+    "line": 599,
     "path": "format",
     "source": null,
     "tokens": "\"tabella `{nome}` fornita due volte\""
@@ -31834,7 +31848,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:find",
-    "line": 593,
+    "line": 604,
     "source": null
   },
   {
@@ -31846,7 +31860,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 594,
+    "line": 605,
     "path": "format",
     "source": null,
     "tokens": "\"manca la tabella dell'input `{mancante}`\""
@@ -31854,53 +31868,53 @@
   {
     "array_iteration_bound": null,
     "body": [
-      603,
+      614,
       35
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 603,
+    "line": 614,
     "literal_iteration_bound": null,
-    "source": "for nome in &self.outputs {\n            ultimo_uso.insert(nome, USO_SENZA_FINE);\n        }"
+    "source": "for nome in &self.outputs {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            ultimo_uso.insert(nome, USO_SENZA_FINE);\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      606,
+      618,
       68
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 606,
+    "line": 618,
     "literal_iteration_bound": null,
-    "source": "for (indice, passo) in self.passi.iter().enumerate().rev() {\n            for sorgente in &passo.inputs {\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }\n            ultimo_uso.entry(&passo.out).or_insert(indice);\n        }"
+    "source": "for (indice, passo) in self.passi.iter().enumerate().rev() {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            for sorgente in &passo.inputs {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }\n            ultimo_uso.entry(&passo.out).or_insert(indice);\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      607,
+      620,
       43
     ],
     "column": 12,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 607,
+    "line": 620,
     "literal_iteration_bound": null,
-    "source": "for sorgente in &passo.inputs {\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }"
+    "source": "for sorgente in &passo.inputs {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }"
   },
   {
     "body": null,
@@ -31911,7 +31925,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 618,
+    "line": 632,
     "source": null
   },
   {
@@ -31923,25 +31937,25 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:filter",
-    "line": 616,
+    "line": 630,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      619,
+      633,
       41
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 619,
+    "line": 633,
     "literal_iteration_bound": null,
-    "source": "for nome in &liberati_all_avvio {\n            vivi.remove(nome);\n        }"
+    "source": "for nome in &liberati_all_avvio {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            vivi.remove(nome);\n        }"
   },
   {
     "body": null,
@@ -31952,27 +31966,27 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 626,
+    "line": 641,
     "path": "format",
     "source": null,
-    "tokens": "\"input: byte vivi iniziali {byte_vivi_iniziali} oltre il budget {budget} \\\n                 (max_governed_memory_bytes)\""
+    "tokens": "\"input: byte vivi iniziali {byte_vivi_iniziali} oltre il budget {budget} \\\r\n                 (max_governed_memory_bytes)\""
   },
   {
     "array_iteration_bound": null,
     "body": [
-      633,
+      648,
       62
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 633,
+    "line": 648,
     "literal_iteration_bound": null,
-    "source": "for (indice, passo) in self.passi.iter().enumerate() {\n            let op = passo.descrittore.id;\n            #[cfg(feature = \"sonde-di-prova\")]\n            if indice > 0 {\n                crate::sonda::chiama(crate::sonda::Punto::FraPassi, interruzione)?;\n            }\n            interruzione.verifica(&format!(\"prima del passo `{}` ({op})\", passo.out))?;\n            let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);\n            let ingressi: Vec<&RecordBatch> = passo\n                .inputs\n                .iter()\n                .map(|sorgente| {\n                    vivi.get(sorgente).ok_or_else(|| {\n                        PlenoraError::Internal(format!(\n                            \"`{sorgente}` non residente al passo che lo usa\"\n                        ))\n                    })\n                })\n                .collect::<Result<_>>()?;\n            let righe_in: Vec<u64> = ingressi.iter().map(|t| righe(t)).collect::<Result<_>>()?;\n            let contratto = self.contratti.get(&passo.out).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto di `{}` assente\", passo.out))\n            })?;\n\n            // Prima di eseguire: byte vivi delle residenti piu' il picco\n            // previsto nel budget, o il passo si rifiuta senza girare.\n            let residenti = byte_vivi(vivi.values()).map_err(nel)?;\n            let byte_previsti = passo.costo.in_memoria.picco(ingresso_del_passo(\n                passo,\n                &righe_in,\n                byte_ingresso(&ingressi).map_err(nel)?,\n            ));\n            if residenti\n                .checked_add(byte_previsti)\n                .is_none_or(|totale| totale > budget)\n            {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\"\n                ))));\n            }\n            // Al kernel tutto il margine: i suoi preflight usano lo spazio\n            // che c'e'.\n            let margine = budget - residenti;\n            let limiti_kernel = plenora_kernels_table::Limits {\n                max_governed_memory_bytes: usize::try_from(margine).unwrap_or(usize::MAX),\n                ..self.limiti_kernel.clone()\n            };\n\n            let (uscita, effetti) = esegui_kernel(passo, &ingressi, &limiti_kernel, contratto)\n                .map_err(|errore| diagnostica_nella_base(errore, passo))\n                .and_then(|(uscita, effetti)| {\n                    validate_batch(&uscita, &self.limiti_kernel)?;\n                    let righe_out = righe(&uscita)?;\n                    // Come a `190c493` (`blocking.rs`), l'arco d'uscita del\n                    // piano ha solo `max_output_rows`, controllato alla fine.\n                    if !self.outputs.contains(&passo.out) {\n                        check_edge_counts(&self.limiti, righe_out)?;\n                    }\n                    check_expansion(passo, &self.limiti, &righe_in, righe_out)?;\n                    conforma(&uscita, contratto).map(|uscita| (uscita, effetti))\n                })\n                .map_err(nel)?;\n            let righe_out = righe(&uscita)?;\n\n            let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;\n            let byte_output_esclusivi = con_uscita.checked_sub(residenti).ok_or_else(|| {\n                PlenoraError::Internal(\"byte vivi diminuiti aggiungendo una tabella\".to_owned())\n            })?;\n            if con_uscita > budget {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\"\n                ))));\n            }\n            vivi.insert(passo.out.clone(), uscita);\n\n            let liberati: Vec<String> = ultimo_uso\n                .iter()\n                .filter(|(_, ultimo)| **ultimo == indice)\n                .map(|(nome, _)| (*nome).to_owned())\n                .collect();\n            for nome in &liberati {\n                vivi.remove(nome);\n            }\n            passi.push(ReportPasso {\n                effetti_localizzati: passo.effetti_localizzati.clone(),\n                out: passo.out.clone(),\n                op,\n                righe_in,\n                righe_out,\n                byte_previsti,\n                margine_kernel: margine,\n                byte_output_esclusivi,\n                byte_vivi_con_uscita: con_uscita,\n                liberati,\n                byte_vivi: byte_vivi(vivi.values())?,\n                righe_divisione_per_zero: effetti.righe_divisione_per_zero,\n            });\n        }"
+    "source": "for (indice, passo) in self.passi.iter().enumerate() {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let op = passo.descrittore.id;\n            #[cfg(feature = \"sonde-di-prova\")]\n            if indice > 0 {\n                crate::sonda::chiama(crate::sonda::Punto::FraPassi, interruzione)?;\n            }\n            interruzione.verifica(&format!(\"prima del passo `{}` ({op})\", passo.out))?;\n            let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);\n            let ingressi: Vec<&RecordBatch> = passo\n                .inputs\n                .iter()\n                .map(|sorgente| {\n                    vivi.get(sorgente).ok_or_else(|| {\n                        PlenoraError::Internal(format!(\n                            \"`{sorgente}` non residente al passo che lo usa\"\n                        ))\n                    })\n                })\n                .collect::<Result<_>>()?;\n            let righe_in: Vec<u64> = ingressi.iter().map(|t| righe(t)).collect::<Result<_>>()?;\n            let contratto = self.contratti.get(&passo.out).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto di `{}` assente\", passo.out))\n            })?;\n\n            // Prima di eseguire: byte vivi delle residenti piu' il picco\n            // previsto nel budget, o il passo si rifiuta senza girare.\n            let residenti = byte_vivi(vivi.values()).map_err(nel)?;\n            let byte_previsti = passo.costo.in_memoria.picco(ingresso_del_passo(\n                passo,\n                &righe_in,\n                byte_ingresso(&ingressi).map_err(nel)?,\n            ));\n            if residenti\n                .checked_add(byte_previsti)\n                .is_none_or(|totale| totale > budget)\n            {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\"\n                ))));\n            }\n            // Al kernel tutto il margine: i suoi preflight usano lo spazio\n            // che c'e'.\n            let margine = budget - residenti;\n            let limiti_kernel = plenora_kernels_table::Limits {\n                max_governed_memory_bytes: usize::try_from(margine).unwrap_or(usize::MAX),\n                ..self.limiti_kernel.clone()\n            };\n\n            let (uscita, effetti) = esegui_kernel(passo, &ingressi, &limiti_kernel, contratto)\n                .map_err(|errore| diagnostica_nella_base(errore, passo))\n                .and_then(|(uscita, effetti)| {\n                    validate_batch(&uscita, &self.limiti_kernel)?;\n                    let righe_out = righe(&uscita)?;\n                    // Come a `190c493` (`blocking.rs`), l'arco d'uscita del\n                    // piano ha solo `max_output_rows`, controllato alla fine.\n                    if !self.outputs.contains(&passo.out) {\n                        check_edge_counts(&self.limiti, righe_out)?;\n                    }\n                    check_expansion(passo, &self.limiti, &righe_in, righe_out)?;\n                    conforma(&uscita, contratto).map(|uscita| (uscita, effetti))\n                })\n                .map_err(nel)?;\n            let righe_out = righe(&uscita)?;\n\n            let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;\n            let byte_output_esclusivi = con_uscita.checked_sub(residenti).ok_or_else(|| {\n                PlenoraError::Internal(\"byte vivi diminuiti aggiungendo una tabella\".to_owned())\n            })?;\n            if con_uscita > budget {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\"\n                ))));\n            }\n            vivi.insert(passo.out.clone(), uscita);\n\n            let liberati: Vec<String> = ultimo_uso\n                .iter()\n                .filter(|(_, ultimo)| **ultimo == indice)\n                .map(|(nome, _)| (*nome).to_owned())\n                .collect();\n            for nome in &liberati {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                vivi.remove(nome);\n            }\n            passi.push(ReportPasso {\n                effetti_localizzati: passo.effetti_localizzati.clone(),\n                out: passo.out.clone(),\n                op,\n                righe_in,\n                righe_out,\n                byte_previsti,\n                margine_kernel: margine,\n                byte_output_esclusivi,\n                byte_vivi_con_uscita: con_uscita,\n                liberati,\n                byte_vivi: byte_vivi(vivi.values())?,\n                righe_divisione_per_zero: effetti.righe_divisione_per_zero,\n            });\n        }"
   },
   {
     "body": null,
@@ -31983,7 +31997,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 639,
+    "line": 655,
     "path": "format",
     "source": null,
     "tokens": "\"prima del passo `{}` ({op})\" , passo . out"
@@ -31997,7 +32011,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 651,
+    "line": 667,
     "source": null
   },
   {
@@ -32009,7 +32023,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 644,
+    "line": 660,
     "source": null
   },
   {
@@ -32021,7 +32035,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 646,
+    "line": 662,
     "path": "format",
     "source": null,
     "tokens": "\"`{sorgente}` non residente al passo che lo usa\""
@@ -32035,7 +32049,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 652,
+    "line": 668,
     "source": null
   },
   {
@@ -32047,7 +32061,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 652,
+    "line": 668,
     "source": null
   },
   {
@@ -32059,7 +32073,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 654,
+    "line": 670,
     "path": "format",
     "source": null,
     "tokens": "\"contratto di `{}` assente\" , passo . out"
@@ -32073,10 +32087,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 669,
+    "line": 685,
     "path": "format",
     "source": null,
-    "tokens": "\"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\""
+    "tokens": "\"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\r\n                     oltre il budget {budget} (max_governed_memory_bytes)\""
   },
   {
     "body": null,
@@ -32087,7 +32101,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 679,
+    "line": 695,
     "source": null
   },
   {
@@ -32099,7 +32113,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 693,
+    "line": 709,
     "source": null
   },
   {
@@ -32111,10 +32125,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 703,
+    "line": 719,
     "path": "format",
     "source": null,
-    "tokens": "\"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\""
+    "tokens": "\"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\r\n                     (max_governed_memory_bytes)\""
   },
   {
     "body": null,
@@ -32125,7 +32139,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 708,
+    "line": 724,
     "source": null
   },
   {
@@ -32137,7 +32151,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 714,
+    "line": 730,
     "source": null
   },
   {
@@ -32149,7 +32163,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 713,
+    "line": 729,
     "source": null
   },
   {
@@ -32161,25 +32175,25 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:filter",
-    "line": 712,
+    "line": 728,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      715,
+      731,
       35
     ],
     "column": 12,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 715,
+    "line": 731,
     "literal_iteration_bound": null,
-    "source": "for nome in &liberati {\n                vivi.remove(nome);\n            }"
+    "source": "for nome in &liberati {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                vivi.remove(nome);\n            }"
   },
   {
     "body": null,
@@ -32190,7 +32204,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 719,
+    "line": 736,
     "source": null
   },
   {
@@ -32202,7 +32216,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 720,
+    "line": 737,
     "source": null
   },
   {
@@ -32214,27 +32228,27 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 737,
+    "line": 754,
     "path": "format",
     "source": null,
-    "tokens": "\"output: byte vivi finali {finali} oltre il budget {budget} \\\n                 (max_governed_memory_bytes)\""
+    "tokens": "\"output: byte vivi finali {finali} oltre il budget {budget} \\\r\n                 (max_governed_memory_bytes)\""
   },
   {
     "array_iteration_bound": null,
     "body": [
-      743,
+      760,
       35
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 743,
+    "line": 760,
     "literal_iteration_bound": null,
-    "source": "for nome in &self.outputs {\n            let tabella = vivi.remove(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"output `{nome}` non residente a fine piano\"))\n            })?;\n            let righe_output = righe(&tabella)?;\n            if righe_output > self.limiti.rows.max_output_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"output `{nome}`: {righe_output} righe oltre max_output_rows {}\",\n                    self.limiti.rows.max_output_rows\n                )));\n            }\n            // Lo schema pubblicato (versione e identità dei campi), deciso\n            // in validazione: stesse colonne, solo metadati in più.\n            let pubblicato = self.schemi_uscita.get(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"schema pubblicato dell'output `{nome}` assente\"))\n            })?;\n            let tabella = plenora_core::batch_with_rows(\n                pubblicato.clone(),\n                tabella.columns().to_vec(),\n                tabella.num_rows(),\n            )\n            .map_err(|_| {\n                PlenoraError::Internal(format!(\n                    \"output `{nome}`: la tabella non rispetta lo schema pubblicato\"\n                ))\n            })?;\n            outputs.push((nome.clone(), tabella));\n        }"
+    "source": "for nome in &self.outputs {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let tabella = vivi.remove(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"output `{nome}` non residente a fine piano\"))\n            })?;\n            let righe_output = righe(&tabella)?;\n            if righe_output > self.limiti.rows.max_output_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"output `{nome}`: {righe_output} righe oltre max_output_rows {}\",\n                    self.limiti.rows.max_output_rows\n                )));\n            }\n            // Lo schema pubblicato (versione e identità dei campi), deciso\n            // in validazione: stesse colonne, solo metadati in più.\n            let pubblicato = self.schemi_uscita.get(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"schema pubblicato dell'output `{nome}` assente\"))\n            })?;\n            let tabella = plenora_core::batch_with_rows(\n                pubblicato.clone(),\n                tabella.columns().to_vec(),\n                tabella.num_rows(),\n            )\n            .map_err(|_| {\n                PlenoraError::Internal(format!(\n                    \"output `{nome}`: la tabella non rispetta lo schema pubblicato\"\n                ))\n            })?;\n            outputs.push((nome.clone(), tabella));\n        }"
   },
   {
     "body": null,
@@ -32245,7 +32259,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 745,
+    "line": 763,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}` non residente a fine piano\""
@@ -32259,7 +32273,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 749,
+    "line": 767,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}`: {righe_output} righe oltre max_output_rows {}\" , self . limiti . rows . max_output_rows"
@@ -32273,7 +32287,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 757,
+    "line": 775,
     "path": "format",
     "source": null,
     "tokens": "\"schema pubblicato dell'output `{nome}` assente\""
@@ -32287,7 +32301,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 760,
+    "line": 778,
     "source": null
   },
   {
@@ -32299,7 +32313,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:to_vec",
-    "line": 761,
+    "line": 779,
     "source": null
   },
   {
@@ -32311,7 +32325,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 765,
+    "line": 783,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}`: la tabella non rispetta lo schema pubblicato\""
@@ -32325,7 +32339,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 769,
+    "line": 787,
     "source": null
   },
   {

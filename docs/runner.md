@@ -246,7 +246,8 @@ colonne di un batch letto da Arrow IPC non aggiungono nulla.
 con una scadenza (`Instant`, assoluta) e un segnale di annullamento
 (`Arc<AtomicBool>`, alzato da un altro thread), entrambi facoltativi; `run`
 è `run_interrompibile` senza nessuno dei due. Il runner li controlla prima
-di ogni passo e prima di consegnare gli output:
+di ogni passo, all'ingresso dei nove cicli espliciti della funzione
+(preparazione, esecuzione, rilascio e raccolta) e prima di consegnare gli output:
 
 - annullamento alzato: `Cancelled` (categoria `cancelled`, codice
   `EXECUTION_CANCELLED`);
@@ -256,7 +257,10 @@ di ogni passo e prima di consegnare gli output:
 - con entrambi vince sempre la scadenza (GOP-028), in tutto il workspace.
   Runner, IO, CLI, SDK e kernel usano lo stesso controllo in `plenora-core`.
 
-Il testo dice dove («prima del passo `x` (table.sort)», «prima di
+Un'interruzione gia presente all'ingresso conserva il contesto del primo
+passo, o la fase `finalize` prima della consegna se il piano non ha passi.
+I controlli dei cicli riportano il contesto statico `esecuzione pipeline`.
+Gli altri controlli conservano il testo che dice dove («prima del passo `x` (table.sort)», «prima di
 consegnare gli output»), la fase anche: `write` prima di un passo,
 `finalize` prima della consegna. Nessun output è reso, quindi effetto `none` e
 ritentativo `safe`: rieseguire lo stesso piano è deterministico (se
@@ -849,14 +853,15 @@ esplicito.
   duplicano o creano righe (`join`, `explode`, `aggregate`) restano senza
   esempi, perché il contratto v1 vuole un indice della sorgente unico per
   esempio.
-- **Scadenza e annullamento solo fra i passi.**
+- **Scadenza e annullamento nei cicli del runner, fra i passi.**
   *Regola*: `run_interrompibile` controlla scadenza e annullamento prima
-  di ogni passo e prima di consegnare gli output
+  di ogni passo, a ogni iterazione dei nove cicli della funzione e prima
+  di consegnare gli output
   ([«Scadenza e annullamento»](#scadenza-e-annullamento)), mai dentro un
   kernel.
   *Ambito*: `PipelineValidata::run_interrompibile`; anche i controlli dopo
-  il passo (budget, contratto) e la validazione degli input girano fino in
-  fondo.
+  il passo (budget, contratto) e la validazione del singolo batch girano
+  fino in fondo; il ciclo sui batch osserva il controllo fra due batch.
   *Hazard*: un passo lungo (un join enorme, un overlay) finisce anche
   oltre la scadenza o dopo l'annullamento, e l'errore arriva al controllo
   successivo: il ritardo è al più la durata del passo in corso. Il

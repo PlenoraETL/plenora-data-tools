@@ -469,6 +469,7 @@ pub fn preserve_shape_length_with_limits(
         crate::noding::gop028::cycle(
             "preserve_shape_measure.rs::preserve_shape_length_with_limits:1",
         );
+        work.checkpoint()?;
         let mut value = MeasureSum::default();
         let mut error = MeasureErrors::default();
         for part in parts {
@@ -482,6 +483,7 @@ pub fn preserve_shape_length_with_limits(
                 crate::noding::gop028::cycle(
                     "preserve_shape_measure.rs::preserve_shape_length_with_limits:3",
                 );
+                work.checkpoint()?;
                 context.convert(point, &mut work)?;
             }
             for pair in part.0.windows(2) {
@@ -489,6 +491,7 @@ pub fn preserve_shape_length_with_limits(
                 crate::noding::gop028::cycle(
                     "preserve_shape_measure.rs::preserve_shape_length_with_limits:4",
                 );
+                work.checkpoint()?;
                 length_edge(
                     &context, pair[0], pair[1], divisions, &mut work, &mut value, &mut error,
                 )?;
@@ -544,6 +547,7 @@ fn length_edge(
     for i in 1..=divisions {
         #[cfg(test)]
         crate::noding::gop028::cycle("preserve_shape_measure.rs::length_edge:1");
+        work.checkpoint()?;
         let point = context.convert(
             interpolated(start, end, f64::from(i) / f64::from(divisions)),
             work,
@@ -601,6 +605,7 @@ pub fn preserve_shape_area_with_limits(
         crate::noding::gop028::cycle(
             "preserve_shape_measure.rs::preserve_shape_area_with_limits:1",
         );
+        work.checkpoint()?;
         validate_polygon(polygon, &context, &mut work)?;
     }
     let mut divisions = 1_u32;
@@ -609,6 +614,7 @@ pub fn preserve_shape_area_with_limits(
         crate::noding::gop028::cycle(
             "preserve_shape_measure.rs::preserve_shape_area_with_limits:2",
         );
+        work.checkpoint()?;
         let mut value = MeasureSum::default();
         let mut error = MeasureErrors::default();
         for polygon in polygons {
@@ -625,6 +631,7 @@ pub fn preserve_shape_area_with_limits(
                 crate::noding::gop028::cycle(
                     "preserve_shape_measure.rs::preserve_shape_area_with_limits:4",
                 );
+                work.checkpoint()?;
                 let (area, bound) = ring_area(&context, ring, divisions, &mut work)?;
                 value.add(if index == 0 { area.abs() } else { -area.abs() });
                 error.merge(&bound);
@@ -674,10 +681,12 @@ fn ring_area(
     for pair in ring.0.windows(2) {
         #[cfg(test)]
         crate::noding::gop028::cycle("preserve_shape_measure.rs::ring_area:1");
+        work.checkpoint()?;
         let (dx, dy) = context.deltas(pair[0], pair[1], divisions)?;
         for i in 0..divisions {
             #[cfg(test)]
             crate::noding::gop028::cycle("preserve_shape_measure.rs::ring_area:2");
+            work.checkpoint()?;
             let point = context.convert(
                 interpolated(pair[0], pair[1], f64::from(i) / f64::from(divisions)),
                 work,
@@ -756,12 +765,14 @@ fn validate_polygon(
     for ring in std::iter::once(shell).chain(polygon.interiors()) {
         #[cfg(test)]
         crate::noding::gop028::cycle("preserve_shape_measure.rs::validate_polygon:1");
+        work.checkpoint()?;
         if ring.0.len() < 4 || ring.0.first() != ring.0.last() {
             return Err(ShapeMeasureError::UnsupportedTopology);
         }
         for &point in &ring.0 {
             #[cfg(test)]
             crate::noding::gop028::cycle("preserve_shape_measure.rs::validate_polygon:2");
+            work.checkpoint()?;
             let geographic = context.convert(point, work)?;
             if geographic.y.abs() >= 90.0 {
                 return Err(ShapeMeasureError::UnsupportedSurface);
@@ -804,11 +815,13 @@ fn validate_polygon(
     for (i, hole) in polygon.interiors().iter().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("preserve_shape_measure.rs::validate_polygon:5");
+        work.checkpoint()?;
         inside(hole, shell, true, work)?;
         disjoint_boundaries(hole, shell, work)?;
         for other in polygon.interiors().iter().skip(i + 1) {
             #[cfg(test)]
             crate::noding::gop028::cycle("preserve_shape_measure.rs::validate_polygon:6");
+            work.checkpoint()?;
             disjoint_boundaries(hole, other, work)?;
             inside(hole, other, false, work)?;
             inside(other, hole, false, work)?;
@@ -855,6 +868,7 @@ fn disjoint_boundaries(
     for a in first.lines() {
         #[cfg(test)]
         crate::noding::gop028::cycle("preserve_shape_measure.rs::disjoint_boundaries:1");
+        work.checkpoint()?;
         for b in second.lines() {
             #[cfg(test)]
             crate::noding::gop028::cycle("preserve_shape_measure.rs::disjoint_boundaries:2");

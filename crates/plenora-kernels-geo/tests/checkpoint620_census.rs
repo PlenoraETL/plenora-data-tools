@@ -104,6 +104,11 @@ fn literal_range_bound(expression: &syn::Expr) -> Option<u128> {
 // Lotti chiusi: ogni ciclo deve avere una prova locale, anche rigenerando
 // il censimento. La chiusura locale NON e' il maggiorante composto di un'API.
 const CLOSED_MODULES: &[&str] = &[
+    "geodesic_buffer/point.rs",
+    "noding.rs",
+    "geodesic_buffer.rs",
+    "preserve_shape_measure.rs",
+    "geodesic_densify/validation.rs",
     "offset.rs",
     "reshape.rs",
     "trim_extend.rs",
@@ -140,11 +145,17 @@ const CLOSED_MODULES: &[&str] = &[
 fn checkpoint_method(file: &str) -> Option<&'static str> {
     let relative = file.strip_prefix("crates/plenora-kernels-geo/src/")?;
     match relative {
-        "geodesic_densify.rs" | "geodesic_densify/geometry.rs" => Some("checkpoint"),
+        "geodesic_densify.rs" | "geodesic_densify/geometry.rs" | "preserve_shape_measure.rs" => {
+            Some("checkpoint")
+        }
         "geodesic_buffer/point/union.rs" | "noding/storage.rs" | "offset/enclosure.rs" => {
             Some("step")
         }
-        "geodesic_surface.rs"
+        "geodesic_buffer/point.rs"
+        | "noding.rs"
+        | "geodesic_buffer.rs"
+        | "geodesic_densify/validation.rs"
+        | "geodesic_surface.rs"
         | "geodesic_surface/metric.rs"
         | "offset.rs"
         | "reshape.rs"
@@ -167,27 +178,58 @@ fn checkpoint_method(file: &str) -> Option<&'static str> {
 }
 
 fn entry_checkpoint(file: &str, body: &syn::Block) -> Option<String> {
-    let method = checkpoint_method(file)?;
     let offset = usize::from(counter(body).is_some());
     let syn::Stmt::Expr(syn::Expr::Try(attempt), Some(_)) = body.stmts.get(offset)? else {
         return None;
     };
+    if file == "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs" {
+        if let syn::Expr::Call(call) = attempt.expr.as_ref() {
+            if let syn::Expr::Path(path) = call.func.as_ref() {
+                if path.path.is_ident("checkpoint")
+                    && path.attrs.is_empty()
+                    && call.args.is_empty()
+                    && call.attrs.is_empty()
+                    && attempt.attrs.is_empty()
+                {
+                    return Some("checkpoint()?".into());
+                }
+            }
+        }
+    }
     let syn::Expr::MethodCall(call) = attempt.expr.as_ref() else {
         return None;
     };
     let syn::Expr::Path(receiver) = call.receiver.as_ref() else {
         return None;
     };
+    if file == "crates/plenora-pipeline/src/esecuzione.rs"
+        && receiver.path.is_ident("interruzione")
+        && call.method == "verifica"
+        && call.args.len() == 1
+        && call.turbofish.is_none()
+        && receiver.attrs.is_empty()
+        && call.attrs.is_empty()
+        && attempt.attrs.is_empty()
+        && matches!(call.args.first(), Some(syn::Expr::Lit(lit))
+            if lit.attrs.is_empty() && matches!(&lit.lit, syn::Lit::Str(value) if value.value() == "esecuzione pipeline"))
+    {
+        return Some("interruzione.verifica(\"esecuzione pipeline\")?".into());
+    }
+    let method = checkpoint_method(file)?;
     let allowed = call.method == method
+        || (file == "crates/plenora-kernels-geo/src/preserve_shape_measure.rs"
+            && call.method == "charge")
         || (method == "metric" && (call.method == "step" || call.method == "checkpoint"));
     (allowed
-        && receiver.path.is_ident("work")
+        && (receiver.path.is_ident("work")
+            || (file == "crates/plenora-kernels-geo/src/geodesic_buffer.rs"
+                && receiver.path.is_ident("self")))
         && receiver.attrs.is_empty()
         && call.attrs.is_empty()
         && attempt.attrs.is_empty()
         && call.args.is_empty()
         && call.turbofish.is_none())
-    .then(|| format!("work.{}()?", call.method))
+    .then(|| format!("{}.{}()?", receiver.path.segments[0].ident, call.method))
 }
 
 fn array_bound(expression: &syn::Expr) -> Option<usize> {
@@ -788,5 +830,46 @@ fn checkpoint620_new_cycles_cannot_hide_in_regeneration() {
         ("items", None),
     ] {
         assert_eq!(array_bound(&syn::parse_str(expression).unwrap()), expected);
+    }
+}
+
+#[test]
+fn checkpoint620_callbacks_receivers_and_pipeline_require_propagation() {
+    for (file, call) in [
+        (
+            "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
+            "checkpoint()",
+        ),
+        (
+            "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
+            "self.checkpoint()",
+        ),
+        (
+            "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
+            "work.charge()",
+        ),
+        (
+            "crates/plenora-kernels-geo/src/preserve_shape_measure.rs",
+            "work.checkpoint()",
+        ),
+        (
+            "crates/plenora-pipeline/src/esecuzione.rs",
+            "interruzione.verifica(\"esecuzione pipeline\")",
+        ),
+    ] {
+        let body = syn::parse_str(&format!("{{ {call}?; }}")).unwrap();
+        assert!(entry_checkpoint(file, &body).is_some());
+        assert!(entry_checkpoint("unknown.rs", &body).is_none());
+        for source in [
+            format!("{{ if skip {{ continue; }} {call}?; }}"),
+            format!("{{ if condition {{ {call}?; }} }}"),
+            format!("{{ #[cfg(test)] {call}?; }}"),
+            format!("{{ #[cfg(feature = \"optional\")] {call}?; }}"),
+            format!("{{ let _ = {call}; }}"),
+            format!("{{ {call}; }}"),
+            format!("{{ loop {{}} {call}?; }}"),
+        ] {
+            assert!(entry_checkpoint(file, &syn::parse_str(&source).unwrap()).is_none());
+        }
     }
 }

@@ -217,6 +217,7 @@ impl<'a> BufferWork<'a> {
         for &point in &line.0 {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer.rs::line:1");
+            self.checkpoint()?;
             self.coordinate(point)?;
         }
         for edge in line.0.windows(2) {
@@ -270,6 +271,7 @@ impl<'a> BufferWork<'a> {
                 for polygon in &polygons.0 {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("geodesic_buffer.rs::geometry:1");
+                    self.checkpoint()?;
                     self.empty_surface(polygon)?;
                 }
                 return Ok(());
@@ -282,6 +284,7 @@ impl<'a> BufferWork<'a> {
                 for point in &points.0 {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("geodesic_buffer.rs::geometry:2");
+                    self.checkpoint()?;
                     self.coordinate(point.0)?;
                 }
                 points.0.is_empty()
@@ -295,6 +298,7 @@ impl<'a> BufferWork<'a> {
                 for line in &lines.0 {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("geodesic_buffer.rs::geometry:3");
+                    self.checkpoint()?;
                     self.line(line, ellipsoid)?;
                     empty &= line.0.is_empty();
                 }
@@ -369,6 +373,7 @@ pub fn geodesic_empty_buffer_with_limits<'a>(
         for input in inputs {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2");
+            work.checkpoint()?;
             work.geometry(input, radius, &ellipsoid)?;
         }
         let count = if union_results {
