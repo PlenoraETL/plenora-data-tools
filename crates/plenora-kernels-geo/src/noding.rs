@@ -1091,6 +1091,34 @@ mod gop028 {
     fn cases() -> Vec<Case> {
         vec![
             case!(
+                "equality.rs",
+                normalize_geometry_with_limits,
+                |f, d, t| crate::equality::normalize_geometry_with_limits(
+                    &f.polygon_geometry,
+                    crate::equality::EqualityLimits {
+                        max_work: 1_000_000,
+                        deadline: d
+                    },
+                    Some(t)
+                ),
+                crate::equality::EqualityError::DeadlineExceeded
+            ),
+            case!(
+                "equality.rs",
+                geo_equals_with_tolerance_with_limits,
+                |f, d, t| crate::equality::geo_equals_with_tolerance_with_limits(
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    crate::equality::GeometryComparison::new(0.0).with_normalization(true),
+                    crate::equality::EqualityLimits {
+                        max_work: 1_000_000,
+                        deadline: d
+                    },
+                    Some(t)
+                ),
+                crate::equality::EqualityError::DeadlineExceeded
+            ),
+            case!(
                 "geodesic_buffer.rs",
                 geodesic_empty_buffer_with_limits,
                 |f, d, t| crate::geodesic_buffer::geodesic_empty_buffer_with_limits(

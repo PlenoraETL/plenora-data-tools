@@ -10,6 +10,19 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Miglioramenti
+
+- Uguaglianza normalizzata di rappresentazione: ricerca della rotazione
+  minima degli anelli in tempo lineare, senza copie per ogni candidato.
+  Ordine totale, bit delle coordinate e comportamento delle API esistenti
+  invariati, inclusi zeri con segno e pari.
+- API Rust `normalize_geometry_with_limits` e
+  `geo_equals_with_tolerance_with_limits`: budget cumulativo di lavoro,
+  scadenza e annullamento cooperativo tramite checkpoint condiviso GOP-028.
+  Nessuna modifica a `predicates::EqualsTopo` o al catalogo delle operazioni.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

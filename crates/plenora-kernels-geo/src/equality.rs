@@ -20,6 +20,20 @@ use std::cmp::Ordering;
 
 use geo::{Coord, Geometry, LineString, Polygon};
 
+mod controlled;
+use controlled::{
+    compare_coords, compare_polygon, equal, infallible, stable_sort, Control, EqualityWork,
+    Unlimited,
+};
+pub use controlled::{EqualityError, EqualityLimits};
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod legacy;
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod qualification;
+
 /// Parametri dichiarati del confronto geometrico.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeometryComparison {
@@ -159,153 +173,184 @@ fn cmp_coord(left: &Coord<f64>, right: &Coord<f64>) -> Ordering {
         .then_with(|| canonical_scalar(left.y).total_cmp(&canonical_scalar(right.y)))
 }
 
-/// Ordine lessicografico su sequenze di coordinate (prefisso piu' corto
-/// ordinato prima).
-fn cmp_coords(left: &[Coord<f64>], right: &[Coord<f64>]) -> Ordering {
-    for (a, b) in left.iter().zip(right.iter()) {
-        let ordering = cmp_coord(a, b);
-        if ordering != Ordering::Equal {
-            return ordering;
-        }
-    }
-    left.len().cmp(&right.len())
-}
-
-fn cmp_line_string(left: &LineString<f64>, right: &LineString<f64>) -> Ordering {
-    cmp_coords(&left.0, &right.0)
-}
-
-fn cmp_polygon(left: &Polygon<f64>, right: &Polygon<f64>) -> Ordering {
-    cmp_line_string(left.exterior(), right.exterior()).then_with(|| {
-        for (a, b) in left.interiors().iter().zip(right.interiors().iter()) {
-            let ordering = cmp_line_string(a, b);
-            if ordering != Ordering::Equal {
-                return ordering;
+/// Rotazione minima mediante eliminazione di candidati (Booth), O(n).
+/// Un confronto disuguale elimina k+1 partenze: ciascun cursore avanza
+/// al massimo n volte. Fra minimi equivalenti resta l'indice piu' piccolo,
+/// anche quando gli zeri hanno bit diversi ma chiavi uguali.
+fn best_rotation<W: Control>(
+    open: &[Coord<f64>],
+    work: &mut W,
+) -> Result<Vec<Coord<f64>>, W::Error> {
+    let n = open.len();
+    let (mut left, mut right, mut offset) = (0, 1, 0);
+    while left < n && right < n && offset < n {
+        work.step()?;
+        // Le slice di Coord occupano almeno 16 byte per elemento: 2*n
+        // e' rappresentabile in usize, come i cursori e offset sommati.
+        match cmp_coord(&open[(left + offset) % n], &open[(right + offset) % n]) {
+            Ordering::Equal => offset += 1,
+            Ordering::Less => {
+                right += offset + 1;
+                if right <= left {
+                    right = left + 1;
+                }
+                offset = 0;
+            }
+            Ordering::Greater => {
+                left += offset + 1;
+                if left <= right {
+                    left = right + 1;
+                }
+                offset = 0;
             }
         }
-        left.interiors().len().cmp(&right.interiors().len())
-    })
-}
-
-/// Rotazione canonica di una sequenza aperta: si parte dalla prima
-/// occorrenza della coordinata minima; a parita' di vertice iniziale si
-/// sceglie la rotazione lessicograficamente minima.
-fn best_rotation(open: &[Coord<f64>]) -> Vec<Coord<f64>> {
-    // La rotazione 0 (la sequenza stessa) e' sempre un candidato valido:
-    // l'insieme delle rotazioni non e' mai vuoto per costruzione.
-    let mut best: Vec<Coord<f64>> = open.to_vec();
-    for start in 1..open.len() {
-        let candidate: Vec<Coord<f64>> = open[start..]
-            .iter()
-            .chain(open[..start].iter())
-            .copied()
-            .collect();
-        if cmp_coords(&candidate, &best) == Ordering::Less {
-            best = candidate;
-        }
     }
-    best
+    let start = left.min(right);
+    let mut result = Vec::with_capacity(n);
+    for coordinate in open[start..].iter().chain(&open[..start]) {
+        work.step()?;
+        result.push(*coordinate);
+    }
+    Ok(result)
 }
 
-/// Canonizzazione di un anello: punto iniziale = vertice minimo,
-/// orientamento = sequenza lessicograficamente minima tra i due sensi di
-/// percorrenza. L'anello resta chiuso (ultimo vertice = primo) se lo e' in
-/// ingresso.
-fn normalize_ring(ring: &LineString<f64>) -> LineString<f64> {
+fn normalize_ring<W: Control>(
+    ring: &LineString<f64>,
+    work: &mut W,
+) -> Result<LineString<f64>, W::Error> {
+    work.step()?;
     let coords = &ring.0;
     let closed = coords.len() >= 2 && coords.first() == coords.last();
-    let open: &[Coord<f64>] = if closed {
+    let open = if closed {
         &coords[..coords.len() - 1]
     } else {
         coords
     };
     if open.is_empty() {
-        return ring.clone();
+        return Ok(LineString(Vec::new()));
     }
-    // Stesso anello percorso in senso opposto, a parita' di vertice iniziale.
-    let reversed: Vec<Coord<f64>> = std::iter::once(open[0])
-        .chain(open[1..].iter().rev().copied())
-        .collect();
-    let forward = best_rotation(open);
-    let backward = best_rotation(&reversed);
-    let mut canonical = if cmp_coords(&forward, &backward) == Ordering::Less {
+    let mut reversed = Vec::with_capacity(open.len());
+    for coordinate in std::iter::once(&open[0]).chain(open[1..].iter().rev()) {
+        work.step()?;
+        reversed.push(*coordinate);
+    }
+    let forward = best_rotation(open, work)?;
+    let backward = best_rotation(&reversed, work)?;
+    let mut canonical = if compare_coords(&forward, &backward, work)?.is_lt() {
         forward
     } else {
         backward
     };
     if closed {
+        work.step()?;
         canonical.push(canonical[0]);
     }
-    LineString(canonical)
+    Ok(LineString(canonical))
 }
 
-/// Canonizzazione di una `LineString`: direzione lessicograficamente minima
-/// (una linea percorsa al contrario e' la stessa rappresentazione
-/// geometrica).
-fn normalize_line_string(line: &LineString<f64>) -> LineString<f64> {
-    let reversed: Vec<Coord<f64>> = line.0.iter().rev().copied().collect();
-    if cmp_coords(&reversed, &line.0) == Ordering::Less {
-        LineString(reversed)
-    } else {
-        line.clone()
+fn normalize_line_string<W: Control>(
+    line: &LineString<f64>,
+    work: &mut W,
+) -> Result<LineString<f64>, W::Error> {
+    let mut reversed = Vec::with_capacity(line.0.len());
+    for coordinate in line.0.iter().rev() {
+        work.step()?;
+        reversed.push(*coordinate);
     }
+    if !compare_coords(&reversed, &line.0, work)?.is_lt() {
+        // Anche a parita' di chiavi si preservano esattamente i bit originali.
+        for (out, coordinate) in reversed.iter_mut().zip(&line.0) {
+            work.step()?;
+            *out = *coordinate;
+        }
+    }
+    Ok(LineString(reversed))
 }
 
-fn normalize_polygon(polygon: &Polygon<f64>) -> Polygon<f64> {
-    let exterior = normalize_ring(polygon.exterior());
-    let mut interiors: Vec<LineString<f64>> =
-        polygon.interiors().iter().map(normalize_ring).collect();
-    interiors.sort_by(cmp_line_string);
-    Polygon::new(exterior, interiors)
+fn normalize_polygon<W: Control>(
+    polygon: &Polygon<f64>,
+    work: &mut W,
+) -> Result<Polygon<f64>, W::Error> {
+    let exterior = normalize_ring(polygon.exterior(), work)?;
+    let mut interiors = Vec::with_capacity(polygon.interiors().len());
+    for ring in polygon.interiors() {
+        interiors.push(normalize_ring(ring, work)?);
+    }
+    stable_sort(
+        &mut interiors,
+        |a, b, w| compare_coords(&a.0, &b.0, w),
+        work,
+    )?;
+    Ok(Polygon::new(exterior, interiors))
 }
 
-/// Normalizzazione topologica opzionale: rende il confronto
-/// insensibile a rappresentazioni equivalenti della stessa geometria.
+/// Normalizzazione esatta della rappresentazione, indipendente dalla tolleranza.
 ///
-/// Cosa canonizza:
-/// - anelli poligonali: punto iniziale canonico (vertice minimo) e
-///   orientamento canonico (sequenza lessicograficamente minima);
-/// - buchi interni: stessa canonizzazione degli anelli, poi ordinati;
-/// - `LineString` e `Line`: direzione canonica;
-/// - `MultiPoint` / `MultiLineString` / `MultiPolygon`: componenti
-///   canonizzati e ordinati.
-///
-/// L'ordine dei figli di una `GeometryCollection` eterogenea e' invece
-/// preservato, cosi' come `Rect` e `Triangle`. La normalizzazione e' esatta
-/// (non dipende dalla tolleranza) ed e' idempotente.
+/// Canonizza rotazione e orientamento degli anelli, direzione delle linee,
+/// ordine dei buchi e dei componenti multi. Preserva ordine delle collection,
+/// Rect e Triangle. Non e' il predicato topologico `predicates::EqualsTopo`.
+/// La ricerca della rotazione di ciascun anello usa tempo e memoria O(n).
 pub fn normalize_geometry(geometry: &Geometry<f64>) -> Geometry<f64> {
-    match geometry {
+    infallible(normalize(geometry, &mut Unlimited))
+}
+
+fn normalize<W: Control>(
+    geometry: &Geometry<f64>,
+    work: &mut W,
+) -> Result<Geometry<f64>, W::Error> {
+    work.step()?;
+    Ok(match geometry {
         Geometry::Point(_) | Geometry::Rect(_) | Geometry::Triangle(_) => geometry.clone(),
         Geometry::Line(line) => {
-            if cmp_coord(&line.end, &line.start) == Ordering::Less {
+            if cmp_coord(&line.end, &line.start).is_lt() {
                 Geometry::Line(geo::Line::new(line.end, line.start))
             } else {
                 geometry.clone()
             }
         }
-        Geometry::LineString(line) => Geometry::LineString(normalize_line_string(line)),
-        Geometry::Polygon(polygon) => Geometry::Polygon(normalize_polygon(polygon)),
+        Geometry::LineString(line) => Geometry::LineString(normalize_line_string(line, work)?),
+        Geometry::Polygon(polygon) => Geometry::Polygon(normalize_polygon(polygon, work)?),
         Geometry::MultiPoint(points) => {
-            let mut points = points.0.clone();
-            points.sort_by(|a, b| cmp_coord(&a.0, &b.0));
-            Geometry::MultiPoint(geo::MultiPoint(points))
+            let mut result = Vec::with_capacity(points.0.len());
+            for point in &points.0 {
+                work.step()?;
+                result.push(*point);
+            }
+            stable_sort(
+                &mut result,
+                |a, b, w| {
+                    w.step()?;
+                    Ok(cmp_coord(&a.0, &b.0))
+                },
+                work,
+            )?;
+            Geometry::MultiPoint(geo::MultiPoint(result))
         }
         Geometry::MultiLineString(lines) => {
-            let mut lines: Vec<LineString<f64>> =
-                lines.0.iter().map(normalize_line_string).collect();
-            lines.sort_by(cmp_line_string);
-            Geometry::MultiLineString(geo::MultiLineString(lines))
+            let mut result = Vec::with_capacity(lines.0.len());
+            for line in &lines.0 {
+                work.step()?;
+                result.push(normalize_line_string(line, work)?);
+            }
+            stable_sort(&mut result, |a, b, w| compare_coords(&a.0, &b.0, w), work)?;
+            Geometry::MultiLineString(geo::MultiLineString(result))
         }
         Geometry::MultiPolygon(polygons) => {
-            let mut polygons: Vec<Polygon<f64>> =
-                polygons.0.iter().map(normalize_polygon).collect();
-            polygons.sort_by(cmp_polygon);
-            Geometry::MultiPolygon(geo::MultiPolygon(polygons))
+            let mut result = Vec::with_capacity(polygons.0.len());
+            for polygon in &polygons.0 {
+                result.push(normalize_polygon(polygon, work)?);
+            }
+            stable_sort(&mut result, compare_polygon, work)?;
+            Geometry::MultiPolygon(geo::MultiPolygon(result))
         }
-        Geometry::GeometryCollection(collection) => Geometry::GeometryCollection(
-            geo::GeometryCollection(collection.0.iter().map(normalize_geometry).collect()),
-        ),
-    }
+        Geometry::GeometryCollection(collection) => {
+            let mut result = Vec::with_capacity(collection.0.len());
+            for child in &collection.0 {
+                result.push(normalize(child, work)?);
+            }
+            Geometry::GeometryCollection(geo::GeometryCollection(result))
+        }
+    })
 }
 
 /// Uguaglianza geometrica con tolleranza dichiarata.
@@ -327,6 +372,46 @@ pub fn geo_equals_with_tolerance(
     } else {
         geometry_eq(left, right, comparison.tolerance)
     }
+}
+
+/// Normalizzazione con checkpoint GOP-028 e budget cumulativo di lavoro.
+/// Stessi bit di [`normalize_geometry`] in caso di successo.
+/// # Errors
+/// Scadenza, annullamento o esaurimento del lavoro; nessuna uscita parziale.
+pub fn normalize_geometry_with_limits(
+    geometry: &Geometry<f64>,
+    limits: EqualityLimits,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Geometry<f64>, EqualityError> {
+    let mut work = EqualityWork::new(limits, cancelled);
+    work.checkpoint()?;
+    let result = normalize(geometry, &mut work)?;
+    work.checkpoint()?;
+    Ok(result)
+}
+
+/// Confronto con le stesse regole di [`geo_equals_with_tolerance`].
+/// Normalizzazione dei due operandi e confronto condividono lo stesso budget.
+/// # Errors
+/// Scadenza, annullamento o esaurimento del lavoro; nessuna uscita parziale.
+pub fn geo_equals_with_tolerance_with_limits(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    comparison: GeometryComparison,
+    limits: EqualityLimits,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<bool, EqualityError> {
+    let mut work = EqualityWork::new(limits, cancelled);
+    work.checkpoint()?;
+    let result = if comparison.normalize {
+        let left = normalize(left, &mut work)?;
+        let right = normalize(right, &mut work)?;
+        equal(&left, &right, comparison.tolerance, &mut work)?
+    } else {
+        equal(left, right, comparison.tolerance, &mut work)?
+    };
+    work.checkpoint()?;
+    Ok(result)
 }
 
 #[deny(clippy::disallowed_methods)]
