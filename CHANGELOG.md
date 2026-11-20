@@ -12,6 +12,23 @@ la cui versione non ha qui una voce datata.
 
 ## [6.2.0] - non rilasciata
 
+### Correzioni
+
+- Selezione metrica razionale condivisa: elimina underflow/overflow dei
+  quadrati da distanze minime, nearest, snap, DBSCAN, line_locate_point, Douglas-Peucker e
+  controlli metrici di precisione. Minimi e pari precedono l'arrotondamento;
+  un minimo non pubblicabile si rifiuta esplicitamente. Il riproduttore
+  con minimo `2.5e-301` ora restituisce quel valore anche invertendo i vertici.
+- Anche VW PreserveTopology confronta aree razionali sulle coordinate
+  originali, senza normalizzazione distruttiva alle scale miste. I pari
+  restano deterministici; non si promette lo stesso spareggio del vendor.
+  I controlli di intersezione sono esaustivi con lavoro limitato.
+- Il join usa la DE-9IM esatta con l'indice condiviso; le distanze usano
+  branch-and-bound razionale sullo stesso indice dei segmenti. Gli errori
+  razionali mantengono le categorie di risorse, interruzione e precisione.
+- Nearest assegna la quota dei risultati in ordine di riga: il secondo
+  giro dei pari e gli eventuali errori di lavoro non dipendono dai thread.
+
 ### Prestazioni
 
 - Indice bidimensionale condiviso di inviluppi razionali per il noding e

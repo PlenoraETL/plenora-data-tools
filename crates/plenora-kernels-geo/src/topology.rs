@@ -83,6 +83,9 @@ pub struct OverlayPiece {
 /// delle geometrie.
 #[derive(Debug, Error)]
 pub enum TopologyError {
+    /// Errore razionale propagato dal join indicizzato.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// Un ingresso non e' `Polygon` o `MultiPolygon`; porta il nome del tipo
     /// ricevuto, che il messaggio non riporta («errori senza dati»).
     #[error("operazione topologica supportata solo per Polygon/MultiPolygon")]
@@ -161,6 +164,7 @@ fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, TopologyError> {
 fn dal_join(error: crate::spatial_join::SpatialJoinError) -> TopologyError {
     use crate::spatial_join::SpatialJoinError as S;
     match error {
+        S::Exact(error) => TopologyError::Exact(error),
         S::ValidazioneNonConclusa(forma) => TopologyError::ValidazioneNonConclusa(forma),
         S::CalcoloNonConcluso(forma) | S::Internal(forma) => {
             TopologyError::CalcoloNonConcluso(forma)
@@ -931,6 +935,7 @@ fn checked_buffer(
 ) -> Result<MultiPolygon<f64>, TopologyError> {
     buffer_con_freccia(geometry, distance, Estremita::Tonde, freccia, precision).map_err(|errore| {
         match errore {
+            ErroreBuffer::Exact(error) => TopologyError::Exact(error),
             ErroreBuffer::PrecisioneInsufficiente => TopologyError::PrecisionInsufficient,
             ErroreBuffer::CalcoloNonConcluso(forma) => TopologyError::CalcoloNonConcluso(forma),
             ErroreBuffer::MargineMemoria(superato) => dal_margine(superato),

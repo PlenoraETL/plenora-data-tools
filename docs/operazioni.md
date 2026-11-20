@@ -15838,13 +15838,13 @@ voce «Geo senza diagnostica per riga»).
 
 #### Precisione
 
-Nessun controllo dedicato: distanze e frazione sono calcolate in `f64` da
-`geo` (distanza dai segmenti, proiezione sul segmento più vicino, lunghezze
-cumulate), con errori d'arrotondamento relativi alla lunghezza della linea,
-molto sotto 1 cm per le lunghezze dei CRS reali. Dove due segmenti sono alla
-stessa distanza dal punto entro l'arrotondamento, la scelta fra i due, e
-con essa la frazione, può cambiare con l'ultimo bit delle coordinate
-([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+Il segmento piu' vicino e la proiezione sono selezionati con confronti
+razionali esatti. A parita' esatta vince il primo segmento della linea.
+Le lunghezze dei segmenti sono arrotondate in f64 e cumulate; numeratore
+e rapporto finale della frazione sono calcolati in Q su questi valori,
+cosi' un prodotto intermedio subnormale non si annulla. Una frazione
+positiva non pubblicabile, un overflow del cumulo o un calcolo non
+certificabile danno `Execution`; il bilancio esaurito da' `ResourceLimit`.
 
 #### Complessità
 
@@ -16527,8 +16527,9 @@ geo indicata fra parentesi:
   che l'uscita ripete, non starebbero nel margine di memoria del passo;
   stesso conteggio e stessa precedenza del limite di righe, che vince se
   scatta prima (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un
-  calcolo di `geo` (la distanza su un candidato) non ha concluso;
+- `ValidazioneNonConclusa` (`Internal`): la validazione non ha concluso;
+- `Exact`: distanza non pubblicabile (`Execution`) o bilancio razionale
+  esaurito (`ResourceLimit`); gli errori di interruzione conservano la categoria;
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
@@ -16538,13 +16539,10 @@ diagnostica per riga»).
 
 #### Limiti e deviazioni
 
-Un R-tree sceglie i candidati e scarta una destra solo quando la sua
-distanza non può essere il minimo, con un margine appoggiato alla stima
-d'errore della distanza di `geo` letta dai sorgenti, non dimostrata; le
-geometrie fuori da quella stima non si scartano mai. L'oracolo confronta
-il risultato con la forza bruta sui bit ([Limiti dichiarati, «`geo.nearest`: lo
-scarto dell'R-tree si appoggia alla stima d'errore di
-`geo`»](limiti.md#geonearest-lo-scarto-dellr-tree-si-appoggia-alla-stima-derrore-di-geo)).
+Il filtro delle righe e l'indice dei segmenti sono conservativi. Minimi,
+pari e soglie sono confrontati in aritmetica razionale esatta; l'oracolo
+esaustivo usa la stessa primitiva senza pruning
+([Limiti](limiti.md#geonearest-confronti-razionali-e-filtri-conservativi)).
 Il catalogo dichiara il vincolo `uscita / sinistra`, ma i pari possono dare
 più righe della sinistra. Gli abbinamenti dipendono dai dati: il modello di
 costo non li prevede, e li limita solo il limite di righe dell'arco
@@ -16554,20 +16552,17 @@ geo»).
 
 #### Precisione
 
-Nessun calcolo di geometrie e nessuna griglia: la distanza è
-`Euclidean.distance` di `geo` in `f64` sulle coordinate d'ingresso, con un
-errore di arrotondamento stimato sotto `64 · eps` volte il modulo massimo
-delle coordinate su geometrie regolari (circa 0,14 µm con coordinate
-fino a 10.000 km), molto sotto 1 cm. I pari sono
-uguaglianze esatte dei valori calcolati: due destre la cui distanza vera è
-uguale possono non risultare pari se i loro `f64` differiscono nell'ultima
-cifra ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
-terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La selezione usa le distanze quadrate razionali esatte degli ingressi.
+La sola distanza pubblicata e' arrotondata al binary64 piu' vicino, meta'
+al pari. I pari sono uguaglianze delle distanze geometriche, anche quando
+due valori distinti arrotonderebbero allo stesso binary64. Un minimo
+positivo che arrotonderebbe a zero, o un minimo oltre il massimo finito,
+viene rifiutato con `AccuracyUnproven` (`Execution`); i limiti razionali diventano `ResourceLimit`.
 
 #### Complessità
 
 Un R-tree dei rettangoli d'ingombro della destra, O(m log m) per `m`
-righe; per ognuna delle `n` righe sinistre, in parallelo, un primo vicino
+righe; per ognuna delle `n` righe sinistre, in ordine di riga, un primo vicino
 nell'albero, una finestra di candidati e la distanza sui soli candidati.
 Di norma O((n + m) log m) più le distanze; nel caso peggiore (destre
 equidistanti da molte sinistre, rettangoli grandi sovrapposti) O(n · m).
@@ -20296,16 +20291,13 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `InvalidInput`: la geometria non supera la validazione OGC;
 - `InvalidOutput`: la geometria semplificata non supera la validazione OGC
   (per esempio anelli che si incrociano dopo Douglas-Peucker);
-- `Internal`: con `douglas_peucker`, una distanza intermedia non è un
-  numero finito (coordinate vicine ai limiti di `f64`); nessun risultato
-  parziale;
+- `ResourceLimit`: il bilancio del calcolo razionale e' esaurito;
+- `Execution`: un calcolo non e' certificabile; nessun risultato parziale;
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
 - `InvalidParameter`: con `preserve_topology`, oltre `i32::MAX` coordinate;
-  soglia non finita o negativa (l'analisi la
-  rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
-  scala delle coordinate diventa zero.
+  soglia non finita o negativa (l'analisi la rifiuta prima).
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
@@ -20322,29 +20314,24 @@ voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 un'area, e per questo si chiama `min_area`. Fino alla versione 2 del
 catalogo si scriveva `tolerance` anche qui, e un piano scritto pensando a
 GEOS semplificava in modo molto diverso senza errore: ora quel piano si
-rifiuta in validazione. Le coordinate di modulo oltre `1e150`, o non
-nulle e sotto `1e-150`, si semplificano in uno spazio scalato
-uniformemente e si riportano indietro, con la soglia scalata come la sua
-grandezza (una distanza per il fattore, un'area per il suo quadrato; fino
-alla versione 2 l'area si scalava come una distanza).
+rifiuta in validazione. Distanze e aree sono confrontate con aritmetica razionale sulle coordinate
+originali, anche alle scale estreme. Gli spareggi VW sono deterministici,
+ma non promettono lo stesso vertice del precedente heap vendor.
 
 #### Precisione
 
-Esatta: i vertici d'uscita sono vertici d'ingresso, senza calcolo, fuori
-dal percorso scalato (coordinate oltre `1e150` o sotto `1e-150` in modulo,
-fuori da ogni dominio di un CRS reale), dove passano per una divisione e
-una moltiplicazione. Lo scarto dalla forma originale è quello chiesto con
+Esatta: i vertici d'uscita sono vertici d'ingresso, conservati bit per bit. Lo scarto dalla forma originale è quello chiesto con
 la soglia, non un errore di precisione
 ([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 #### Complessità
 
-Per geometria di n vertici: `douglas_peucker` O(n log n) nel caso tipico e
-O(n²) nel peggiore, con una seconda traversata dello stesso costo che
-verifica le distanze; `preserve_topology` O(n log n) nel caso tipico (coda di priorità e
-indice spaziale di `geo`). Più la validazione OGC dell'ingresso e
-dell'uscita (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+Per geometria di n vertici: `douglas_peucker` O(n log n) nel caso tipico,
+O(n^2) nel peggiore. `preserve_topology` usa una coda di priorita' O(n log n)
+e scansioni d'intersezione O(n^2) nel peggiore, con lavoro limitato.
+Entrambi richiedono memoria O(n), oltre agli interi razionali. Si aggiunge
+la validazione OGC dell'ingresso e dell'uscita.
+
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi

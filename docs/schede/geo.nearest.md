@@ -91,8 +91,9 @@ geo indicata fra parentesi:
   che l'uscita ripete, non starebbero nel margine di memoria del passo;
   stesso conteggio e stessa precedenza del limite di righe, che vince se
   scatta prima (guardia che riduce il rischio, non un tetto garantito: [Runner, «Limiti dichiarati del runner»](runner.md#limiti-dichiarati-del-runner), voce «Modelli di costo geo»);
-- `ValidazioneNonConclusa`, `CalcoloNonConcluso` (`Internal`): un
-  calcolo di `geo` (la distanza su un candidato) non ha concluso;
+- `ValidazioneNonConclusa` (`Internal`): la validazione non ha concluso;
+- `Exact`: distanza non pubblicabile (`Execution`) o bilancio razionale
+  esaurito (`ResourceLimit`); gli errori di interruzione conservano la categoria;
 - `IndexOverflow` (`InvalidPlan`): un indice non entra in `u64`.
 
 Il primo errore è quello della prima riga, in ordine di riga, senza
@@ -102,13 +103,10 @@ diagnostica per riga»).
 
 ### Limiti e deviazioni
 
-Un R-tree sceglie i candidati e scarta una destra solo quando la sua
-distanza non può essere il minimo, con un margine appoggiato alla stima
-d'errore della distanza di `geo` letta dai sorgenti, non dimostrata; le
-geometrie fuori da quella stima non si scartano mai. L'oracolo confronta
-il risultato con la forza bruta sui bit ([Limiti dichiarati, «`geo.nearest`: lo
-scarto dell'R-tree si appoggia alla stima d'errore di
-`geo`»](limiti.md#geonearest-lo-scarto-dellr-tree-si-appoggia-alla-stima-derrore-di-geo)).
+Il filtro delle righe e l'indice dei segmenti sono conservativi. Minimi,
+pari e soglie sono confrontati in aritmetica razionale esatta; l'oracolo
+esaustivo usa la stessa primitiva senza pruning
+([Limiti](limiti.md#geonearest-confronti-razionali-e-filtri-conservativi)).
 Il catalogo dichiara il vincolo `uscita / sinistra`, ma i pari possono dare
 più righe della sinistra. Gli abbinamenti dipendono dai dati: il modello di
 costo non li prevede, e li limita solo il limite di righe dell'arco
@@ -118,20 +116,17 @@ geo»).
 
 ### Precisione
 
-Nessun calcolo di geometrie e nessuna griglia: la distanza è
-`Euclidean.distance` di `geo` in `f64` sulle coordinate d'ingresso, con un
-errore di arrotondamento stimato sotto `64 · eps` volte il modulo massimo
-delle coordinate su geometrie regolari (circa 0,14 µm con coordinate
-fino a 10.000 km), molto sotto 1 cm. I pari sono
-uguaglianze esatte dei valori calcolati: due destre la cui distanza vera è
-uguale possono non risultare pari se i loro `f64` differiscono nell'ultima
-cifra ([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a
-terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+La selezione usa le distanze quadrate razionali esatte degli ingressi.
+La sola distanza pubblicata e' arrotondata al binary64 piu' vicino, meta'
+al pari. I pari sono uguaglianze delle distanze geometriche, anche quando
+due valori distinti arrotonderebbero allo stesso binary64. Un minimo
+positivo che arrotonderebbe a zero, o un minimo oltre il massimo finito,
+viene rifiutato con `AccuracyUnproven` (`Execution`); i limiti razionali diventano `ResourceLimit`.
 
 ### Complessità
 
 Un R-tree dei rettangoli d'ingombro della destra, O(m log m) per `m`
-righe; per ognuna delle `n` righe sinistre, in parallelo, un primo vicino
+righe; per ognuna delle `n` righe sinistre, in ordine di riga, un primo vicino
 nell'albero, una finestra di candidati e la distanza sui soli candidati.
 Di norma O((n + m) log m) più le distanze; nel caso peggiore (destre
 equidistanti da molte sinistre, rettangoli grandi sovrapposti) O(n · m).

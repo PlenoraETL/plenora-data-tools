@@ -587,52 +587,28 @@ regressione. Per le parti preparate: una `relate` di `geo` che riusi il
 grafo di una geometria su più confronti con memoria dichiarata, o un budget
 di memoria della validazione che le governi.
 
-## `geo.nearest`: lo scarto dell'R-tree si appoggia alla stima d'errore di `geo`
+## `geo.nearest`: confronti razionali e filtri conservativi
 
-**Regola.** `nearest_matches` (e `_validated`) non confronta più ogni left
-con ogni right: un R-tree dei rettangoli d'ingombro right sceglie i
-candidati, e minimo, pari e distanze si calcolano sui soli candidati con la
-stessa `Euclidean.distance` di prima, in ordine di indice right. Un right si
-scarta solo se il suo rettangolo dista dal rettangolo left più di `d + S *
-2^-40`, con `d` la distanza calcolata di un candidato e `S` il modulo
-massimo delle coordinate: la distanza calcolata da `geo` 0.33.1 su geometrie
-regolari non scende sotto quella vera di più di circa `64 * eps * S`
-(differenze di coordinate, `hypot`, ramo di `line_segment_distance`,
-tolleranza parametrica di `line_string_contains_point`, che dà zero a un
-punto fuori dal rettangolo del segmento), quindi nessuno scartato è al
-minimo. Le geometrie su cui la stima non vale non si scartano mai: parti
-vuote o degeneri (linee di un punto, anelli aperti o sotto quattro vertici,
-collezioni vuote, dove `geo` risponde zero o usa una tolleranza assoluta in
-`f32`) e coordinate fuori da `{0} ∪ [2^-400, 2^400]` in modulo, NaN e
-infiniti compresi: un right così è candidato di ogni riga, un left così li
-prende tutti. Il limite `max_comparisons` resta `n * m` come prima: stesso
-errore per gli stessi ingressi, anche se il lavoro vero è di solito molto
-minore. L'oracolo, con la forza bruta copiata alla lettera e confrontata sui
-bit, è in `crates/plenora-kernels-geo/src/analysis/nearest_oracolo.rs`.
+Dalla 6.2.0 minimi, pari e soglie si confrontano sulle distanze quadrate
+razionali esatte delle coordinate binary64. La distanza pubblicata e'
+correttamente arrotondata al piu' vicino, meta' al pari. Un minimo positivo
+che arrotonderebbe a zero, o un minimo oltre il massimo finito, e' `AccuracyUnproven` (`Execution`).
+L'indice condiviso dei segmenti scarta solo inviluppi con distanza inferiore
+certificata maggiore del minimo. Le prove confrontano i bit con la scansione
+esaustiva corretta, non con la precedente selezione vendor in underflow.
 
-**Ambito.** `plenora-kernels-geo`, `analysis::nearest_matches` e
-`nearest_matches_validated`.
+Il filtro esterno delle righe conserva una finestra con margine `2*S*2^-40`
+per coordinate nulle o di modulo in `[2^-400,2^400]`. La distanza esatta e' al
+piu' `3*S`, il suo arrotondamento e quello dei bordi sono inferiori al
+margine. Fuori da questo dominio si visitano tutte le righe; anche un seed
+non pubblicabile provoca la visita completa. Il seed R-tree non decide mai
+un risultato metrico.
 
-**Hazard.**
-
-- la stima d'errore è letta dai sorgenti di `geo` 0.33.1 e `geo-types`
-  0.7.19, non dimostrata in forma chiusa; il margine le lascia un fattore
-  64 circa. Un aggiornamento che introducesse un'altra tolleranza assoluta o
-  un altro «zero» per parti vuote renderebbe lo scarto sbagliato senza
-  errore: l'oracolo lo vede solo sulle forme che esercita (fra queste il
-  punto fuori dal rettangolo che `geo` dichiara sul segmento, che fallisce
-  senza il margine);
-- un panico di `geo` su una coppia (per esempio `nearest_neighbour_distance`
-  con coordinate sotto `2^-400`) diventa `CalcoloNonConcluso` solo se la
-  coppia è fra i candidati; quelle osservate coinvolgono sempre una
-  geometria fuori dominio, che non si scarta, ma la forza bruta le valutava
-  tutte;
-- il caso peggiore resta O(n·m): con right equidistanti da molti left
-  (una circonferenza, rettangoli grandi sovrapposti) i candidati sono tutti.
-
-**Condizione di rientro.** Una distanza di `geo` con un limite d'errore
-dichiarato, o un confronto esatto delle distanze: il margine si ricava da
-lì e la stima letta dai sorgenti si toglie.
+Il caso peggiore resta quadratico per inviluppi tutti sovrapposti. Il limite
+pubblico storico `max_comparisons` mantiene il preflight sulle coppie di
+righe; le visite interne, i confronti dei segmenti e le prenotazioni
+razionali sono contati da `Work`, con limiti predefiniti per il percorso
+metrico. Le ricevute degli interi non misurano gli scratch privati del backend.
 
 ## Hash delle chiavi non keyed
 

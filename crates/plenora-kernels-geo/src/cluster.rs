@@ -28,7 +28,7 @@ use std::collections::{HashMap, VecDeque};
 use geo::{CoordsIter, Geometry, Point};
 use plenora_core::arrow::array::BinaryArray;
 use plenora_core::PlenoraError;
-use rstar::{PointDistance, RTree, RTreeObject, AABB};
+use rstar::{RTree, RTreeObject, AABB};
 use thiserror::Error;
 
 use crate::arrow_adapter::{decode_geometry_cell, map_nullable};
@@ -36,6 +36,9 @@ use crate::arrow_adapter::{decode_geometry_cell, map_nullable};
 /// Errori del kernel DBSCAN.
 #[derive(Debug, Error)]
 pub enum ClusterError {
+    /// Errore del percorso razionale: categoria e limiti preservati.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// `eps` non finito o non positivo, o `min_points` zero.
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
@@ -115,17 +118,6 @@ impl RTreeObject for IndexedPoint {
     }
 }
 
-impl PointDistance for IndexedPoint {
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE, e i
-    // bit della forma non fusa sono il contratto numerico.
-    #[allow(clippy::suboptimal_flops)]
-    fn distance_2(&self, point: &[f64; 2]) -> f64 {
-        let dx = self.coords[0] - point[0];
-        let dy = self.coords[1] - point[1];
-        dx * dx + dy * dy
-    }
-}
-
 /// Chiave bitwise delle coordinate. `-0.0` e `0.0` rappresentano lo stesso
 /// punto euclideo e vengono quindi canonicalizzati nello stesso gruppo.
 fn coordinate_key(coords: [f64; 2]) -> (u64, u64) {
@@ -163,7 +155,7 @@ enum NeighborhoodClass {
 
 #[derive(Clone, Copy)]
 struct NeighborhoodParameters {
-    radius_2: f64,
+    radius: f64,
     min_points: usize,
 }
 
@@ -187,12 +179,27 @@ fn load_core_neighbors(
     }
     let representative = representatives[group];
     let centro = points[representative];
-    let mut found: Vec<usize> = crate::calcolo_protetto(|| {
-        tree.locate_within_distance(centro, parameters.radius_2)
-            .map(|element| element.index)
-            .collect()
-    })
-    .map_err(ClusterError::CalcoloNonConcluso)?;
+    let mut found = Vec::new();
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    for element in tree.locate_in_envelope_intersecting(&crate::segment_index::metric_window(
+        centro,
+        parameters.radius,
+    )) {
+        let p = geo::Coord {
+            x: centro[0],
+            y: centro[1],
+        };
+        let q = geo::Coord {
+            x: element.coords[0],
+            y: element.coords[1],
+        };
+        let within = crate::segment_index::DistanceKey::coordinates(p, q, q, &mut work)
+            .and_then(|key| key.within(parameters.radius, &work))
+            .map_err(ClusterError::Exact)?;
+        if within {
+            found.push(element.index);
+        }
+    }
     found.sort_unstable();
     *range_queries += 1;
     if found.len() < parameters.min_points {
@@ -220,7 +227,7 @@ fn dbscan_core_with_query_count(
     let tree = crate::calcolo_protetto(|| RTree::bulk_load(elementi))
         .map_err(ClusterError::CalcoloNonConcluso)?;
     let neighborhood_parameters = NeighborhoodParameters {
-        radius_2: eps * eps,
+        radius: eps,
         min_points,
     };
 
@@ -410,6 +417,7 @@ pub fn dbscan(
 /// validazione che non ha concluso. Il resto e' `InvalidPlan`.
 fn cluster_error(error: &ClusterError) -> PlenoraError {
     match error {
+        ClusterError::Exact(error) => error.in_core("geo.cluster_dbscan"),
         ClusterError::InternalInvariant(reason) => {
             PlenoraError::Internal(format!("geo.cluster_dbscan: {reason}"))
         }
@@ -454,6 +462,16 @@ mod tests {
     use crate::test_support::{to_wkb, wkb_column_with};
     use plenora_core::arrow::array::BinaryArray;
 
+    #[test]
+    fn exact_neighborhood_extreme_scales() {
+        for scale in [f64::from_bits(1), 1e-300, 1.0, 1e300] {
+            let coords = [[0.0, 0.0], [scale, 0.0], [4.0 * scale, 0.0]];
+            let expected = vec![Some(0), Some(0), None];
+            assert_eq!(dbscan_core(&coords, scale, 2).unwrap(), expected);
+            assert_eq!(dbscan_bruteforce_reference(&coords, scale, 2), expected);
+        }
+    }
+
     fn points(coords: &[(f64, f64)]) -> Vec<Point<f64>> {
         coords.iter().map(|&(x, y)| Point::new(x, y)).collect()
     }
@@ -466,15 +484,26 @@ mod tests {
         eps: f64,
         min_points: usize,
     ) -> Vec<Option<u64>> {
-        let radius_2 = eps * eps;
         let neighbors = |index: usize| -> Vec<usize> {
             points
                 .iter()
                 .enumerate()
                 .filter_map(|(other, coords)| {
-                    let dx = points[index][0] - coords[0];
-                    let dy = points[index][1] - coords[1];
-                    (dx * dx + dy * dy <= radius_2).then_some(other)
+                    let mut work =
+                        crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+                    let p = geo::Coord {
+                        x: points[index][0],
+                        y: points[index][1],
+                    };
+                    let q = geo::Coord {
+                        x: coords[0],
+                        y: coords[1],
+                    };
+                    crate::segment_index::DistanceKey::coordinates(p, q, q, &mut work)
+                        .unwrap()
+                        .within(eps, &work)
+                        .unwrap()
+                        .then_some(other)
                 })
                 .collect()
         };

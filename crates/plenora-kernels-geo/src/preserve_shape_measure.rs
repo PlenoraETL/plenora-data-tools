@@ -489,6 +489,19 @@ pub fn preserve_shape_length_with_limits(
     }
 }
 
+/// Maggiorante di prodotti non negativi: un `next_up` per arrotondamento
+/// comprende anche l'underflow. Un overflow resta infinito e viene rifiutato
+/// dal controllo del certificato, mai convertito in un bound finito.
+fn upper_product(factors: &[f64]) -> f64 {
+    factors.iter().fold(1.0, |product, factor| {
+        if product == 0.0 || *factor == 0.0 {
+            0.0
+        } else {
+            (product * factor).next_up()
+        }
+    })
+}
+
 fn length_edge(
     context: &ShapeContext,
     start: Coord<f64>,
@@ -506,10 +519,16 @@ fn length_edge(
     let (dx, dy) = context.deltas(start, end, divisions)?;
     let (speed, acceleration, numerical) = match &context.derivatives {
         ShapeDerivatives::Separable(bounds) => {
-            let speed = dx.abs() + bounds.latitude_first * dy.abs();
+            let speed = (dx.abs() + upper_product(&[bounds.latitude_first, dy.abs()])).next_up();
             (
                 speed,
-                1.1 * a * (speed.powi(2) + bounds.latitude_second * dy * dy),
+                upper_product(&[
+                    1.1,
+                    a,
+                    (upper_product(&[speed, speed])
+                        + upper_product(&[bounds.latitude_second, dy.abs(), dy.abs()]))
+                    .next_up(),
+                ]),
                 1e-6,
             )
         }
@@ -518,8 +537,12 @@ fn length_edge(
         | ShapeDerivatives::Azimuthal(_)
         | ShapeDerivatives::Stereographic(_)
         | ShapeDerivatives::Hotine(_) => {
-            let delta = dx.abs() + dy.abs();
-            (7.0 * delta, 1.1 * a * 78.0 * delta.powi(2), 3e-5)
+            let delta = (dx.abs() + dy.abs()).next_up();
+            (
+                upper_product(&[7.0, delta]),
+                upper_product(&[1.1, a, 78.0, delta, delta]),
+                3e-5,
+            )
         }
     };
     let mut previous = context.convert(start, work)?;
@@ -537,15 +560,16 @@ fn length_edge(
             return Err(ShapeMeasureError::AccuracyUnproven);
         }
         // G1/G2: 15 nm per inverse; 1 micrometro include conversione e interpolazione.
-        let lower = distance - numerical;
+        let lower = (distance - numerical).next_down();
         if lower <= 0.0 {
             // Il maggiorante della velocita' resta valido anche ai poli o ai coincidenti.
-            error.discretization.add(1.1 * a * speed);
+            error.discretization.add(upper_product(&[1.1, a, speed]));
         } else {
             // Varianza della velocita' ECEF: L-d <= A^2/(12d), senza test di convergenza.
-            error
-                .discretization
-                .add(acceleration.powi(2) / (12.0 * lower));
+            error.discretization.add(
+                (upper_product(&[acceleration, acceleration]) / (12.0 * lower).next_down())
+                    .next_up(),
+            );
         }
         error.numerical.add(numerical);
         value.add(distance);
@@ -653,12 +677,21 @@ fn ring_area(
             match &context.derivatives {
                 ShapeDerivatives::Separable(bounds) => {
                     integral.add(-area_primitive(midpoint.y, parameters) * dx);
-                    let derivative_bound =
-                        1.1 * (bounds.latitude_first.powi(2) + bounds.latitude_second);
-                    let scale = dx.abs() * parameters.semi_major_axis_metre.powi(2);
-                    error
-                        .discretization
-                        .add(scale * derivative_bound * dy * dy / 24.0);
+                    let derivative_bound = upper_product(&[
+                        1.1,
+                        (upper_product(&[bounds.latitude_first, bounds.latitude_first])
+                            + bounds.latitude_second)
+                            .next_up(),
+                    ]);
+                    let scale = upper_product(&[
+                        dx.abs(),
+                        parameters.semi_major_axis_metre,
+                        parameters.semi_major_axis_metre,
+                    ]);
+                    error.discretization.add(
+                        (upper_product(&[scale, derivative_bound, dy.abs(), dy.abs()]) / 24.0)
+                            .next_up(),
+                    );
                     error.numerical.add(scale * 512.0 * f64::EPSILON);
                 }
                 ShapeDerivatives::Transverse(_)
@@ -673,9 +706,14 @@ fn ring_area(
                     let longitude_delta = (end.x - point.x).to_radians();
                     integral.add(-area_primitive(midpoint.y, parameters) * longitude_delta);
                     // Taylor di Q(phi) attorno al centro; lambda' non e' costante.
-                    let delta = dx.abs() + dy.abs();
-                    let scale = parameters.semi_major_axis_metre.powi(2);
-                    error.discretization.add(scale * 8.25 * delta.powi(3));
+                    let delta = (dx.abs() + dy.abs()).next_up();
+                    let scale = upper_product(&[
+                        parameters.semi_major_axis_metre,
+                        parameters.semi_major_axis_metre,
+                    ]);
+                    error
+                        .discretization
+                        .add(upper_product(&[scale, 8.25, delta, delta, delta]));
                     error.numerical.add(scale * 16384.0 * f64::EPSILON);
                 }
             }

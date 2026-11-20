@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::margine::{MargineMemoria, TettoRisultati};
 use crate::ValidazioneProtetta as _;
-use geo::{BoundingRect, Contains, CoordsIter, Geometry, Intersects, Relate};
+use geo::{BoundingRect, CoordsIter, Geometry};
 use rayon::prelude::*;
 use rstar::{RTree, RTreeObject, AABB};
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,9 @@ pub struct JoinPair {
 /// geometrie.
 #[derive(Debug, Error)]
 pub enum SpatialJoinError {
+    /// Errore del percorso razionale: categoria e limiti preservati.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// Un numero di righe o un indice non entra in `u64`.
     #[error("numero geometrie non rappresentabile nel protocollo uint64")]
     IndexOverflow,
@@ -167,15 +170,19 @@ fn exact_match(
     right: &Geometry<f64>,
     predicate: JoinPredicate,
 ) -> Result<bool, SpatialJoinError> {
-    crate::calcolo_protetto(|| match predicate {
-        JoinPredicate::Intersects => left.intersects(right),
-        JoinPredicate::Contains => left.contains(right),
-        JoinPredicate::Within => right.contains(left),
-        JoinPredicate::Crosses => left.relate(right).is_crosses(),
-        JoinPredicate::Overlaps => left.relate(right).is_overlaps(),
-        JoinPredicate::Touches => left.relate(right).is_touches(),
-    })
-    .map_err(SpatialJoinError::CalcoloNonConcluso)
+    use crate::predicates::SpatialPredicate;
+    let predicate = match predicate {
+        JoinPredicate::Intersects => SpatialPredicate::Intersects,
+        JoinPredicate::Contains => SpatialPredicate::Contains,
+        JoinPredicate::Within => SpatialPredicate::Within,
+        JoinPredicate::Crosses => SpatialPredicate::Crosses,
+        JoinPredicate::Overlaps => SpatialPredicate::Overlaps,
+        JoinPredicate::Touches => SpatialPredicate::Touches,
+    };
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    crate::predicates::arrangement_indexed::relate_validated(left, right, &mut work)
+        .map(|matrix| matrix.evaluate(predicate))
+        .map_err(SpatialJoinError::Exact)
 }
 
 /// Le coppie `(sinistra, destra)` che soddisfano `predicate`, in ordine
@@ -385,7 +392,7 @@ fn spatial_join_refs(
         .enumerate()
         .map(|(index, geometry)| {
             let Some(geometry) = geometry else {
-                return Ok(None);
+                return Ok::<_, SpatialJoinError>(None);
             };
             let envelope = if validated {
                 envelope_of_validated(geometry, "right", index)?
@@ -512,23 +519,58 @@ mod tests {
     use geo::{line_string, Point};
     use proptest::prelude::*;
 
+    fn exhaustive_matrices(
+        left: &[Geometry<f64>],
+        right: &[Geometry<f64>],
+    ) -> Vec<(JoinPair, crate::predicates::De9imMatrix)> {
+        let mut matrices = Vec::new();
+        for (left_index, left_geometry) in left.iter().enumerate() {
+            for (right_index, right_geometry) in right.iter().enumerate() {
+                let mut work =
+                    crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+                let matrix = crate::predicates::arrangement_exhaustive::relate(
+                    left_geometry,
+                    right_geometry,
+                    &mut work,
+                )
+                .expect("matrice esaustiva");
+                matrices.push((
+                    JoinPair {
+                        left: left_index as u64,
+                        right: right_index as u64,
+                    },
+                    matrix,
+                ));
+            }
+        }
+        matrices
+    }
+
+    fn matching_pairs(
+        matrices: &[(JoinPair, crate::predicates::De9imMatrix)],
+        predicate: JoinPredicate,
+    ) -> Vec<JoinPair> {
+        use crate::predicates::SpatialPredicate;
+        let named = match predicate {
+            JoinPredicate::Intersects => SpatialPredicate::Intersects,
+            JoinPredicate::Contains => SpatialPredicate::Contains,
+            JoinPredicate::Within => SpatialPredicate::Within,
+            JoinPredicate::Crosses => SpatialPredicate::Crosses,
+            JoinPredicate::Overlaps => SpatialPredicate::Overlaps,
+            JoinPredicate::Touches => SpatialPredicate::Touches,
+        };
+        matrices
+            .iter()
+            .filter_map(|(pair, matrix)| matrix.evaluate(named).then_some(*pair))
+            .collect()
+    }
+
     fn brute_force(
         left: &[Geometry<f64>],
         right: &[Geometry<f64>],
         predicate: JoinPredicate,
     ) -> Vec<JoinPair> {
-        let mut pairs = Vec::new();
-        for (left_index, left_geometry) in left.iter().enumerate() {
-            for (right_index, right_geometry) in right.iter().enumerate() {
-                if exact_match(left_geometry, right_geometry, predicate).expect("predicato") {
-                    pairs.push(JoinPair {
-                        left: left_index as u64,
-                        right: right_index as u64,
-                    });
-                }
-            }
-        }
-        pairs
+        matching_pairs(&exhaustive_matrices(left, right), predicate)
     }
 
     fn rectangle(spec: (i16, i16, u8, u8)) -> Geometry<f64> {
@@ -538,6 +580,36 @@ mod tests {
         let width = f64::from(width.max(1));
         let height = f64::from(height.max(1));
         rect(x, y, x + width, y + height)
+    }
+
+    #[test]
+    fn join_extreme_scales_matches_exhaustive_arrangement() {
+        for scale in [f64::from_bits(1), 1e-300, 1., 1e300] {
+            let left = vec![
+                Geometry::LineString(geo::LineString::from(vec![(0., 0.), (4. * scale, 0.)])),
+                Geometry::Point(Point::new(2. * scale, 0.)),
+            ];
+            let right = vec![
+                Geometry::LineString(geo::LineString::from(vec![
+                    (2. * scale, -scale),
+                    (2. * scale, scale),
+                ])),
+                Geometry::LineString(geo::LineString::from(vec![(scale, 0.), (3. * scale, 0.)])),
+            ];
+            for predicate in [
+                JoinPredicate::Intersects,
+                JoinPredicate::Contains,
+                JoinPredicate::Within,
+                JoinPredicate::Crosses,
+                JoinPredicate::Overlaps,
+                JoinPredicate::Touches,
+            ] {
+                assert_eq!(
+                    spatial_join(&left, &right, predicate, 100).unwrap(),
+                    brute_force(&left, &right, predicate)
+                );
+            }
+        }
     }
 
     #[test]
@@ -772,6 +844,7 @@ mod tests {
         ) {
             let left: Vec<_> = left_specs.into_iter().map(rectangle).collect();
             let right: Vec<_> = right_specs.into_iter().map(rectangle).collect();
+            let matrices = exhaustive_matrices(&left, &right);
             for predicate in [
                 JoinPredicate::Intersects,
                 JoinPredicate::Contains,
@@ -780,7 +853,7 @@ mod tests {
                 JoinPredicate::Overlaps,
                 JoinPredicate::Touches,
             ] {
-                let expected = brute_force(&left, &right, predicate);
+                let expected = matching_pairs(&matrices, predicate);
                 let actual = spatial_join(&left, &right, predicate, 10_000).unwrap();
                 prop_assert_eq!(actual, expected);
             }

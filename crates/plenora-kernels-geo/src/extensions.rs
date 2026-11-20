@@ -10,7 +10,6 @@
 
 use std::collections::BTreeMap;
 
-use geo::algorithm::line_locate_point::LineLocatePoint;
 use geo::{Geometry, MultiLineString, MultiPoint, MultiPolygon, Point};
 use plenora_core::arrow::array::StringArray;
 use plenora_core::diagnostics::{
@@ -33,6 +32,9 @@ use crate::ValidazioneProtetta as _;
 /// scrive una volta.
 #[derive(Debug, Error)]
 pub enum ExtensionError {
+    /// Errore del confronto razionale condiviso, senza perdita della categoria.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// Un parametro fuori dominio.
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
@@ -118,7 +120,13 @@ impl ExtensionError {
     pub const fn e_interna(&self) -> bool {
         matches!(
             self,
-            Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_)
+            Self::Internal(_)
+                | Self::ValidazioneNonConclusa(_)
+                | Self::CalcoloNonConcluso(_)
+                | Self::Exact(
+                    crate::predicates::PredicateError::ValidazioneNonConclusa(_)
+                        | crate::predicates::PredicateError::CalcoloNonConcluso(_)
+                )
         )
     }
 
@@ -130,7 +138,16 @@ impl ExtensionError {
     /// sbagliato (`InvalidPlan`, come in analisi).
     #[must_use]
     pub const fn e_un_limite(&self) -> bool {
-        matches!(self, Self::IssueLimit { .. } | Self::MargineMemoria(_))
+        matches!(
+            self,
+            Self::IssueLimit { .. }
+                | Self::MargineMemoria(_)
+                | Self::Exact(
+                    crate::predicates::PredicateError::WorkLimit
+                        | crate::predicates::PredicateError::ReservationLimit
+                        | crate::predicates::PredicateError::AllocationFailed
+                )
+        )
     }
 
     /// L'errore nella categoria giusta, con il prefisso dell'operazione:
@@ -139,6 +156,9 @@ impl ExtensionError {
     /// `ResourceLimit` un limite superato, `InvalidPlan` il resto.
     #[must_use]
     pub fn del_passo(&self, operazione: &str) -> PlenoraError {
+        if let Self::Exact(error) = self {
+            return error.in_core(operazione);
+        }
         if self.e_interna() {
             PlenoraError::Internal(format!("{operazione}: {self}"))
         } else if matches!(self, Self::PrecisionInsufficient) {
@@ -535,16 +555,69 @@ pub fn line_locate_point(
     point: &Point<f64>,
 ) -> Result<Option<f64>, ExtensionError> {
     ensure_valid(geometry)?;
-    // `geo` dietro la barriera: un suo panico e' `Internal`, con la sola
-    // forma del payload.
-    let fraction = crate::calcolo_protetto(|| match geometry {
-        // Linea vuota/degenere: nessuna proiezione definita.
-        Geometry::LineString(line) if line.0.len() >= 2 => line.line_locate_point(point),
-        Geometry::Line(line) => line.line_locate_point(point),
-        _ => None,
-    })
-    .map_err(ExtensionError::Internal)?;
-    Ok(fraction)
+    let endpoints;
+    let coordinates = match geometry {
+        Geometry::LineString(line) if line.0.len() >= 2 => &line.0[..],
+        Geometry::Line(line) => {
+            endpoints = [line.start, line.end];
+            &endpoints[..]
+        }
+        _ => return Ok(None),
+    };
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    let mut best: Option<crate::segment_index::DistanceKey> = None;
+    let mut selected = None;
+    let mut total = 0.0;
+    for segment in coordinates.windows(2) {
+        let key = crate::segment_index::DistanceKey::coordinates(
+            point.0, segment[0], segment[1], &mut work,
+        )?;
+        let length = crate::segment_index::DistanceKey::coordinates(
+            segment[1], segment[0], segment[0], &mut work,
+        )?
+        .rounded(&mut work)?;
+        let replace = match &best {
+            None => true,
+            Some(old) => key.compare(old)?.is_lt(),
+        };
+        if replace {
+            best = Some(key);
+            selected = Some((segment[0], segment[1], total, length));
+        }
+        total += length;
+        if !total.is_finite() {
+            return Err(ExtensionError::Exact(
+                crate::predicates::PredicateError::AccuracyUnproven,
+            ));
+        }
+    }
+    if total == 0.0 {
+        return Ok(Some(0.0));
+    }
+    let Some((start, end, before, length)) = selected else {
+        return Ok(None);
+    };
+    let parameter = crate::segment_index::projection_parameter(point.0, start, end, &mut work)?;
+    let accumulated = crate::noding::P::of_in((before, length).into(), &work)?;
+    let factor = crate::noding::P::of_in((parameter, total).into(), &work)?;
+    let numerator = accumulated.x.try_add(&factor.x.try_mul(&accumulated.y)?)?;
+    let quotient = numerator.try_div(&factor.y)?;
+    let fraction =
+        crate::predicates::arrangement_indexed::line_boolean::ordinate(&quotient, &mut work)
+            .map_err(|error| {
+                ExtensionError::Exact(match error {
+            crate::predicates::arrangement_indexed::line_boolean::LineBooleanError::Predicate(
+                error,
+            ) => error,
+            _ => crate::predicates::PredicateError::AccuracyUnproven,
+        })
+            })?;
+    if fraction == 0.0 && quotient.sign().is_gt() {
+        return Err(ExtensionError::Exact(
+            crate::predicates::PredicateError::AccuracyUnproven,
+        ));
+    }
+    Ok(Some(fraction.clamp(0.0, 1.0)))
 }
 
 #[deny(clippy::disallowed_methods)]
@@ -804,6 +877,44 @@ mod tests {
     }
 
     // --- geo.line_locate_point ----------------------------------------------
+
+    #[test]
+    fn line_locate_point_uses_exact_selection_at_extreme_scales() {
+        let tiny = f64::from_bits(1);
+        let diagonal = Geometry::LineString(geo::LineString::from(vec![(0., 0.), (tiny, tiny)]));
+        assert_eq!(
+            line_locate_point(&diagonal, &Point::new(tiny, 0.)).unwrap(),
+            Some(0.5)
+        );
+        let long = Geometry::LineString(geo::LineString::from(vec![(0., 0.), (1e300, 0.)]));
+        assert!(matches!(
+            line_locate_point(&long, &Point::new(1e-300, 1.)),
+            Err(ExtensionError::Exact(
+                crate::predicates::PredicateError::AccuracyUnproven
+            ))
+        ));
+        for scale in [f64::from_bits(1), 1e-300, 1., 1e300] {
+            let line =
+                Geometry::LineString(geo::LineString::from(vec![(0., 0.), (4. * scale, 0.)]));
+            assert_eq!(
+                line_locate_point(&line, &Point::new(scale, scale))
+                    .unwrap()
+                    .unwrap()
+                    .to_bits(),
+                0.25_f64.to_bits()
+            );
+        }
+        let line = Geometry::LineString(geo::LineString::from(vec![
+            (0., 1e-300),
+            (1., 1e-300),
+            (1., 0.),
+            (0., 0.),
+        ]));
+        assert_eq!(
+            line_locate_point(&line, &Point::new(0.25, 2.5e-301)).unwrap(),
+            Some(0.875)
+        );
+    }
 
     #[test]
     fn line_locate_point_projects_known_points() {

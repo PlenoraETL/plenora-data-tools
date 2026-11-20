@@ -82,16 +82,13 @@ Poi dal kernel, per geometria (`OperationError`, che il runner porta in `Plenora
 - `InvalidInput`: la geometria non supera la validazione OGC;
 - `InvalidOutput`: la geometria semplificata non supera la validazione OGC
   (per esempio anelli che si incrociano dopo Douglas-Peucker);
-- `Internal`: con `douglas_peucker`, una distanza intermedia non è un
-  numero finito (coordinate vicine ai limiti di `f64`); nessun risultato
-  parziale;
+- `ResourceLimit`: il bilancio del calcolo razionale e' esaurito;
+- `Execution`: un calcolo non e' certificabile; nessun risultato parziale;
 - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
   calcolo di `geo` vanno in panico dentro la barriera (il messaggio porta
   solo la forma del payload);
 - `InvalidParameter`: con `preserve_topology`, oltre `i32::MAX` coordinate;
-  soglia non finita o negativa (l'analisi la
-  rifiuta prima); sul percorso scalato (sotto), un'area positiva che nella
-  scala delle coordinate diventa zero.
+  soglia non finita o negativa (l'analisi la rifiuta prima).
 
 Una geometria prodotta oltre il limite di byte per cella (64 MiB di WKB)
 è `ResourceLimit`. Il primo errore è quello della prima riga in ordine di riga, senza
@@ -108,29 +105,24 @@ voci «Geo senza diagnostica per riga» e «Modelli di costo geo»).
 un'area, e per questo si chiama `min_area`. Fino alla versione 2 del
 catalogo si scriveva `tolerance` anche qui, e un piano scritto pensando a
 GEOS semplificava in modo molto diverso senza errore: ora quel piano si
-rifiuta in validazione. Le coordinate di modulo oltre `1e150`, o non
-nulle e sotto `1e-150`, si semplificano in uno spazio scalato
-uniformemente e si riportano indietro, con la soglia scalata come la sua
-grandezza (una distanza per il fattore, un'area per il suo quadrato; fino
-alla versione 2 l'area si scalava come una distanza).
+rifiuta in validazione. Distanze e aree sono confrontate con aritmetica razionale sulle coordinate
+originali, anche alle scale estreme. Gli spareggi VW sono deterministici,
+ma non promettono lo stesso vertice del precedente heap vendor.
 
 ### Precisione
 
-Esatta: i vertici d'uscita sono vertici d'ingresso, senza calcolo, fuori
-dal percorso scalato (coordinate oltre `1e150` o sotto `1e-150` in modulo,
-fuori da ogni dominio di un CRS reale), dove passano per una divisione e
-una moltiplicazione. Lo scarto dalla forma originale è quello chiesto con
+Esatta: i vertici d'uscita sono vertici d'ingresso, conservati bit per bit. Lo scarto dalla forma originale è quello chiesto con
 la soglia, non un errore di precisione
 ([Limiti dichiarati, «Precisione delle operazioni geografiche»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
 
 ### Complessità
 
-Per geometria di n vertici: `douglas_peucker` O(n log n) nel caso tipico e
-O(n²) nel peggiore, con una seconda traversata dello stesso costo che
-verifica le distanze; `preserve_topology` O(n log n) nel caso tipico (coda di priorità e
-indice spaziale di `geo`). Più la validazione OGC dell'ingresso e
-dell'uscita (sub-quadratica nel caso tipico, O(n²) nel peggiore:
-[Limiti dichiarati, «Validazione OGC»](limiti.md#validazione-ogc-la-ricerca-delle-auto-intersezioni-non-è-quella-di-geo-il-verdetto-sì)).
+Per geometria di n vertici: `douglas_peucker` O(n log n) nel caso tipico,
+O(n^2) nel peggiore. `preserve_topology` usa una coda di priorita' O(n log n)
+e scansioni d'intersezione O(n^2) nel peggiore, con lavoro limitato.
+Entrambi richiedono memoria O(n), oltre agli interi razionali. Si aggiunge
+la validazione OGC dell'ingresso e dell'uscita.
+
 
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi

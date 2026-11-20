@@ -115,7 +115,7 @@
 //!
 //! - `polygonize`: il punto medio in `f64` dei lati in `union_boundary_rings`
 //!   (poi `contains` esatto) e il campione `interior_point` di `geo` per
-//!   l'annidamento; lo spareggio per distanza `hypot` fra vicini collineari
+//!   l'annidamento; lo spareggio per distanza razionale fra vicini collineari
 //!   nello stesso verso, possibili solo senza noding (archi sovrapposti);
 //! - `make_valid`: l'aggancio di `restore_multi_snapped`, che riporta i
 //!   vertici dell'overlay sul vertice d'ingresso piu' vicino, o sul lato
@@ -366,6 +366,7 @@ impl RustBackendError {
     /// lo ha chiamato.
     fn from_polygonize(error: &PolygonizeError, operation: &'static str) -> Self {
         match *error {
+            PolygonizeError::Exact(ref error) => Self::InputContract(error.in_core(operation)),
             PolygonizeError::UnsupportedGeometry(actual) => {
                 Self::UnsupportedGeometry { operation, actual }
             }
@@ -398,6 +399,7 @@ impl RustBackendError {
 
     fn from_split(error: SplitError) -> Self {
         match error {
+            SplitError::Exact(error) => Self::InputContract(error.in_core("geometria")),
             SplitError::UnsupportedSource(actual) | SplitError::UnsupportedSplitter(actual) => {
                 Self::UnsupportedGeometry {
                     operation: "split",
@@ -425,6 +427,7 @@ impl RustBackendError {
 
     fn from_make_valid(error: MakeValidError) -> Self {
         match error {
+            MakeValidError::Exact(error) => Self::InputContract(error.in_core("geometria")),
             MakeValidError::NonFiniteCoordinate => {
                 Self::InputContract(crate::non_finite_coordinate())
             }

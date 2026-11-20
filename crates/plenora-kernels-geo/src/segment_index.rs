@@ -209,12 +209,430 @@ impl SegmentIndex {
     }
 }
 
+/// Distanza quadrata razionale: selezione e pruning precedono ogni
+/// arrotondamento. Tutti gli interi appartengono al bilancio del Work.
+pub struct DistanceKey(Q);
+
+impl DistanceKey {
+    pub fn squared(value: Q) -> Result<Self, PredicateError> {
+        if value.sign().is_lt() {
+            return Err(PredicateError::AccuracyUnproven);
+        }
+        Ok(Self(value))
+    }
+
+    pub fn zero(work: &Work<'_>) -> Result<Self, PredicateError> {
+        Ok(Self(work.integer(0)?))
+    }
+    pub fn point_segment(p: &P, edge: &Edge, work: &mut Work<'_>) -> Result<Self, PredicateError> {
+        work.step()?;
+        let direction = edge.b.try_sub(&edge.a)?;
+        let offset = p.try_sub(&edge.a)?;
+        let length = norm_squared(&direction)?;
+        let projection = offset
+            .x
+            .try_mul(&direction.x)?
+            .try_add(&offset.y.try_mul(&direction.y)?)?;
+        if length.sign().is_eq() || projection.sign().is_le() {
+            return Ok(Self(norm_squared(&offset)?));
+        }
+        if projection.try_cmp(&length)?.is_ge() {
+            return Ok(Self(norm_squared(&p.try_sub(&edge.b)?)?));
+        }
+        let cross = offset.try_cross(&direction)?;
+        Ok(Self(cross.try_mul(&cross)?.try_div(&length)?))
+    }
+
+    pub fn segments(a: &Edge, b: &Edge, work: &mut Work<'_>) -> Result<Self, PredicateError> {
+        work.pair()?;
+        let direction = a.b.try_sub(&a.a)?;
+        let other = b.b.try_sub(&b.a)?;
+        let denominator = direction.try_cross(&other)?;
+        if !denominator.sign().is_eq() {
+            let offset = b.a.try_sub(&a.a)?;
+            let t = offset.try_cross(&other)?.try_div(&denominator)?;
+            let u = offset.try_cross(&direction)?.try_div(&denominator)?;
+            let one = work.integer(1)?;
+            if t.sign().is_ge()
+                && t.try_cmp(&one)?.is_le()
+                && u.sign().is_ge()
+                && u.try_cmp(&one)?.is_le()
+            {
+                return Ok(Self(work.integer(0)?));
+            }
+        }
+        let mut best = Self::point_segment(&a.a, b, work)?;
+        for candidate in [
+            Self::point_segment(&a.b, b, work)?,
+            Self::point_segment(&b.a, a, work)?,
+            Self::point_segment(&b.b, a, work)?,
+        ] {
+            best.select(candidate)?;
+        }
+        Ok(best)
+    }
+
+    pub fn select(&mut self, candidate: Self) -> Result<(), PredicateError> {
+        if candidate.0.try_cmp(&self.0)?.is_lt() {
+            *self = candidate;
+        }
+        Ok(())
+    }
+
+    /// Radice correttamente arrotondata, ties-to-even, anche subnormale.
+    /// Rifiuta distanze oltre il massimo finito invece di emettere infinito.
+    pub fn rounded(&self, work: &mut Work<'_>) -> Result<f64, PredicateError> {
+        self.rounded_impl(work, true)
+    }
+
+    fn rounded_impl(&self, work: &mut Work<'_>, fast: bool) -> Result<f64, PredicateError> {
+        if self.0.sign().is_eq() {
+            return Ok(0.0);
+        }
+        if fast {
+            if let Some(hint) = self.0.sqrt_hint() {
+                work.step()?;
+                let q = |x| P::of_in(geo::Coord { x, y: 0.0 }, work).map(|p| p.x);
+                let middle = q(hint)?;
+                let low = q(hint.next_down())?.try_midpoint(&middle)?;
+                let high = q(hint.next_up())?.try_midpoint(&middle)?;
+                let lo = self.0.try_cmp(&low.try_mul(&low)?)?;
+                let hi = self.0.try_cmp(&high.try_mul(&high)?)?;
+                let even = hint.to_bits() % 2 == 0;
+                if (lo.is_gt() || (lo.is_eq() && even)) && (hi.is_lt() || (hi.is_eq() && even)) {
+                    return Ok(hint);
+                }
+            }
+        }
+        let scalar = |bits, work: &Work<'_>| {
+            P::of_in(
+                geo::Coord {
+                    x: f64::from_bits(bits),
+                    y: 0.0,
+                },
+                work,
+            )
+            .map(|p| p.x)
+        };
+        let mut lo = 0_u64;
+        let mut hi = f64::MAX.to_bits();
+        let maximum = scalar(hi, work)?;
+        if self.0.try_cmp(&maximum.try_mul(&maximum)?)?.is_gt() {
+            return Err(PredicateError::AccuracyUnproven);
+        }
+        while lo < hi {
+            work.step()?;
+            let middle = lo + (hi - lo).div_ceil(2);
+            let q = scalar(middle, work)?;
+            if q.try_mul(&q)?.try_cmp(&self.0)?.is_le() {
+                lo = middle;
+            } else {
+                hi = middle - 1;
+            }
+        }
+        if lo == f64::MAX.to_bits() {
+            return Ok(f64::MAX);
+        }
+        let midpoint = scalar(lo, work)?.try_midpoint(&scalar(lo + 1, work)?)?;
+        let order = self.0.try_cmp(&midpoint.try_mul(&midpoint)?)?;
+        let bits = if order.is_gt() || (order.is_eq() && lo % 2 == 1) {
+            lo + 1
+        } else {
+            lo
+        };
+        if bits == 0 && !self.0.sign().is_eq() {
+            return Err(PredicateError::AccuracyUnproven);
+        }
+        Ok(f64::from_bits(bits))
+    }
+}
+
+fn norm_squared(p: &P) -> Result<Q, PredicateError> {
+    p.x.try_mul(&p.x)?.try_add(&p.y.try_mul(&p.y)?)
+}
+
+impl SegmentIndex {
+    /// Branch-and-bound esatto: una distanza fra inviluppi e' un limite
+    /// inferiore, mai una distanza candidata. Visita prima il figlio vicino.
+    pub fn nearest(
+        &self,
+        query: &Edge,
+        edges: &[Edge],
+        best: &mut Option<DistanceKey>,
+        work: &mut Work<'_>,
+    ) -> Result<(), PredicateError> {
+        let bound = |node: usize, work: &Work<'_>| -> Result<DistanceKey, PredicateError> {
+            let node = &self.nodes[node];
+            let mut sum = work.integer(0)?;
+            for (axis, a, b) in [(0, &query.a.x, &query.b.x), (2, &query.a.y, &query.b.y)] {
+                let (low, high) = if a.try_cmp(b)?.is_le() {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+                let min = &self.bounds[node.bounds[axis]][axis];
+                let max = &self.bounds[node.bounds[axis + 1]][axis + 1];
+                let delta = if low.try_cmp(max)?.is_gt() {
+                    low.try_sub(max)?
+                } else if high.try_cmp(min)?.is_lt() {
+                    min.try_sub(high)?
+                } else {
+                    work.integer(0)?
+                };
+                sum = sum.try_add(&delta.try_mul(&delta)?)?;
+            }
+            Ok(DistanceKey(sum))
+        };
+        let mut pending = CountedVec::new();
+        if let Some(root) = self.root {
+            work.push(&mut pending, root)?;
+        }
+        while let Some(id) = pending.pop() {
+            work.step()?;
+            let lower = bound(id, work)?;
+            if let Some(current) = best.as_ref() {
+                if lower.0.try_cmp(&current.0)?.is_gt() {
+                    continue;
+                }
+            }
+            let node = &self.nodes[id];
+            if let Some((left, right)) = node.children {
+                let order = bound(left, work)?.0.try_cmp(&bound(right, work)?.0)?;
+                let (near, far) = if order.is_le() {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                work.push(&mut pending, far)?;
+                work.push(&mut pending, near)?;
+            } else {
+                let candidate = DistanceKey::segments(query, &edges[node.item], work)?;
+                if let Some(current) = best {
+                    current.select(candidate)?;
+                } else {
+                    *best = Some(candidate);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl DistanceKey {
+    pub fn compare(&self, other: &Self) -> Result<std::cmp::Ordering, PredicateError> {
+        self.0.try_cmp(&other.0)
+    }
+
+    /// Confronta sqrt(self) <= factor*sqrt(other)+offset senza radici.
+    pub fn within_sum_scaled(
+        &self,
+        other: &Self,
+        factor: f64,
+        offset: f64,
+        work: &Work<'_>,
+    ) -> Result<bool, PredicateError> {
+        if !factor.is_finite() || factor < 0.0 || !offset.is_finite() || offset < 0.0 {
+            return Err(PredicateError::AccuracyUnproven);
+        }
+        let f = P::of_in((factor, offset).into(), work)?;
+        let scaled = other.0.try_mul(&f.x.try_mul(&f.x)?)?;
+        let offset2 = f.y.try_mul(&f.y)?;
+        let remainder = self.0.try_sub(&scaled)?.try_sub(&offset2)?;
+        if remainder.sign().is_le() {
+            return Ok(true);
+        }
+        Ok(remainder
+            .try_mul(&remainder)?
+            .try_cmp(&scaled.try_mul(&offset2)?.try_mul(&work.integer(4)?)?)?
+            .is_le())
+    }
+
+    pub fn within(&self, limit: f64, work: &Work<'_>) -> Result<bool, PredicateError> {
+        if !limit.is_finite() || limit < 0.0 {
+            return Err(PredicateError::AccuracyUnproven);
+        }
+        let q = P::of_in(geo::Coord { x: limit, y: 0.0 }, work)?.x;
+        Ok(self.0.try_cmp(&q.try_mul(&q)?)?.is_le())
+    }
+
+    pub fn coordinates(
+        point: geo::Coord<f64>,
+        start: geo::Coord<f64>,
+        end: geo::Coord<f64>,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
+        work.nodes(3)?;
+        let p = P::of_in(point, work)?;
+        let edge = Edge {
+            a: P::of_in(start, work)?,
+            b: P::of_in(end, work)?,
+        };
+        Self::point_segment(&p, &edge, work)
+    }
+}
+
+/// Finestra conservativa: arrotondamento verso l'esterno su entrambi i
+/// bordi. Gli infiniti da overflow allargano la query, mai la restringono.
+pub fn metric_window(point: [f64; 2], radius: f64) -> rstar::AABB<[f64; 2]> {
+    rstar::AABB::from_corners(
+        point.map(|v| (v - radius).next_down()),
+        point.map(|v| (v + radius).next_up()),
+    )
+}
+/// Filtro conservativo comune. Input non validi restano candidati per
+/// conservare il successivo errore della primitiva esatta.
+pub fn metric_candidate(
+    point: geo::Coord<f64>,
+    start: geo::Coord<f64>,
+    end: geo::Coord<f64>,
+    radius: f64,
+    work: &mut Work<'_>,
+) -> Result<bool, PredicateError> {
+    use rstar::Envelope;
+    work.step()?;
+    if !radius.is_finite()
+        || radius < 0.0
+        || ![point, start, end]
+            .iter()
+            .all(|p| p.x.is_finite() && p.y.is_finite())
+    {
+        return Ok(true);
+    }
+    let window = metric_window([point.x, point.y], radius);
+    let segment = rstar::AABB::from_corners(
+        [start.x.min(end.x), start.y.min(end.y)],
+        [start.x.max(end.x), start.y.max(end.y)],
+    );
+    Ok(window.intersects(&segment))
+}
+
+/// Parametro della proiezione ortogonale, clamp esatto prima del solo
+/// arrotondamento d'uscita. I segmenti degeneri hanno parametro zero.
+pub fn projection_parameter(
+    point: geo::Coord<f64>,
+    start: geo::Coord<f64>,
+    end: geo::Coord<f64>,
+    work: &mut Work<'_>,
+) -> Result<f64, PredicateError> {
+    work.step()?;
+    let direction = P::of_in(end, work)?.try_sub(&P::of_in(start, work)?)?;
+    let offset = P::of_in(point, work)?.try_sub(&P::of_in(start, work)?)?;
+    let length = norm_squared(&direction)?;
+    let dot = offset
+        .x
+        .try_mul(&direction.x)?
+        .try_add(&offset.y.try_mul(&direction.y)?)?;
+    if length.sign().is_eq() || dot.sign().is_le() {
+        return Ok(0.0);
+    }
+    if dot.try_cmp(&length)?.is_ge() {
+        return Ok(1.0);
+    }
+    let value = crate::predicates::arrangement_indexed::line_boolean::ordinate(
+        &dot.try_div(&length)?,
+        work,
+    )
+    .map_err(|error| match error {
+        crate::predicates::arrangement_indexed::line_boolean::LineBooleanError::Predicate(
+            error,
+        ) => error,
+        _ => PredicateError::AccuracyUnproven,
+    })?;
+    if value <= 0.0 {
+        Err(PredicateError::AccuracyUnproven)
+    } else {
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::predicates::RelateLimits;
     use proptest::prelude::*;
+
+    #[test]
+    fn metric_rounding_certification_and_nonrepresentable_values() {
+        let mut work = Work::new(RelateLimits::default(), None);
+        for scale in [f64::from_bits(1), 1e-300, 1.0, 1e300] {
+            for (x, y) in [(0., 0.), (1., 0.), (3., 4.), (1., 1.), (2., 3.)] {
+                let p = point(x * scale, y * scale, &work);
+                let key = DistanceKey(norm_squared(&p).unwrap());
+                assert_eq!(
+                    key.rounded_impl(&mut work, true)
+                        .map(f64::to_bits)
+                        .map_err(|e| e.to_string()),
+                    key.rounded_impl(&mut work, false)
+                        .map(f64::to_bits)
+                        .map_err(|e| e.to_string())
+                );
+            }
+        }
+        let tiny = f64::from_bits(1);
+        let key = DistanceKey::coordinates(
+            (0., tiny).into(),
+            (0., 0.).into(),
+            (tiny, 2. * tiny).into(),
+            &mut work,
+        )
+        .unwrap();
+        assert!(matches!(
+            key.rounded(&mut work),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        let key = DistanceKey::coordinates(
+            (f64::MAX, 0.).into(),
+            (-f64::MAX, 0.).into(),
+            (-f64::MAX, 0.).into(),
+            &mut work,
+        )
+        .unwrap();
+        assert!(matches!(
+            key.rounded(&mut work),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+    }
+
+    #[test]
+    fn metric_thresholds_compare_before_rounding() {
+        let mut work = Work::new(RelateLimits::default(), None);
+        let key = DistanceKey::coordinates(
+            (1., 2_f64.powi(-27)).into(),
+            (0., 0.).into(),
+            (0., 0.).into(),
+            &mut work,
+        )
+        .unwrap();
+        assert_eq!(key.rounded(&mut work).unwrap().to_bits(), 1_f64.to_bits());
+        assert!(!key.within(1., &work).unwrap());
+        let zero = DistanceKey::zero(&work).unwrap();
+        assert!(!key.within_sum_scaled(&zero, 0.75, 1., &work).unwrap());
+        for scale in [f64::from_bits(1), 1e-300, 1., 1e300] {
+            let unit = DistanceKey::coordinates(
+                (scale, 0.).into(),
+                (0., 0.).into(),
+                (0., 0.).into(),
+                &mut work,
+            )
+            .unwrap();
+            assert!(unit.within(scale, &work).unwrap());
+            assert!(!unit.within(scale.next_down(), &work).unwrap());
+            assert!(unit.within_sum_scaled(&unit, 0.75, scale, &work).unwrap());
+            assert!(!unit.within_sum_scaled(&unit, 0.75, 0., &work).unwrap());
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn metric_fast_rounding_matches_binary_search(x in -100_000i32..100_000,y in -100_000i32..100_000) {
+            let mut work=Work::new(RelateLimits::default(),None);
+            let p=point(f64::from(x)/7.0,f64::from(y)/11.0,&work);
+            let key=DistanceKey(norm_squared(&p).unwrap());
+            prop_assert_eq!(key.rounded_impl(&mut work,true).unwrap().to_bits(),key.rounded_impl(&mut work,false).unwrap().to_bits());
+        }
+    }
 
     fn point(x: f64, y: f64, work: &Work<'_>) -> P {
         P::of_in((x, y).into(), work).expect("coordinate finite")

@@ -93,6 +93,9 @@ impl MakeValidLimits {
 /// Errori della riparazione.
 #[derive(Debug, Error)]
 pub enum MakeValidError {
+    /// Errore del confronto razionale condiviso, senza perdita della categoria.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// L'ingresso ha una coordinata NaN o infinita.
     #[error("coordinate non finite")]
     NonFiniteCoordinate,
@@ -572,7 +575,7 @@ impl OverlayNormalizer {
         polygons: &MultiPolygon<f64>,
         left: &MultiPolygon<f64>,
         right: &MultiPolygon<f64>,
-    ) -> MultiPolygon<f64> {
+    ) -> Result<MultiPolygon<f64>, MakeValidError> {
         let radius = self.grid_diagonal();
         let source_coordinates = left
             .coords_iter()
@@ -595,59 +598,109 @@ impl OverlayNormalizer {
                 ));
             }
         }
-        let snap = |restored: Coord<f64>| {
-            let mut nearest: Option<(Coord<f64>, f64)> = None;
+        let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+        let mut snap = |restored: Coord<f64>| -> Result<Coord<f64>, MakeValidError> {
+            let mut nearest: Option<(Coord<f64>, crate::segment_index::DistanceKey)> = None;
             for source in &source_coordinates {
-                let distance = (restored.x - source.x).hypot(restored.y - source.y);
-                if distance <= radius && nearest.is_none_or(|(_, best)| distance < best) {
+                if !crate::segment_index::metric_candidate(
+                    restored, *source, *source, radius, &mut work,
+                )? {
+                    continue;
+                }
+                let distance = crate::segment_index::DistanceKey::coordinates(
+                    restored, *source, *source, &mut work,
+                )?;
+                let replace = match &nearest {
+                    None => true,
+                    Some((point, best)) => distance
+                        .compare(best)?
+                        .then(source.x.total_cmp(&point.x))
+                        .then(source.y.total_cmp(&point.y))
+                        .is_lt(),
+                };
+                if distance.within(radius, &work)? && replace {
                     nearest = Some((*source, distance));
                 }
             }
             if let Some((source, _)) = nearest {
-                return source;
+                return Ok(source);
             }
-            let axis = |value: f64, across: f64, sides: &[(f64, f64, f64)]| {
+            let mut axis = |value: f64,
+                            across: f64,
+                            sides: &[(f64, f64, f64)]|
+             -> Result<f64, MakeValidError> {
                 let mut best = value;
-                let mut best_distance = f64::INFINITY;
+                let mut best_distance: Option<crate::segment_index::DistanceKey> = None;
                 for &(level, minimum, maximum) in sides {
-                    let distance = (value - level).abs();
-                    if distance <= radius
-                        && distance < best_distance
-                        && across >= minimum - radius
-                        && across <= maximum + radius
+                    if !crate::segment_index::metric_candidate(
+                        Coord {
+                            x: value,
+                            y: across,
+                        },
+                        Coord {
+                            x: level,
+                            y: minimum,
+                        },
+                        Coord {
+                            x: level,
+                            y: maximum,
+                        },
+                        radius,
+                        &mut work,
+                    )? {
+                        continue;
+                    }
+                    let distance = crate::segment_index::DistanceKey::coordinates(
+                        Coord { x: value, y: 0.0 },
+                        Coord { x: level, y: 0.0 },
+                        Coord { x: level, y: 0.0 },
+                        &mut work,
+                    )?;
+                    let across_distance = crate::segment_index::DistanceKey::coordinates(
+                        Coord { x: across, y: 0.0 },
+                        Coord { x: minimum, y: 0.0 },
+                        Coord { x: maximum, y: 0.0 },
+                        &mut work,
+                    )?;
+                    let replace = match &best_distance {
+                        None => true,
+                        Some(old) => distance.compare(old)?.then(level.total_cmp(&best)).is_lt(),
+                    };
+                    if replace
+                        && distance.within(radius, &work)?
+                        && across_distance.within(radius, &work)?
                     {
                         best = level;
-                        best_distance = distance;
+                        best_distance = Some(distance);
                     }
                 }
-                best
+                Ok(best)
             };
-            Coord {
-                x: axis(restored.x, restored.y, &vertical),
-                y: axis(restored.y, restored.x, &horizontal),
-            }
+            Ok(Coord {
+                x: axis(restored.x, restored.y, &vertical)?,
+                y: axis(restored.y, restored.x, &horizontal)?,
+            })
         };
-        let restore_line = |line: &LineString<f64>| {
-            LineString::new(
+        let mut restore_line = |line: &LineString<f64>| -> Result<LineString<f64>, MakeValidError> {
+            Ok(LineString(
                 line.0
                     .iter()
                     .copied()
                     .map(|coordinate| snap(self.restore(coordinate)))
-                    .collect(),
-            )
+                    .collect::<Result<_, _>>()?,
+            ))
         };
-        MultiPolygon::new(
-            polygons
-                .0
+        let mut restored = Vec::new();
+        for polygon in polygons {
+            let exterior = restore_line(polygon.exterior())?;
+            let interiors = polygon
+                .interiors()
                 .iter()
-                .map(|polygon| {
-                    Polygon::new(
-                        restore_line(polygon.exterior()),
-                        polygon.interiors().iter().map(restore_line).collect(),
-                    )
-                })
-                .collect(),
-        )
+                .map(&mut restore_line)
+                .collect::<Result<Vec<_>, _>>()?;
+            restored.push(Polygon::new(exterior, interiors));
+        }
+        Ok(MultiPolygon(restored))
     }
 
     fn map_line(
@@ -796,7 +849,7 @@ fn finished_overlay(
     normalized: &MultiPolygon<f64>,
     left: &MultiPolygon<f64>,
     right: &MultiPolygon<f64>,
-) -> MultiPolygon<f64> {
+) -> Result<MultiPolygon<f64>, MakeValidError> {
     normalizer.restore_multi_snapped(normalized, left, right)
 }
 
@@ -815,7 +868,7 @@ fn normalized_union(
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .union(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    Ok(finished_overlay(normalizer, &normalized, left, right))
+    finished_overlay(normalizer, &normalized, left, right)
 }
 
 fn normalized_difference(
@@ -828,7 +881,7 @@ fn normalized_difference(
     let normalized = normalizer
         .map_multi(left, OverlayNormalizer::normalize)
         .difference(&normalizer.map_multi(right, OverlayNormalizer::normalize));
-    Ok(finished_overlay(normalizer, &normalized, left, right))
+    finished_overlay(normalizer, &normalized, left, right)
 }
 
 /// Se i due operandi si toccano, deciso sulle coordinate **originali** con i
@@ -973,11 +1026,12 @@ fn side_of_area(
             start.y.max(end.y) + precision,
         ],
     );
-    if index.locate_in_envelope_intersecting(&query).any(|edge| {
-        super::precision::punto_entro_segmento(start, edge.start, edge.end, precision)
-            && super::precision::punto_entro_segmento(end, edge.start, edge.end, precision)
-    }) {
-        return Ok(SideOfArea::Boundary);
+    for edge in index.locate_in_envelope_intersecting(&query) {
+        if super::precision::punto_entro_segmento(start, edge.start, edge.end, precision)?
+            && super::precision::punto_entro_segmento(end, edge.start, edge.end, precision)?
+        {
+            return Ok(SideOfArea::Boundary);
+        }
     }
     let mut side = None;
     for fraction in [0.25, 0.5, 0.75] {
@@ -1629,13 +1683,13 @@ fn checked_rounded_nodes(
             [vertex.x - precision, vertex.y - precision],
             [vertex.x + precision, vertex.y + precision],
         );
-        let crowded = index.locate_in_envelope_intersecting(&query).any(|edge| {
-            edge.start != *vertex
+        for edge in index.locate_in_envelope_intersecting(&query) {
+            if edge.start != *vertex
                 && edge.end != *vertex
-                && super::precision::punto_entro_segmento(*vertex, edge.start, edge.end, precision)
-        });
-        if crowded {
-            return Err(MakeValidError::PrecisionInsufficient);
+                && super::precision::punto_entro_segmento(*vertex, edge.start, edge.end, precision)?
+            {
+                return Err(MakeValidError::PrecisionInsufficient);
+            }
         }
     }
     Ok(())

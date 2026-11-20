@@ -85,6 +85,7 @@ pub fn del_kernel(op: &str, errore: &impl ErroreKernel) -> PlenoraError {
 impl ErroreKernel for OperationError {
     fn classe(&self) -> Classe {
         match self {
+            Self::Exact(error) => error.classe(),
             Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => {
                 Classe::Interna
             }
@@ -101,6 +102,7 @@ impl ErroreKernel for OperationError {
 impl ErroreKernel for ExtendedError {
     fn classe(&self) -> Classe {
         match self {
+            Self::Exact(error) => error.classe(),
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             Self::CoordinateLimit { .. } | Self::WorkLimit { .. } => Classe::Limite,
             Self::InvalidParameter { .. }
@@ -115,6 +117,7 @@ impl ErroreKernel for ExtendedError {
 impl ErroreKernel for ExtendedAlgorithmError {
     fn classe(&self) -> Classe {
         match self {
+            Self::Exact(error) => error.classe(),
             Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => {
                 Classe::Interna
             }
@@ -135,6 +138,9 @@ impl ErroreKernel for ExtendedAlgorithmError {
 
 impl ErroreKernel for ExtensionError {
     fn classe(&self) -> Classe {
+        if let Self::Exact(error) = self {
+            return error.classe();
+        }
         if self.e_interna() {
             Classe::Interna
         } else if matches!(self, Self::PrecisionInsufficient) {
@@ -150,6 +156,7 @@ impl ErroreKernel for ExtensionError {
 impl ErroreKernel for TopologyError {
     fn classe(&self) -> Classe {
         match self {
+            Self::Exact(error) => error.classe(),
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             Self::PrecisionInsufficient => Classe::Precisione,
             Self::ResourceLimit { .. } => Classe::Limite,
@@ -181,6 +188,7 @@ impl ErroreKernel for AdvancedError {
 impl ErroreKernel for SpatialJoinError {
     fn classe(&self) -> Classe {
         match self {
+            Self::Exact(error) => error.classe(),
             Self::Internal(_) | Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => {
                 Classe::Interna
             }
@@ -196,6 +204,7 @@ impl ErroreKernel for SpatialJoinError {
 impl ErroreKernel for AnalysisError {
     fn classe(&self) -> Classe {
         match self {
+            Self::Exact(error) => error.classe(),
             Self::SpatialJoin(interno) => interno.classe(),
             Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => Classe::Interna,
             Self::WorkLimitExceeded { .. }
@@ -212,6 +221,7 @@ impl ErroreKernel for AnalysisError {
 impl ErroreKernel for ClusterError {
     fn classe(&self) -> Classe {
         match self {
+            Self::Exact(error) => error.classe(),
             Self::InternalInvariant(_)
             | Self::ValidazioneNonConclusa(_)
             | Self::CalcoloNonConcluso(_) => Classe::Interna,

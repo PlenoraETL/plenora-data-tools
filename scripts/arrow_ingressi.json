@@ -3470,12 +3470,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn dbscan_nullable( geometries: &[Option<Geometry<f64>>], eps: f64, min_points: usize, ) -> Result<Vec<Option<u64>>, ClusterError>"
     },
-    "crates/plenora-kernels-geo/src/cluster.rs::distance_2": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "fn distance_2(&self, point: &[f64; 2]) -> f64"
-    },
     "crates/plenora-kernels-geo/src/cluster.rs::envelope": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -4467,13 +4461,13 @@
     "crates/plenora-kernels-geo/src/noding.rs::at_x": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn at_x(&self, x: &Q) -> Result<Q, PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::between": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn between(x: &Q, a: &Q, b: &Q) -> Result<bool, PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::check_interruption": {
@@ -4485,7 +4479,7 @@
     "crates/plenora-kernels-geo/src/noding.rs::contains": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn contains(&self, p: &P) -> Result<bool, PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::integer": {
@@ -4497,19 +4491,19 @@
     "crates/plenora-kernels-geo/src/noding.rs::new": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self"
     },
     "crates/plenora-kernels-geo/src/noding.rs::node": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn node( edges: &[&Edge], work: &mut Work<'_>, ) -> Result<CountedVec<CountedVec<P>>, PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::nodes": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn nodes(&mut self, count: u64) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::of_in": {
@@ -4521,19 +4515,19 @@
     "crates/plenora-kernels-geo/src/noding.rs::pair": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn pair(&mut self) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::peak_bytes": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn peak_bytes(&self) -> u64"
     },
     "crates/plenora-kernels-geo/src/noding.rs::push": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn push<T>(&mut self, vector: &mut CountedVec<T>, value: T) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::sorted": {
@@ -4541,7 +4535,7 @@
         "Result"
       ],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn sorted<T>( values: &mut [T], compare: impl Fn(&T, &T) -> Result<Ordering, PredicateError>, work: &mut Work<'_>, ) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::sorted_with_work": {
@@ -4555,7 +4549,7 @@
     "crates/plenora-kernels-geo/src/noding.rs::step": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn step(&mut self) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::try_add": {
@@ -4587,7 +4581,7 @@
         "Result"
       ],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn visit( edges: &[&Edge], work: &mut Work<'_>, mut emit: impl FnMut(usize, usize, [Option<P>; 2], &mut Work<'_>) -> Result<(), PredicateError>, ) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding/exact.rs::add": {
@@ -4759,31 +4753,31 @@
         "Result"
       ],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn dedup_by( &mut self, mut equal: impl FnMut(&T, &T) -> Result<bool, PredicateError>, work: &mut super::Work<'_>, ) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::default": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "fn default() -> Self"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::deref": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "fn deref(&self) -> &[T]"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::deref_mut": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "fn deref_mut(&mut self) -> &mut [T]"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::drop": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "fn drop(&mut self)"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::export": {
@@ -4795,31 +4789,31 @@
     "crates/plenora-kernels-geo/src/noding/storage.rs::into_iter": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "fn into_iter(self) -> Self::IntoIter"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::into_iter#2": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "fn into_iter(self) -> Self::IntoIter"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::new": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub const fn new() -> Self"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::next": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "fn next(&mut self) -> Option<T>"
     },
     "crates/plenora-kernels-geo/src/noding/storage.rs::pop": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
-      "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
+      "reason": "Noder geometrico interno e contabilitÃ  della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn pop(&mut self) -> Option<T>"
     },
     "crates/plenora-kernels-geo/src/offset.rs::from": {
@@ -9444,6 +9438,114 @@
       "classification": "non riceve dati esterni",
       "reason": "Indice geometrico interno su inviluppi razionali con Work e CountedVec; nessun ingresso Arrow.",
       "signature": "pub fn ray_candidates( &self, p: &P, work: &mut Work<'_>, ) -> Result<CountedVec<usize>, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::point_segment": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn point_segment(p: &P, edge: &Edge, work: &mut Work<'_>) -> Result<Self, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::rounded": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn rounded(&self, work: &mut Work<'_>) -> Result<f64, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::nearest": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn nearest( &self, query: &Edge, edges: &[Edge], best: &mut Option<DistanceKey>, work: &mut Work<'_>, ) -> Result<(), PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::within_sum_scaled": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn within_sum_scaled( &self, other: &Self, factor: f64, offset: f64, work: &Work<'_>, ) -> Result<bool, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::zero": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn zero(work: &Work<'_>) -> Result<Self, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::squared": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn squared(value: Q) -> Result<Self, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/noding/exact.rs::sqrt_hint": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn sqrt_hint(&self) -> Option<f64>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::select": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn select(&mut self, candidate: Self) -> Result<(), PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::compare": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn compare(&self, other: &Self) -> Result<std::cmp::Ordering, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::within": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn within(&self, limit: f64, work: &Work<'_>) -> Result<bool, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs::distance_key": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn distance_key( left: &Geometry<f64>, right: &Geometry<f64>, work: &mut Work<'_>, indexed: bool, ) -> Result<crate::segment_index::DistanceKey, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::metric_window": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn metric_window(point: [f64; 2], radius: f64) -> rstar::AABB<[f64; 2]>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::segments": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn segments(a: &Edge, b: &Edge, work: &mut Work<'_>) -> Result<Self, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::coordinates": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn coordinates( point: geo::Coord<f64>, start: geo::Coord<f64>, end: geo::Coord<f64>, work: &mut Work<'_>, ) -> Result<Self, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs::distance": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn distance( left: &Geometry<f64>, right: &Geometry<f64>, work: &mut Work<'_>, ) -> Result<f64, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::projection_parameter": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn projection_parameter( point: geo::Coord<f64>, start: geo::Coord<f64>, end: geo::Coord<f64>, work: &mut Work<'_>, ) -> Result<f64, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs::relate_validated": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn relate_validated( left: &Geometry<f64>, right: &Geometry<f64>, work: &mut Work<'_>, ) -> Result<De9imMatrix, PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/segment_index.rs::metric_candidate": {
+      "classification": "non riceve dati esterni",
+      "reason": "Primitiva geometrica interna su coordinate, razionali e contesto Work; nessun ingresso Arrow.",
+      "arrow_arguments": [],
+      "signature": "pub fn metric_candidate( point: geo::Coord<f64>, start: geo::Coord<f64>, end: geo::Coord<f64>, radius: f64, work: &mut Work<'_>, ) -> Result<bool, PredicateError>"
     }
   },
   "rust_variants": {

@@ -5,5 +5,12 @@
     "regola": "messaggio_python",
     "testo": "assert str(errore) == errore.message == documento[\"message\"]",
     "motivo": "Aiuto di coerenza della serializzazione, richiamato dopo pytest.raises con categoria precisa nei singoli scenari: confronta il messaggio integrale con gli attributi e il documento, non decide quale rifiuto accettare."
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs",
+    "riga": 1651,
+    "regola": "rifiuti_alternativi",
+    "testo": "prop_assert!(matches!(actual, Ok(_) | Err(PredicateError::AccuracyUnproven)));",
+    "motivo": "Campagna differenziale: prima confronta esattamente le chiavi razionali di indice, esaustivo e vertici invertiti; dopo confronta l'intero Result bit per bit fra i tre percorsi. Questa asserzione aggiuntiva esclude gli errori di risorse e ammette solo il rifiuto di pubblicazione sotto il subnormale minimo. Il caso s/sqrt(85) ha una regressione separata con atteso unico AccuracyUnproven; il rounding ha un oracolo binario indipendente."
   }
 ]

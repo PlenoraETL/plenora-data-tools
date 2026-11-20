@@ -1,9 +1,6 @@
-//! Oracolo di `geo.nearest`: la forza bruta O(n*m) di prima dell'indice
-//! R-tree, copiata alla lettera, confrontata input per input con
-//! [`nearest_matches`] e [`nearest_matches_validated`]. Il confronto e' sui
-//! bit delle distanze (`to_bits`) e sul testo degli errori. Dove la forza
-//! bruta andava in panico dentro `geo`, il contratto chiede
-//! `CalcoloNonConcluso`: il percorso pubblico non deve mai andare in panico.
+//! Oracolo di geo.nearest: enumerazione esaustiva delle righe e dei
+//! segmenti con la primitiva razionale corretta. Il confronto pubblico e'
+//! sui bit delle distanze, sui pari e sulle categorie degli errori.
 
 // Le coordinate di prova sono scritte come `a + k * b`: `mul_add` le
 // renderebbe meno leggibili senza cambiare che cosa si prova.
@@ -15,7 +12,7 @@ use geo::{
     Triangle,
 };
 
-// --- oracolo: copia letterale di `nearest_matches_impl` a main a44d58b ------
+// Enumerazione delle righe senza filtro R-tree.
 
 #[allow(clippy::too_many_lines)]
 fn forza_bruta(
@@ -59,34 +56,46 @@ fn forza_bruta(
     }
 
     let result_count = AtomicU64::new(0);
-    // Determinismo: i `Result` sono raccolti per riga (ordine preservato) e
-    // il primo errore IN ORDINE DI RIGA e' selezionato dal collect
-    // sequenziale; il collect parallelo diretto sarebbe non deterministico.
+    // Anche l'oracolo assegna la quota in ordine di riga, come il percorso
+    // pubblico.
     let groups: Vec<Result<Vec<NearestMatch>, AnalysisError>> = left
-        .par_iter()
+        .iter()
         .enumerate()
         .map(|(left_index, geometry)| {
             let Some(geometry) = geometry.as_ref().filter(|value| value.coords_count() > 0) else {
                 return Ok(Vec::new());
             };
-            let mut distances: Vec<_> = usable_right
-                .iter()
-                .map(|(right_index, right)| (*right_index, Euclidean.distance(geometry, *right)))
-                .collect();
-            let Some(minimum) = distances
-                .iter()
-                .map(|(_, distance)| *distance)
-                .reduce(f64::min)
-            else {
+            let mut work =
+                crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+            let mut best: Option<crate::segment_index::DistanceKey> = None;
+            let mut selected = Vec::new();
+            for (right_index, right) in &usable_right {
+                let key = crate::predicates::arrangement_indexed::distance_key(
+                    geometry, right, &mut work, false,
+                )?;
+                let order = match &best {
+                    None => std::cmp::Ordering::Less,
+                    Some(old) => key.compare(old)?,
+                };
+                if order.is_lt() {
+                    selected.clear();
+                    selected.push(*right_index);
+                    best = Some(key);
+                } else if order.is_eq() {
+                    selected.push(*right_index);
+                }
+            }
+            let Some(best) = best else {
                 return Ok(Vec::new());
             };
-            if max_distance.is_some_and(|limit| minimum > limit) {
-                return Ok(Vec::new());
+            if let Some(limit) = max_distance {
+                if !best.within(limit, &work)? {
+                    return Ok(Vec::new());
+                }
             }
-            // Uguaglianza esatta corretta per costruzione: `minimum` e' il
-            // minimo degli stessi valori (reduce(f64::min)), non una stima.
-            #[allow(clippy::float_cmp)]
-            distances.retain(|(_, distance)| *distance == minimum);
+            let minimum = best.rounded(&mut work)?;
+            let mut distances: Vec<_> =
+                selected.into_iter().map(|index| (index, minimum)).collect();
             distances.sort_unstable_by_key(|(right_index, _)| *right_index);
             let additional =
                 u64::try_from(distances.len()).map_err(|_| AnalysisError::IndexOverflow)?;
@@ -120,9 +129,8 @@ fn forza_bruta(
 type Colonna = Vec<Option<Geometry<f64>>>;
 type Impronta = Result<Vec<(u64, u64, u64)>, String>;
 
-/// Impronta dell'oracolo: un suo panico (per esempio
-/// `nearest_neighbour_distance` di `geo` su una linea di un solo punto) e' il
-/// caso in cui il contratto chiede `CalcoloNonConcluso`.
+/// Impronta dell'oracolo esaustivo; i panici restano distinti dai normali
+/// errori del percorso razionale.
 fn impronta_oracolo(esegui: impl FnOnce() -> Result<Vec<NearestMatch>, AnalysisError>) -> Impronta {
     let Ok(esito) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(esegui)) else {
         return Err(CALCOLO_NON_CONCLUSO.to_owned());
@@ -624,6 +632,9 @@ fn confronti_casuali_con_l_oracolo() {
         (1e118, 0.0),
         (1e-200, 0.0),
     ];
+    // Generazione sequenziale invariata; soltanto i casi indipendenti
+    // vengono verificati in parallelo, con un numero fisso di worker.
+    let mut cases = Vec::new();
     for giro in 0..240 {
         let (scala, origine) = scale_di_prova[giro % scale_di_prova.len()];
         let lato = 2 + sequenza.fino_a(9);
@@ -635,12 +646,21 @@ fn confronti_casuali_con_l_oracolo() {
         let right: Colonna = (0..m)
             .map(|_| geometria_casuale(&mut sequenza, lato, scala, origine))
             .collect();
-        if giro % 8 == 0 {
-            confronta_con_soglie(&left, &right);
-        } else {
-            confronta(&left, &right, None, u64::MAX, u64::MAX);
-        }
+        cases.push((giro, left, right));
     }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap()
+        .install(|| {
+            cases.into_par_iter().for_each(|(giro, left, right)| {
+                if giro % 8 == 0 {
+                    confronta_con_soglie(&left, &right);
+                } else {
+                    confronta(&left, &right, None, u64::MAX, u64::MAX);
+                }
+            });
+        });
 }
 
 #[test]
@@ -727,7 +747,7 @@ fn tolleranza_di_geo_fuori_dal_rettangolo_d_ingombro() {
         Some(Geometry::LineString(linea(&[(0.0, 0.0), (1.0, alto)]))),
     ];
     let esito = confronta_ed_esito(&left, &right, None, u64::MAX, u64::MAX).unwrap();
-    assert_eq!(esito, vec![(0, 1, 0.0_f64.to_bits())]);
+    assert_eq!(esito, vec![(0, 0, distanza_b.to_bits())]);
     confronta_con_soglie(&left, &right);
 }
 
@@ -755,47 +775,26 @@ fn coppia_che_fa_panicare_geo() -> (Colonna, Colonna) {
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "Controprova del panico del percorso generico geo sulla fixture; i percorsi protetti di produzione sono verificati separatamente per variante."
-)]
-fn un_panico_di_geo_diventa_calcolo_non_concluso() {
+fn underflow_del_vendor_ora_ha_distanza_certificata() {
     let (left, right) = coppia_che_fa_panicare_geo();
-    // La forza bruta di prima andava davvero in panico su questo ingresso.
-    assert!(std::panic::catch_unwind(|| forza_bruta(&left, &right, None, 10, 10, false)).is_err());
-    for esito in [
+    let expected = 1e-200_f64.to_bits();
+    for result in [
         nearest_matches(&left, &right, None, 10, 10),
         nearest_matches_validated(&left, &right, None, 10, 10),
     ] {
-        assert!(
-            matches!(esito, Err(AnalysisError::CalcoloNonConcluso(_))),
-            "{esito:?}"
-        );
+        assert_eq!(result.unwrap()[0].distance.to_bits(), expected);
     }
-    for esito in [
+    for result in [
         minimum_distances(&left, &right, 10),
         minimum_distances_validated(&left, &right, 10),
     ] {
-        assert!(
-            matches!(esito, Err(AnalysisError::CalcoloNonConcluso(_))),
-            "{esito:?}"
-        );
+        assert_eq!(result.unwrap()[0].unwrap().to_bits(), expected);
     }
-    // Linea di un solo punto (solo a precondizione violata): stesso esito.
-    let un_punto: Colonna = vec![Some(Geometry::LineString(linea(&[(0.0, 0.0)])))];
-    let segmento: Colonna = vec![Some(Geometry::LineString(linea(&[(1.0, 0.0), (2.0, 0.0)])))];
-    assert!(matches!(
-        nearest_matches_validated(&un_punto, &segmento, None, 10, 10),
-        Err(AnalysisError::CalcoloNonConcluso(_))
-    ));
-    assert!(matches!(
-        minimum_distances_validated(&un_punto, &segmento, 10),
-        Err(AnalysisError::CalcoloNonConcluso(_))
-    ));
+    confronta(&left, &right, None, 10, 10);
 }
 
 #[test]
-fn il_calcolo_non_concluso_vince_sul_limite_dei_risultati() {
+fn il_limite_dei_risultati_dopo_la_correzione_underflow() {
     // Righe che superano `max_results` e una riga che fa panicare `geo`:
     // l'errore non dipende dall'ordine dei thread.
     let (sinistra, destra) = coppia_che_fa_panicare_geo();
@@ -805,11 +804,37 @@ fn il_calcolo_non_concluso_vince_sul_limite_dei_risultati() {
     left.extend(sinistra);
     let mut right: Colonna = vec![punto(0.5, 1e-200), punto(0.5, -1e-200)];
     right.extend(destra);
-    for _ in 0..20 {
-        assert!(matches!(
-            nearest_matches_validated(&left, &right, None, u64::MAX, 3),
-            Err(AnalysisError::CalcoloNonConcluso(_))
-        ));
+    for threads in [1, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            for _ in 0..10 {
+                assert!(matches!(
+                    nearest_matches_validated(&left, &right, None, 1000, 3),
+                    Err(AnalysisError::ResultLimitExceeded { limit: 3 })
+                ));
+            }
+        });
     }
     confronta(&left, &right, None, u64::MAX, 3);
+}
+
+#[test]
+fn seed_nonrepresentable_cannot_hide_exact_zero() {
+    let tiny = 2.0_f64.powi(-400);
+    let huge = 2.0_f64.powi(400);
+    let left = vec![punto(tiny, 0.0)];
+    let mut right = vec![
+        Some(Geometry::Line(Line::new((0.0, 0.0), (huge, tiny)))),
+        punto(tiny, 0.0),
+    ];
+    for _ in 0..2 {
+        let result = nearest_matches(&left, &right, None, 100, 100).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].distance.to_bits(), 0.0_f64.to_bits());
+        confronta(&left, &right, None, 100, 100);
+        right.reverse();
+    }
 }
