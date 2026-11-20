@@ -28,7 +28,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1: il runner chiama il kernel (`extended::affine_transform`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::affine_transform`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 

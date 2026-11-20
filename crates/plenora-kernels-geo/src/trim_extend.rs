@@ -99,7 +99,7 @@ impl From<LineBooleanError> for TrimExtendError {
 /// # Errors
 /// Geometria malformata, dominio escluso GOP-018, topologia alterata dal rounding,
 /// coordinate fuori dominio, risorse, cancellazione o deadline.
-pub fn trim_extend_with_limits(
+pub(crate) fn trim_extend_with_limits(
     target: &Geometry<f64>,
     guide: &Geometry<f64>,
     options: TrimExtendOptions,

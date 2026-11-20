@@ -1937,7 +1937,8 @@ mod gop028 {
                     }
                 }
                 // Tokenizzazione minima: whitespace e punteggiatura, firme multilinea incluse.
-                let tokens: Vec<_> = source
+                let implementation_source = source.replace("pub(crate) fn", "pub fn");
+                let tokens: Vec<_> = implementation_source
                     .split(|c: char| !(c.is_alphanumeric() || c == '_'))
                     .filter(|s| !s.is_empty())
                     .collect();

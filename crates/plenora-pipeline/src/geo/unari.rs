@@ -13,6 +13,7 @@
 //! una per geometria. Righe indipendenti: `map_nullable` le calcola in
 //! parallelo e rende il primo errore in ordine di riga.
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::sync::Arc;
 
 use geo::{Geometry, LineString, Point};
@@ -34,12 +35,10 @@ use plenora_kernels_geo::analyze::config::{
 use plenora_kernels_geo::analyze::{DEFAULT_X_COLUMN, DEFAULT_Y_COLUMN};
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
 use plenora_kernels_geo::extensions::OnWktError;
-use plenora_kernels_geo::geodetica::EllissoideGeodetico;
 use plenora_kernels_geo::margine::{byte_heap_geometria, MargineMemoria};
 use plenora_kernels_geo::operations::{BufferCapStyle, SimplifyPolicy};
 use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::riproiezione::ReprojectParams;
-use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::{
     construction, extended, extended_algorithms, extensions, extensions2, operations, predicates,
     riproiezione, Operation,
@@ -65,7 +64,6 @@ pub(super) enum Trasformazione {
     Buffer {
         distanza: f64,
         estremita: BufferCapStyle,
-        precisione: Precision,
     },
     Semplifica {
         tolleranza: f64,
@@ -106,9 +104,9 @@ pub(super) enum Distanza {
     Euclidea,
     Hausdorff,
     Frechet,
-    Haversine(Box<EllissoideGeodetico>),
-    Geodetica(Box<EllissoideGeodetico>),
-    Azimut(Box<EllissoideGeodetico>),
+    Haversine,
+    Geodetica,
+    Azimut,
 }
 
 /// Misura di una geometria: una colonna in coda.
@@ -116,8 +114,8 @@ pub(super) enum Distanza {
 pub(super) enum Misura {
     Area,
     Lunghezza,
-    LunghezzaGeodetica(Box<EllissoideGeodetico>),
-    AreaGeodetica(Box<EllissoideGeodetico>),
+    LunghezzaGeodetica,
+    AreaGeodetica,
     Vertici,
     Wkt,
     PosizioneSullaLinea(Point<f64>),
@@ -190,7 +188,7 @@ fn tipo_inatteso(op: &str, atteso: &str) -> PlenoraError {
 }
 
 impl Trasformazione {
-    fn prepara(op: &str, valore: &Value, lato: &Lato) -> Result<Option<Self>> {
+    fn prepara(op: &str, valore: &Value, _lato: &Lato) -> Result<Option<Self>> {
         Ok(Some(match op {
             "geo.centroid" => Self::Canonica(Operation::Centroid),
             "geo.convex_hull" => Self::Canonica(Operation::ConvexHull),
@@ -206,7 +204,6 @@ impl Trasformazione {
                         BufferCapParam::Flat => BufferCapStyle::Flat,
                         BufferCapParam::Square => BufferCapStyle::Square,
                     },
-                    precisione: lato.precisione()?,
                 }
             }
             "geo.simplify" => {
@@ -286,33 +283,37 @@ impl Trasformazione {
 
     /// La geometria trasformata; `None` dove il kernel non ne ha una (una
     /// geometria vuota), che diventa null.
+    #[allow(clippy::too_many_lines)] // Un braccio per operazione, con gate CRS.
     fn applica(
         &self,
+        crs: &ResolvedCrs,
         op: &str,
         geometria: &Geometry<f64>,
         margine: MargineMemoria,
     ) -> Result<Option<Geometry<f64>>> {
         Ok(match self {
-            Self::Canonica(operazione) => Some(plenora_kernels_geo::transform_geometry(
+            Self::Canonica(operazione) => Some(plenora_kernels_geo::with_crs::transform_geometry(
+                CrsContext::new(&[crs]),
                 *operazione,
                 geometria,
             )?),
-            Self::Contorno => {
-                Some(operations::boundary(geometria).map_err(|e| del_kernel(op, &e))?)
-            }
+            Self::Contorno => Some(
+                operations::with_crs::boundary(CrsContext::new(&[crs]), geometria)
+                    .map_err(|e| del_kernel(op, &e))?,
+            ),
             Self::PuntoInterno => {
-                operations::point_on_surface(geometria).map_err(|e| del_kernel(op, &e))?
+                operations::with_crs::point_on_surface(CrsContext::new(&[crs]), geometria)
+                    .map_err(|e| del_kernel(op, &e))?
             }
             Self::Buffer {
                 distanza,
                 estremita,
-                precisione,
             } => Some(
-                operations::buffer_with_cap_con_margine(
+                operations::with_crs::buffer_with_cap_con_margine(
+                    CrsContext::new(&[crs]),
                     geometria,
                     *distanza,
                     *estremita,
-                    *precisione,
                     margine,
                 )
                 .map_err(|e| del_kernel(op, &e))?,
@@ -321,51 +322,94 @@ impl Trasformazione {
                 tolleranza,
                 politica,
             } => Some(
-                operations::simplify_with_policy(geometria, *tolleranza, *politica)
-                    .map_err(|e| del_kernel(op, &e))?,
+                operations::with_crs::simplify_with_policy(
+                    CrsContext::new(&[crs]),
+                    geometria,
+                    *tolleranza,
+                    *politica,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
             ),
             Self::Affine(coefficienti) => Some(
-                extended::affine_transform(geometria, *coefficienti)
+                extended::with_crs::affine_transform(
+                    CrsContext::new(&[crs]),
+                    geometria,
+                    *coefficienti,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
+            ),
+            Self::Trasla { x, y } => Some(
+                extended::with_crs::translate(CrsContext::new(&[crs]), geometria, *x, *y)
                     .map_err(|e| del_kernel(op, &e))?,
             ),
-            Self::Trasla { x, y } => {
-                Some(extended::translate(geometria, *x, *y).map_err(|e| del_kernel(op, &e))?)
-            }
             Self::Scala { x, y, origine } => Some(
-                extended::scale_about(geometria, *x, *y, *origine)
-                    .map_err(|e| del_kernel(op, &e))?,
+                extended::with_crs::scale_about(
+                    CrsContext::new(&[crs]),
+                    geometria,
+                    *x,
+                    *y,
+                    *origine,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
             ),
             Self::Ruota { gradi, origine } => Some(
-                extended::rotate_about(geometria, *gradi, *origine)
-                    .map_err(|e| del_kernel(op, &e))?,
+                extended::with_crs::rotate_about(
+                    CrsContext::new(&[crs]),
+                    geometria,
+                    *gradi,
+                    *origine,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
             ),
             Self::InviluppoConcavo { concavita, soglia } => Some(
-                extended::concave_hull(geometria, *concavita, *soglia, MAX_CELL_COORDINATES)
-                    .map_err(|e| del_kernel(op, &e))?,
+                extended::with_crs::concave_hull(
+                    CrsContext::new(&[crs]),
+                    geometria,
+                    *concavita,
+                    *soglia,
+                    MAX_CELL_COORDINATES,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
             ),
             Self::Densifica(lunghezza) => Some(
-                extended_algorithms::densify(geometria, *lunghezza, MAX_CELL_COORDINATES)
-                    .map_err(|e| del_kernel(op, &e))?,
+                extended_algorithms::with_crs::densify(
+                    CrsContext::new(&[crs]),
+                    geometria,
+                    *lunghezza,
+                    MAX_CELL_COORDINATES,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
             ),
             Self::SuGriglia(passo) => Some(
-                extended_algorithms::snap_to_grid(geometria, *passo)
-                    .map_err(|e| del_kernel(op, &e))?,
+                extended_algorithms::with_crs::snap_to_grid(
+                    CrsContext::new(&[crs]),
+                    geometria,
+                    *passo,
+                )
+                .map_err(|e| del_kernel(op, &e))?,
             ),
-            Self::Sottolinea { inizio, fine } => {
-                extended_algorithms::line_substring(linea(op, geometria)?, *inizio, *fine)
-                    .map_err(|e| del_kernel(op, &e))?
-            }
+            Self::Sottolinea { inizio, fine } => extended_algorithms::with_crs::line_substring(
+                CrsContext::new(&[crs]),
+                linea(op, geometria)?,
+                *inizio,
+                *fine,
+            )
+            .map_err(|e| del_kernel(op, &e))?,
             Self::PuntoSullaLinea(frazione) => {
-                extended_algorithms::line_interpolate_point(linea(op, geometria)?, *frazione)
-                    .map_err(|e| del_kernel(op, &e))?
-                    .map(Geometry::Point)
+                extended_algorithms::with_crs::line_interpolate_point(
+                    CrsContext::new(&[crs]),
+                    linea(op, geometria)?,
+                    *frazione,
+                )
+                .map_err(|e| del_kernel(op, &e))?
+                .map(Geometry::Point)
             }
         })
     }
 }
 
 impl Misura {
-    fn prepara(op: &str, valore: &Value, lato: &Lato) -> Result<Option<Self>> {
+    fn prepara(op: &str, valore: &Value, _lato: &Lato) -> Result<Option<Self>> {
         let con_altra = |valore: &Value| -> Result<Geometry<f64>> {
             let letta: OtherWkbConfig = config(op, valore)?;
             geometria_di_config(op, "other_wkb", &letta.other_wkb)
@@ -386,8 +430,8 @@ impl Misura {
             // `output_column` e' gia' nel contratto: qui non serve.
             "geo.area" => Self::Area,
             "geo.length" | "geo.perimeter" => Self::Lunghezza,
-            "geo.geodesic_line_length" => Self::LunghezzaGeodetica(Box::new(lato.ellissoide(op)?)),
-            "geo.geodesic_area" => Self::AreaGeodetica(Box::new(lato.ellissoide(op)?)),
+            "geo.geodesic_line_length" => Self::LunghezzaGeodetica,
+            "geo.geodesic_area" => Self::AreaGeodetica,
             "geo.vertex_count" => Self::Vertici,
             "geo.to_wkt" => Self::Wkt,
             "geo.line_locate_point" => {
@@ -398,13 +442,9 @@ impl Misura {
             "geo.distance" => distanza(Distanza::Euclidea)?,
             "geo.hausdorff_distance" => distanza(Distanza::Hausdorff)?,
             "geo.frechet_distance" => distanza(Distanza::Frechet)?,
-            "geo.haversine_distance" => {
-                distanza(Distanza::Haversine(Box::new(lato.ellissoide(op)?)))?
-            }
-            "geo.geodesic_distance" => {
-                distanza(Distanza::Geodetica(Box::new(lato.ellissoide(op)?)))?
-            }
-            "geo.bearing" => distanza(Distanza::Azimut(Box::new(lato.ellissoide(op)?)))?,
+            "geo.haversine_distance" => distanza(Distanza::Haversine)?,
+            "geo.geodesic_distance" => distanza(Distanza::Geodetica)?,
+            "geo.bearing" => distanza(Distanza::Azimut)?,
             "geo.predicate_intersects" => predicato(SpatialPredicate::Intersects)?,
             "geo.predicate_disjoint" => predicato(SpatialPredicate::Disjoint)?,
             "geo.predicate_contains" => predicato(SpatialPredicate::Contains)?,
@@ -428,47 +468,60 @@ impl Misura {
         };
         Ok(match self {
             Self::Area => reale(&|g| {
-                operations::area(g)
+                operations::with_crs::area(CrsContext::new(&[&lato.crs]), g)
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?,
             Self::Lunghezza => reale(&|g| {
-                operations::length(g)
+                operations::with_crs::length(CrsContext::new(&[&lato.crs]), g)
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?,
-            Self::LunghezzaGeodetica(ellissoide) => reale(&|g| {
-                extended::geodesic_line_length_m(linea(op, g)?, ellissoide)
-                    .map(Some)
-                    .map_err(|e| del_kernel(op, &e))
+            Self::LunghezzaGeodetica => reale(&|g| {
+                extended::with_crs::geodesic_line_length_m(
+                    CrsContext::new(&[&lato.crs]),
+                    linea(op, g)?,
+                )
+                .map(Some)
+                .map_err(|e| del_kernel(op, &e))
             })?,
-            Self::AreaGeodetica(ellissoide) => reale(&|g| {
+            Self::AreaGeodetica => reale(&|g| {
                 if !matches!(g, Geometry::Polygon(_) | Geometry::MultiPolygon(_)) {
                     return Err(tipo_inatteso(op, "Polygon/MultiPolygon"));
                 }
-                extended_algorithms::geodesic_area_m2(g, ellissoide)
+                extended_algorithms::with_crs::geodesic_area_m2(CrsContext::new(&[&lato.crs]), g)
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?,
             Self::PosizioneSullaLinea(riferimento) => reale(&|g| {
-                extensions::line_locate_point(g, riferimento).map_err(|e| del_kernel(op, &e))
+                extensions::with_crs::line_locate_point(
+                    CrsContext::new(&[&lato.crs, &lato.crs]),
+                    g,
+                    riferimento,
+                )
+                .map_err(|e| del_kernel(op, &e))
             })?,
-            Self::Distanza { tipo, altra } => reale(&|g| distanza(op, tipo, g, altra))?,
+            Self::Distanza { tipo, altra } => reale(&|g| distanza(&lato.crs, op, tipo, g, altra))?,
             Self::Vertici => Arc::new(UInt64Array::from(per_cella(celle, |g| {
-                operations::vertex_count(g)
+                operations::with_crs::vertex_count(CrsContext::new(&[&lato.crs]), g)
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?)),
             Self::Wkt => Arc::new(StringArray::from(per_cella(celle, |g| {
-                operations::to_wkt(g)
+                operations::with_crs::to_wkt(CrsContext::new(&[&lato.crs]), g)
                     .map(Some)
                     .map_err(|e| del_kernel(op, &e))
             })?)),
             Self::Predicato { predicato, altra } => {
                 Arc::new(BooleanArray::from(per_cella(celle, |g| {
-                    predicates::evaluate(g, altra, *predicato)
-                        .map(Some)
-                        .map_err(|e| del_kernel(op, &e))
+                    predicates::with_crs::evaluate(
+                        CrsContext::new(&[&lato.crs, &lato.crs]),
+                        g,
+                        altra,
+                        *predicato,
+                    )
+                    .map(Some)
+                    .map_err(|e| del_kernel(op, &e))
                 })?))
             }
         })
@@ -477,6 +530,7 @@ impl Misura {
 
 /// La distanza di una riga dalla geometria della config.
 fn distanza(
+    crs: &ResolvedCrs,
     op: &str,
     tipo: &Distanza,
     geometria: &Geometry<f64>,
@@ -484,32 +538,41 @@ fn distanza(
 ) -> Result<Option<f64>> {
     match tipo {
         Distanza::Euclidea => {
-            operations::distance(geometria, altra).map_err(|e| del_kernel(op, &e))
-        }
-        Distanza::Hausdorff => {
-            extended::hausdorff_distance(geometria, altra, MAX_COPPIE_COORDINATE)
+            operations::with_crs::distance(CrsContext::new(&[crs, crs]), geometria, altra)
                 .map_err(|e| del_kernel(op, &e))
         }
-        Distanza::Frechet => extended_algorithms::frechet_distance(
+        Distanza::Hausdorff => extended::with_crs::hausdorff_distance(
+            CrsContext::new(&[crs, crs]),
+            geometria,
+            altra,
+            MAX_COPPIE_COORDINATE,
+        )
+        .map_err(|e| del_kernel(op, &e)),
+        Distanza::Frechet => extended_algorithms::with_crs::frechet_distance(
+            CrsContext::new(&[crs, crs]),
             linea(op, geometria)?,
             linea(op, altra)?,
             MAX_COPPIE_COORDINATE,
         )
         .map_err(|e| del_kernel(op, &e)),
-        Distanza::Haversine(ellissoide) => {
-            extended::haversine_distance_m(punto(op, geometria)?, punto(op, altra)?, ellissoide)
-                .map(Some)
-                .map_err(|e| del_kernel(op, &e))
-        }
-        Distanza::Geodetica(ellissoide) => {
-            extended::geodesic_distance_m(punto(op, geometria)?, punto(op, altra)?, ellissoide)
-                .map(Some)
-                .map_err(|e| del_kernel(op, &e))
-        }
-        Distanza::Azimut(ellissoide) => extended_algorithms::geodesic_bearing_degrees(
+        Distanza::Haversine => extended::with_crs::haversine_distance_m(
+            CrsContext::new(&[crs, crs]),
             punto(op, geometria)?,
             punto(op, altra)?,
-            ellissoide,
+        )
+        .map(Some)
+        .map_err(|e| del_kernel(op, &e)),
+        Distanza::Geodetica => extended::with_crs::geodesic_distance_m(
+            CrsContext::new(&[crs, crs]),
+            punto(op, geometria)?,
+            punto(op, altra)?,
+        )
+        .map(Some)
+        .map_err(|e| del_kernel(op, &e)),
+        Distanza::Azimut => extended_algorithms::with_crs::geodesic_bearing_degrees(
+            CrsContext::new(&[crs, crs]),
+            punto(op, geometria)?,
+            punto(op, altra)?,
         )
         .map(Some)
         .map_err(|e| del_kernel(op, &e)),
@@ -704,6 +767,7 @@ impl KernelUnario {
     }
 
     /// Le colonne dell'uscita, nell'ordine del contratto, e le righe.
+    #[allow(clippy::too_many_lines)] // Un braccio per operazione.
     pub(super) fn esegui(
         &self,
         op: &str,
@@ -736,12 +800,12 @@ impl KernelUnario {
             Self::Trasforma(trasformazione) => {
                 let celle = if matches!(trasformazione, Trasformazione::Buffer { .. }) {
                     celle_nel_margine(op, lato.celle(batch)?, margine, |g, margine_riga| {
-                        trasformazione.applica(op, g, margine_riga)
+                        trasformazione.applica(&lato.crs, op, g, margine_riga)
                     })?
                 } else {
                     per_cella(lato.celle(batch)?, |g| {
                         trasformazione
-                            .applica(op, g, MargineMemoria::ILLIMITATO)?
+                            .applica(&lato.crs, op, g, MargineMemoria::ILLIMITATO)?
                             .map(|uscita| encode_geometry(&uscita))
                             .transpose()
                     })?
@@ -778,13 +842,19 @@ impl KernelUnario {
                 riferimento,
                 tolleranza,
             } => {
-                let celle = extensions2::snap_column(lato.celle(batch)?, riferimento, *tolleranza)?;
+                let celle = extensions2::with_crs::snap_column(
+                    CrsContext::new(&[&lato.crs, &lato.crs]),
+                    lato.celle(batch)?,
+                    riferimento,
+                    *tolleranza,
+                )?;
                 sostituisci(op, &mut colonne, lato.indice, vec![binaria(&celle)])?;
             }
             Self::Misura(misura) => colonne.push(misura.colonna(op, lato, batch)?),
             Self::Limiti => {
                 let limiti = per_cella(lato.celle(batch)?, |g| {
-                    operations::bounds(g).map_err(|e| del_kernel(op, &e))
+                    operations::with_crs::bounds(CrsContext::new(&[&lato.crs]), g)
+                        .map_err(|e| del_kernel(op, &e))
                 })?;
                 for asse in 0..4 {
                     colonne.push(Arc::new(Float64Array::from(
@@ -797,7 +867,7 @@ impl KernelUnario {
             }
             Self::Accessori(scelti) => {
                 let accessori = per_cella(lato.celle(batch)?, |g| {
-                    extensions::geometry_accessors(g)
+                    extensions::with_crs::geometry_accessors(CrsContext::new(&[&lato.crs]), g)
                         .map(Some)
                         .map_err(|e| del_kernel(op, &e))
                 })?;
@@ -857,7 +927,7 @@ fn colonna_accessoria(
 /// diagnostica riporta, non un errore (come a `190c493`).
 fn diagnostica(op: &str, lato: &Lato, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
     let valori = per_cella(lato.celle(batch)?, |g| {
-        extended_algorithms::geometry_diagnostics(g)
+        extended_algorithms::with_crs::geometry_diagnostics(CrsContext::new(&[&lato.crs]), g)
             .map(Some)
             .map_err(|e| del_kernel(op, &e))
     })?;
@@ -975,7 +1045,8 @@ fn da_coordinate(
                 "{op}: coordinata null: la colonna geometria prodotta non ammette null"
             )));
         };
-        let punto = construction::point_from_lon_lat(x, y).map_err(|e| del_kernel(op, &e))?;
+        let punto = construction::with_crs::point_from_lon_lat(CrsContext::new(&[crs]), x, y)
+            .map_err(|e| del_kernel(op, &e))?;
         nel_dominio(op, &punto, crs)?;
         celle.push(Some(encode_geometry(&punto)?));
     }
@@ -997,7 +1068,12 @@ fn da_wkt(
         .downcast_ref::<StringArray>()
         .ok_or_else(|| PlenoraError::Internal(format!("{op}: colonna WKT non Utf8")))?;
     let nome = batch.schema().field(colonna).name().clone();
-    let celle = extensions::from_wkt_column_named(valori, on_error, Some(&nome))?;
+    let celle = extensions::with_crs::from_wkt_column_named(
+        CrsContext::new(&[crs]),
+        valori,
+        on_error,
+        Some(&nome),
+    )?;
     let prodotte: plenora_core::arrow::array::BinaryArray =
         celle.iter().map(Option::as_deref).collect();
     super::verifica_dominio(op, &prodotte, crs)?;
@@ -1027,13 +1103,13 @@ mod tests {
             .iter()
             .map(Option::as_deref)
             .collect();
-        let precisione = Precision::new(0.01).expect("1 cm");
+        let crs = plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture");
         let kernel = |g: &Geometry<f64>, margine: MargineMemoria| {
-            operations::buffer_with_cap_con_margine(
+            operations::with_crs::buffer_with_cap_con_margine(
+                CrsContext::new(&[&crs]),
                 g,
                 1_000.0,
                 BufferCapStyle::Round,
-                precisione,
                 margine,
             )
             .map(Some)

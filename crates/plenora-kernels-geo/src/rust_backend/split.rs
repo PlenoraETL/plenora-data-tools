@@ -753,7 +753,7 @@ fn checked_output(
 /// interno ([`SplitError::Polygonize`]); [`SplitError::AreaMismatch`] e
 /// [`SplitError::CoverageMismatch`] se area o copertura non sono
 /// conservate.
-pub fn split_polygon_by_linework_rust(
+pub(crate) fn split_polygon_by_linework_rust(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
     limits: SplitLimits,
@@ -841,7 +841,7 @@ pub fn split_polygon_by_linework_rust(
 /// Restituisce [`SplitError::UnboundedLimitConfiguration`] se almeno un
 /// limite e' lasciato a [`u64::MAX`]; altrimenti propaga gli errori di
 /// [`split_polygon_by_linework_rust`].
-pub fn split_polygon_by_linework_rust_bounded(
+pub(crate) fn split_polygon_by_linework_rust_bounded(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
     limits: SplitLimits,

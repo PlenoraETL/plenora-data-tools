@@ -2,7 +2,7 @@
 
 Abbina ogni riga della sinistra alla riga della destra più vicina, con la
 distanza planare fra le due geometrie (kernel
-`analysis::nearest_matches_validated`, [Runner, «Operazioni
+`analysis::with_crs::nearest_matches_validated`, [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)): in caso di pari tutte le destre alla
 distanza minima, come `sjoin_nearest` di GeoPandas.
 
@@ -76,7 +76,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`analysis::nearest_matches_validated`, errore
+Dal kernel (`analysis::with_crs::nearest_matches_validated`, errore
 `AnalysisError`, sulle geometrie già validate), nella categoria del passo
 geo indicata fra parentesi:
 

@@ -28,7 +28,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1: un testo per riga, dal kernel `operations::to_wkt`; una geometria
+1:1: un testo per riga, dal kernel `operations::with_crs::to_wkt`; una geometria
 nulla dà una cella nulla.
 
 ### Ordine

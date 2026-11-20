@@ -17,15 +17,24 @@
 
 use geo::{Area, Coord, Geometry, LineString, MultiPoint, Point, Polygon};
 use plenora_core::PlenoraError;
+use plenora_kernels_geo::crs::CrsContext;
 use plenora_kernels_geo::extensions::ExtensionError;
-use plenora_kernels_geo::extensions2::subdivide;
-use plenora_kernels_geo::extensions3::{coverage_validate, DEFAULT_MAX_ISSUES};
-use plenora_kernels_geo::operations::{buffer_with_cap, BufferCapStyle, OperationError};
+use plenora_kernels_geo::extensions2::with_crs::subdivide;
+use plenora_kernels_geo::extensions3::with_crs::coverage_validate;
+use plenora_kernels_geo::extensions3::DEFAULT_MAX_ISSUES;
+use plenora_kernels_geo::operations::with_crs::buffer_with_cap;
+use plenora_kernels_geo::operations::BufferCapStyle;
+use plenora_kernels_geo::operations::OperationError;
 use plenora_kernels_geo::rust_backend::precision::Precision;
-use plenora_kernels_geo::topology::{
-    boolean_operation, boolean_operation_validated, clean_valid_polygon_topology, clip_to_mask,
-    dissolve, polygon_overlay, BooleanOperation, OverlayMode, TopologyError,
-};
+use plenora_kernels_geo::topology::with_crs::boolean_operation;
+use plenora_kernels_geo::topology::with_crs::boolean_operation_validated;
+use plenora_kernels_geo::topology::with_crs::clean_valid_polygon_topology;
+use plenora_kernels_geo::topology::with_crs::clip_to_mask;
+use plenora_kernels_geo::topology::with_crs::dissolve;
+use plenora_kernels_geo::topology::with_crs::polygon_overlay;
+use plenora_kernels_geo::topology::BooleanOperation;
+use plenora_kernels_geo::topology::OverlayMode;
+use plenora_kernels_geo::topology::TopologyError;
 
 fn centimetro() -> Precision {
     Precision::new(0.01).expect("precisione")
@@ -99,11 +108,30 @@ fn booleane_alle_tre_scale() {
     for scala in [ITALIA, MONDO] {
         let (sinistra, destra) = coppia(scala);
         for operazione in OPERAZIONI {
-            let esito = boolean_operation(&sinistra, &destra, operazione, centimetro())
-                .unwrap_or_else(|errore| panic!("{operazione:?} a {scala:?}: {errore}"));
+            let esito = boolean_operation(
+                CrsContext::new(&[
+                    &crs_fixture_precision(centimetro()),
+                    &crs_fixture_precision(centimetro()),
+                ]),
+                &sinistra,
+                &destra,
+                operazione,
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap_or_else(|errore| panic!("{operazione:?} a {scala:?}: {errore}"));
             assert!(esito.unsigned_area() > 0.0, "{operazione:?}");
             assert_eq!(
-                boolean_operation_validated(&sinistra, &destra, operazione, centimetro()).unwrap(),
+                boolean_operation_validated(
+                    CrsContext::new(&[
+                        &crs_fixture_precision(centimetro()),
+                        &crs_fixture_precision(centimetro())
+                    ]),
+                    &sinistra,
+                    &destra,
+                    operazione
+                )
+                .map_err(kernel_error_fixture)
+                .unwrap(),
                 esito
             );
         }
@@ -112,11 +140,29 @@ fn booleane_alle_tre_scale() {
         let (sinistra, destra) = coppia(LONTANO);
         for operazione in OPERAZIONI {
             topologia_rifiutata(
-                boolean_operation(&sinistra, &destra, operazione, centimetro()),
+                boolean_operation(
+                    CrsContext::new(&[
+                        &crs_fixture_precision(centimetro()),
+                        &crs_fixture_precision(centimetro()),
+                    ]),
+                    &sinistra,
+                    &destra,
+                    operazione,
+                )
+                .map_err(kernel_error_fixture),
                 "booleana",
             );
             topologia_rifiutata(
-                boolean_operation_validated(&sinistra, &destra, operazione, centimetro()),
+                boolean_operation_validated(
+                    CrsContext::new(&[
+                        &crs_fixture_precision(centimetro()),
+                        &crs_fixture_precision(centimetro()),
+                    ]),
+                    &sinistra,
+                    &destra,
+                    operazione,
+                )
+                .map_err(kernel_error_fixture),
                 "booleana validated",
             );
         }
@@ -128,15 +174,24 @@ fn dissolve_clip_overlay_alle_tre_scale() {
     for scala in [ITALIA, MONDO] {
         let (sinistra, destra) = coppia(scala);
         let righe = [sinistra.clone(), destra.clone()];
-        let unita = dissolve(&righe, centimetro()).expect("dissolve");
+        let unita = dissolve(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &righe,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("dissolve");
         let lato = scala.1;
         let attesa = lato * lato * (0.6 + (0.987_654_3 - 0.371_337_1) * 0.2);
         assert!((unita.unsigned_area() - attesa).abs() <= 4.0 * lato * 0.01);
         let tagliate = clip_to_mask(
+            CrsContext::new(&[
+                &crs_fixture_precision(centimetro()),
+                &crs_fixture_precision(centimetro()),
+            ]),
             std::slice::from_ref(&sinistra),
             std::slice::from_ref(&destra),
-            centimetro(),
         )
+        .map_err(kernel_error_fixture)
         .unwrap_or_else(|errore| panic!("clip a {scala:?}: {errore}"));
         assert!(tagliate[0].is_some());
         for modo in [
@@ -146,13 +201,17 @@ fn dissolve_clip_overlay_alle_tre_scale() {
             OverlayMode::SymmetricDifference,
         ] {
             let pezzi = polygon_overlay(
+                CrsContext::new(&[
+                    &crs_fixture_precision(centimetro()),
+                    &crs_fixture_precision(centimetro()),
+                ]),
                 std::slice::from_ref(&sinistra),
                 std::slice::from_ref(&destra),
                 modo,
                 100,
                 100,
-                centimetro(),
             )
+            .map_err(kernel_error_fixture)
             .unwrap_or_else(|errore| panic!("{modo:?} a {scala:?}: {errore}"));
             assert!(!pezzi.is_empty(), "{modo:?}");
         }
@@ -161,25 +220,40 @@ fn dissolve_clip_overlay_alle_tre_scale() {
     {
         let (sinistra, destra) = coppia(LONTANO);
         let righe = [sinistra.clone(), destra.clone()];
-        topologia_rifiutata(dissolve(&righe, centimetro()), "dissolve");
+        topologia_rifiutata(
+            dissolve(
+                CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+                &righe,
+            )
+            .map_err(kernel_error_fixture),
+            "dissolve",
+        );
         topologia_rifiutata(
             clip_to_mask(
+                CrsContext::new(&[
+                    &crs_fixture_precision(centimetro()),
+                    &crs_fixture_precision(centimetro()),
+                ]),
                 std::slice::from_ref(&sinistra),
                 std::slice::from_ref(&destra),
-                centimetro(),
-            ),
+            )
+            .map_err(kernel_error_fixture),
             "clip",
         );
         for modo in [OverlayMode::Intersection, OverlayMode::Union] {
             topologia_rifiutata(
                 polygon_overlay(
+                    CrsContext::new(&[
+                        &crs_fixture_precision(centimetro()),
+                        &crs_fixture_precision(centimetro()),
+                    ]),
                     std::slice::from_ref(&sinistra),
                     std::slice::from_ref(&destra),
                     modo,
                     100,
                     100,
-                    centimetro(),
-                ),
+                )
+                .map_err(kernel_error_fixture),
                 "overlay",
             );
         }
@@ -191,8 +265,17 @@ fn clean_topology_alle_tre_scale() {
     for scala in [ITALIA, MONDO] {
         let righe: [Geometry<f64>; 2] = coppia(scala).into();
         // Morfologia (buffer +-1 m) e rimozione delle sovrapposizioni.
-        let pulite = clean_valid_polygon_topology(&righe, 1.0, true, true, 10, 1_000, centimetro())
-            .unwrap_or_else(|errore| panic!("clean a {scala:?}: {errore}"));
+        let pulite = clean_valid_polygon_topology(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &righe,
+            1.0,
+            true,
+            true,
+            10,
+            1_000,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("clean a {scala:?}: {errore}"));
         assert_eq!(pulite.len(), righe.len());
         assert!(pulite.iter().all(Option::is_some));
     }
@@ -201,14 +284,15 @@ fn clean_topology_alle_tre_scale() {
         for (fill_gaps, remove_overlaps) in [(true, false), (false, true), (true, true)] {
             topologia_rifiutata(
                 clean_valid_polygon_topology(
+                    CrsContext::new(&[&crs_fixture_precision(centimetro())]),
                     &righe,
                     1.0,
                     remove_overlaps,
                     fill_gaps,
                     10,
                     1_000,
-                    centimetro(),
-                ),
+                )
+                .map_err(kernel_error_fixture),
                 "clean",
             );
         }
@@ -240,7 +324,13 @@ fn buffer_alle_tre_scale() {
         for geometria in geometrie(scala) {
             for stile in stili {
                 for distanza in [1_000.0, -1_000.0, 0.0] {
-                    let esito = buffer_with_cap(&geometria, distanza, stile, centimetro());
+                    let esito = buffer_with_cap(
+                        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+                        &geometria,
+                        distanza,
+                        stile,
+                    )
+                    .map_err(kernel_error_fixture);
                     let output = esito.expect("buffer nella precisione");
                     let r: f64 = distanza;
                     let l = scala.1;
@@ -280,7 +370,13 @@ fn buffer_alle_tre_scale() {
     {
         for geometria in geometrie(LONTANO) {
             for stile in stili {
-                let esito = buffer_with_cap(&geometria, 1.0, stile, centimetro());
+                let esito = buffer_with_cap(
+                    CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+                    &geometria,
+                    1.0,
+                    stile,
+                )
+                .map_err(kernel_error_fixture);
                 // Punti con estremita' piatte: nessun buffer, come in `geo`,
                 // e nessun overlay.
                 if stile == BufferCapStyle::Flat && matches!(geometria, Geometry::MultiPoint(_)) {
@@ -310,8 +406,14 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
     ]));
     // Gli archi del buffer ammettono una freccia relativa dello 0,1% del raggio.
     for r in [100_000.0_f64, 5_000_000.0] {
-        let output =
-            buffer_with_cap(&punti, r, BufferCapStyle::Round, centimetro()).expect("due dischi");
+        let output = buffer_with_cap(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &punti,
+            r,
+            BufferCapStyle::Round,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("due dischi");
         let attesa = std::f64::consts::PI * r * r
             + 2.0 * r * r * (1.0 / (2.0 * r)).asin()
             + 0.5 * (4.0 * r * r - 1.0).sqrt();
@@ -323,11 +425,23 @@ fn la_griglia_del_buffer_comprende_la_distanza() {
         );
     }
     assert!(matches!(
-        buffer_with_cap(&punti, 10_000_000.0, BufferCapStyle::Round, centimetro()),
+        buffer_with_cap(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &punti,
+            10_000_000.0,
+            BufferCapStyle::Round
+        )
+        .map_err(kernel_error_fixture),
         Err(OperationError::PrecisionInsufficient)
     ));
     assert!(matches!(
-        buffer_with_cap(&punti, 1e12, BufferCapStyle::Round, centimetro()),
+        buffer_with_cap(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &punti,
+            1e12,
+            BufferCapStyle::Round
+        )
+        .map_err(kernel_error_fixture),
         Err(OperationError::PrecisionInsufficient)
     ));
 }
@@ -345,15 +459,28 @@ fn il_buffer_di_una_componente_minuscola_resta() {
         LineString::from(vec![(0.0, 0.0), (1_300_000.0, 0.0)]),
         LineString::from(vec![(650_000.0, 9.0), (650_000.000_4, 9.0)]),
     ]));
-    let buffer =
-        buffer_with_cap(&componenti, 10.0, BufferCapStyle::Round, centimetro()).expect("buffer");
+    let buffer = buffer_with_cap(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+        &componenti,
+        10.0,
+        BufferCapStyle::Round,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("buffer");
     assert!(buffer.contains(&Point::new(650_000.0, 18.98)));
     assert!(!buffer.contains(&Point::new(650_000.0, 19.02)));
     let corta = Geometry::LineString(LineString::from(vec![
         (500_000.0, 4_000_000.0),
         (500_000.000_000_01, 4_000_000.0),
     ]));
-    let disco = buffer_with_cap(&corta, 10.0, BufferCapStyle::Round, centimetro()).expect("buffer");
+    let disco = buffer_with_cap(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+        &corta,
+        10.0,
+        BufferCapStyle::Round,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("buffer");
     let atteso = std::f64::consts::PI * 100.0;
     assert!((disco.unsigned_area() - atteso).abs() <= 2.0 * atteso * 0.01 / 10.0);
 }
@@ -361,8 +488,13 @@ fn il_buffer_di_una_componente_minuscola_resta() {
 #[test]
 fn subdivide_alle_tre_scale() {
     for scala in [ITALIA, MONDO] {
-        let parti = subdivide(&stella(scala, 40), 16, centimetro())
-            .unwrap_or_else(|errore| panic!("subdivide a {scala:?}: {errore}"));
+        let parti = subdivide(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &stella(scala, 40),
+            16,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("subdivide a {scala:?}: {errore}"));
         assert!(parti.len() > 1);
         let area: f64 = parti.iter().map(Area::unsigned_area).sum();
         let attesa = stella(scala, 40).unsigned_area();
@@ -370,7 +502,12 @@ fn subdivide_alle_tre_scale() {
     }
     {
         let scala = LONTANO;
-        let esito = subdivide(&stella(scala, 40), 16, centimetro());
+        let esito = subdivide(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &stella(scala, 40),
+            16,
+        )
+        .map_err(kernel_error_fixture);
         assert!(
             matches!(esito, Err(ExtensionError::PrecisionInsufficient)),
             "{esito:?}"
@@ -380,7 +517,13 @@ fn subdivide_alle_tre_scale() {
     // invariata anche lontano.
     let piccola = coppia(LONTANO).0;
     assert_eq!(
-        subdivide(&piccola, 16, centimetro()).unwrap(),
+        subdivide(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &piccola,
+            16
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap(),
         vec![piccola]
     );
 }
@@ -389,14 +532,26 @@ fn subdivide_alle_tre_scale() {
 fn coverage_validate_alle_tre_scale() {
     for scala in [ITALIA, MONDO] {
         let righe: [Geometry<f64>; 2] = coppia(scala).into();
-        let issues = coverage_validate(&righe, 0.0, DEFAULT_MAX_ISSUES, centimetro())
-            .unwrap_or_else(|errore| panic!("coverage a {scala:?}: {errore}"));
+        let issues = coverage_validate(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &righe,
+            0.0,
+            DEFAULT_MAX_ISSUES,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("coverage a {scala:?}: {errore}"));
         assert_eq!(issues.len(), 1);
     }
     {
         let scala = LONTANO;
         let righe: [Geometry<f64>; 2] = coppia(scala).into();
-        let esito = coverage_validate(&righe, 0.0, DEFAULT_MAX_ISSUES, centimetro());
+        let esito = coverage_validate(
+            CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+            &righe,
+            0.0,
+            DEFAULT_MAX_ISSUES,
+        )
+        .map_err(kernel_error_fixture);
         assert!(
             matches!(esito, Err(ExtensionError::PrecisionInsufficient)),
             "{esito:?}"
@@ -465,16 +620,16 @@ mod senza_rifiuti_spuri {
             let sinistra = stella_in(ax, ay, ra, punte_a, 0.0);
             let destra = stella_in(bx, by, rb, punte_b, rotazione);
             for operazione in OPERAZIONI {
-                let esito = boolean_operation(&sinistra, &destra, operazione, centimetro());
+                let esito = boolean_operation(CrsContext::new(&[&crs_fixture_precision(centimetro()), &crs_fixture_precision(centimetro())]), &sinistra, &destra, operazione).map_err(kernel_error_fixture);
                 prop_assert!(
                     !matches!(esito, Err(TopologyError::PrecisionInsufficient)),
                     "{:?}", operazione
                 );
             }
-            let esito = dissolve(&[sinistra.clone(), destra], centimetro());
+            let esito = dissolve(CrsContext::new(&[&crs_fixture_precision(centimetro())]), &[sinistra.clone(), destra]).map_err(kernel_error_fixture);
             prop_assert!(!matches!(esito, Err(TopologyError::PrecisionInsufficient)));
             for stile in [BufferCapStyle::Round, BufferCapStyle::Flat, BufferCapStyle::Square] {
-                let esito = buffer_with_cap(&sinistra, distanza, stile, centimetro());
+                let esito = buffer_with_cap(CrsContext::new(&[&crs_fixture_precision(centimetro())]), &sinistra, distanza, stile).map_err(kernel_error_fixture);
                 prop_assert!(
                     !matches!(esito, Err(OperationError::PrecisionInsufficient)),
                     "{:?}", stile
@@ -482,7 +637,7 @@ mod senza_rifiuti_spuri {
                 let linea = Geometry::LineString(LineString::from(vec![
                     (ax, ay), (bx, by), (ax + ra, by - rb),
                 ]));
-                let esito = buffer_with_cap(&linea, distanza.abs(), stile, centimetro());
+                let esito = buffer_with_cap(CrsContext::new(&[&crs_fixture_precision(centimetro())]), &linea, distanza.abs(), stile).map_err(kernel_error_fixture);
                 prop_assert!(
                     !matches!(esito, Err(OperationError::PrecisionInsufficient)),
                     "{:?} linea", stile
@@ -490,4 +645,30 @@ mod senza_rifiuti_spuri {
             }
         }
     }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

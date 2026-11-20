@@ -43,6 +43,7 @@
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_panics_doc)]
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -50,53 +51,74 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use geo::{Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
-use plenora_kernels_geo::advanced::voronoi_cells;
-use plenora_kernels_geo::analysis::{
-    count_points_in_polygons_validated, nearest_matches_validated, within_indexes_validated,
-};
+use plenora_kernels_geo::advanced::with_crs::voronoi_cells;
+use plenora_kernels_geo::analysis::with_crs::count_points_in_polygons_validated;
+use plenora_kernels_geo::analysis::with_crs::nearest_matches_validated;
+use plenora_kernels_geo::analysis::with_crs::within_indexes_validated;
 use plenora_kernels_geo::arrow_adapter::{decode_geometry_cell, encode_geometry};
-use plenora_kernels_geo::cluster::dbscan_nullable;
-use plenora_kernels_geo::construction::{
-    geometry_from_wkt, line_from_ordered_points, point_from_lon_lat, polygon_from_ordered_points,
-};
-use plenora_kernels_geo::extended::{
-    affine_transform_validated, concave_hull_validated, geodesic_distance_m,
-    geodesic_line_length_m, hausdorff_distance_validated, haversine_distance_m,
-    rotate_about_validated, scale_about_validated, translate_validated,
-};
-use plenora_kernels_geo::extended_algorithms::{
-    delaunay, densify, frechet_distance, geodesic_area_m2, geodesic_bearing_degrees,
-    geometry_diagnostics, line_interpolate_point, line_merge, line_substring, snap_to_grid,
-};
-use plenora_kernels_geo::extensions::{collect_geometries, geometry_accessors, line_locate_point};
-use plenora_kernels_geo::extensions2::{
-    generate_grid_rows, snap, subdivide_wkb, GridExtent, GridShape,
-};
-use plenora_kernels_geo::extensions3::{coverage_validate_nullable, shared_paths_nullable};
-use plenora_kernels_geo::geodetica::EllissoideGeodetico;
-use plenora_kernels_geo::operations::{
-    area, boundary, bounds, buffer_with_cap, distance, explode, length, perimeter,
-    point_on_surface, simplify_with_policy, to_wkt, vertex_count, BufferCapStyle, SimplifyPolicy,
-};
-use plenora_kernels_geo::predicates::{evaluate_validated as evaluate_predicate, SpatialPredicate};
-use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPredicate};
-use plenora_kernels_geo::topology::{
-    boolean_operation_validated, clean_valid_polygon_topology_validated, clip_to_mask_validated,
-    dissolve_validated, polygon_overlay_validated, BooleanOperation, OverlayMode,
-};
-use plenora_kernels_geo::{transform_wkb, Operation};
+use plenora_kernels_geo::cluster::with_crs::dbscan_nullable;
+use plenora_kernels_geo::construction::with_crs::geometry_from_wkt;
+use plenora_kernels_geo::construction::with_crs::line_from_ordered_points;
+use plenora_kernels_geo::construction::with_crs::point_from_lon_lat;
+use plenora_kernels_geo::construction::with_crs::polygon_from_ordered_points;
+use plenora_kernels_geo::extended::with_crs::affine_transform_validated;
+use plenora_kernels_geo::extended::with_crs::concave_hull_validated;
+use plenora_kernels_geo::extended::with_crs::geodesic_distance_m;
+use plenora_kernels_geo::extended::with_crs::geodesic_line_length_m;
+use plenora_kernels_geo::extended::with_crs::hausdorff_distance_validated;
+use plenora_kernels_geo::extended::with_crs::haversine_distance_m;
+use plenora_kernels_geo::extended::with_crs::rotate_about_validated;
+use plenora_kernels_geo::extended::with_crs::scale_about_validated;
+use plenora_kernels_geo::extended::with_crs::translate_validated;
+use plenora_kernels_geo::extended_algorithms::with_crs::delaunay;
+use plenora_kernels_geo::extended_algorithms::with_crs::densify;
+use plenora_kernels_geo::extended_algorithms::with_crs::frechet_distance;
+use plenora_kernels_geo::extended_algorithms::with_crs::geodesic_area_m2;
+use plenora_kernels_geo::extended_algorithms::with_crs::geodesic_bearing_degrees;
+use plenora_kernels_geo::extended_algorithms::with_crs::geometry_diagnostics;
+use plenora_kernels_geo::extended_algorithms::with_crs::line_interpolate_point;
+use plenora_kernels_geo::extended_algorithms::with_crs::line_merge;
+use plenora_kernels_geo::extended_algorithms::with_crs::line_substring;
+use plenora_kernels_geo::extended_algorithms::with_crs::snap_to_grid;
+use plenora_kernels_geo::extensions::with_crs::collect_geometries;
+use plenora_kernels_geo::extensions::with_crs::geometry_accessors;
+use plenora_kernels_geo::extensions::with_crs::line_locate_point;
+use plenora_kernels_geo::extensions2::with_crs::generate_grid_rows;
+use plenora_kernels_geo::extensions2::with_crs::snap;
+use plenora_kernels_geo::extensions2::with_crs::subdivide_wkb;
+use plenora_kernels_geo::extensions2::GridExtent;
+use plenora_kernels_geo::extensions2::GridShape;
+use plenora_kernels_geo::extensions3::with_crs::coverage_validate_nullable;
+use plenora_kernels_geo::extensions3::with_crs::shared_paths_nullable;
+use plenora_kernels_geo::operations::with_crs::area;
+use plenora_kernels_geo::operations::with_crs::boundary;
+use plenora_kernels_geo::operations::with_crs::bounds;
+use plenora_kernels_geo::operations::with_crs::buffer_with_cap;
+use plenora_kernels_geo::operations::with_crs::distance;
+use plenora_kernels_geo::operations::with_crs::explode;
+use plenora_kernels_geo::operations::with_crs::length;
+use plenora_kernels_geo::operations::with_crs::perimeter;
+use plenora_kernels_geo::operations::with_crs::point_on_surface;
+use plenora_kernels_geo::operations::with_crs::simplify_with_policy;
+use plenora_kernels_geo::operations::with_crs::to_wkt;
+use plenora_kernels_geo::operations::with_crs::vertex_count;
+use plenora_kernels_geo::operations::BufferCapStyle;
+use plenora_kernels_geo::operations::SimplifyPolicy;
+use plenora_kernels_geo::predicates::with_crs::evaluate_validated as evaluate_predicate;
+use plenora_kernels_geo::predicates::SpatialPredicate;
+use plenora_kernels_geo::spatial_join::with_crs::spatial_join_nullable_validated;
+use plenora_kernels_geo::spatial_join::JoinPredicate;
+use plenora_kernels_geo::topology::with_crs::boolean_operation_validated;
+use plenora_kernels_geo::topology::with_crs::clean_valid_polygon_topology_validated;
+use plenora_kernels_geo::topology::with_crs::clip_to_mask_validated;
+use plenora_kernels_geo::topology::with_crs::dissolve_validated;
+use plenora_kernels_geo::topology::with_crs::polygon_overlay_validated;
+use plenora_kernels_geo::topology::BooleanOperation;
+use plenora_kernels_geo::topology::OverlayMode;
+use plenora_kernels_geo::with_crs::transform_wkb;
+use plenora_kernels_geo::Operation;
 use rayon::prelude::*;
 use serde_json::{json, Value};
-
-/// L'ellissoide WGS 84 della tabella integrata (EPSG:4326), per le misure
-/// geodetiche del sweep: le fixture sono lon/lat WGS 84.
-fn wgs84() -> EllissoideGeodetico {
-    static ELLISSOIDE: OnceLock<EllissoideGeodetico> = OnceLock::new();
-    *ELLISSOIDE.get_or_init(|| {
-        let crs = plenora_core::crs::resolve_crs("EPSG:4326", "crs").expect("EPSG:4326");
-        EllissoideGeodetico::da_crs(&crs).expect("ellissoide WGS 84")
-    })
-}
 
 /// Precisione dichiarata: 1 cm con coordinate in metri (docs/limiti.md, «Limiti dichiarati»).
 fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
@@ -560,7 +582,13 @@ fn wkt_polys() -> &'static Vec<String> {
             .iter()
             .map(|payload| {
                 let geometry = decode_geometry_cell(payload).expect("decode fixture");
-                to_wkt(&geometry).expect("wkt fixture")
+                to_wkt(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &geometry,
+                )
+                .map_err(kernel_error_fixture)
+                .expect("wkt fixture")
             })
             .collect()
     })
@@ -1212,9 +1240,15 @@ fn main() {
 
         // --- Manipola-compat per-cella ------------------------------------------
         let op_centroid = |payload: &Vec<u8>| {
-            transform_wkb(Operation::Centroid, payload)
-                .map(|w| w.len())
-                .map_err(|e| e.to_string())
+            transform_wkb(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                Operation::Centroid,
+                payload,
+            )
+            .map_err(kernel_error_fixture)
+            .map(|w| w.len())
+            .map_err(|e| e.to_string())
         };
         sweep_cells(
             &mut results,
@@ -1228,9 +1262,15 @@ fn main() {
             &op_centroid,
         );
         let op_convex = |payload: &Vec<u8>| {
-            transform_wkb(Operation::ConvexHull, payload)
-                .map(|w| w.len())
-                .map_err(|e| e.to_string())
+            transform_wkb(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                Operation::ConvexHull,
+                payload,
+            )
+            .map_err(kernel_error_fixture)
+            .map(|w| w.len())
+            .map_err(|e| e.to_string())
         };
         sweep_cells(
             &mut results,
@@ -1244,9 +1284,15 @@ fn main() {
             &op_convex,
         );
         let op_envelope = |payload: &Vec<u8>| {
-            transform_wkb(Operation::Envelope, payload)
-                .map(|w| w.len())
-                .map_err(|e| e.to_string())
+            transform_wkb(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                Operation::Envelope,
+                payload,
+            )
+            .map_err(kernel_error_fixture)
+            .map(|w| w.len())
+            .map_err(|e| e.to_string())
         };
         sweep_cells(
             &mut results,
@@ -1261,9 +1307,14 @@ fn main() {
         );
         let op_area = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                area(&g)
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                area(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1279,9 +1330,14 @@ fn main() {
         );
         let op_boundary = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                boundary(&g)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                boundary(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1297,9 +1353,14 @@ fn main() {
         );
         let op_bounds = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                bounds(&g)
-                    .map(|v| usize::from(black_box(v).is_some()))
-                    .map_err(|e| e.to_string())
+                bounds(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| usize::from(black_box(v).is_some()))
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1315,9 +1376,15 @@ fn main() {
         );
         let op_buffer = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                buffer_with_cap(&g, 10.0, BufferCapStyle::Round, precisione())
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                buffer_with_cap(
+                    CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                    &g,
+                    10.0,
+                    BufferCapStyle::Round,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1333,7 +1400,8 @@ fn main() {
         );
         let op_distance = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                distance(&g, ref_poly)
+                distance(CrsContext::new(&[crs_fixture_metrico(); 2]), &g, ref_poly)
+                    .map_err(kernel_error_fixture)
                     .map(|v| black_box(v).unwrap_or(0.0) as usize)
                     .map_err(|e| e.to_string())
             })
@@ -1351,9 +1419,14 @@ fn main() {
         );
         let op_explode = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                explode(&g)
-                    .map_err(|e| e.to_string())
-                    .and_then(|parts| enc_many(&parts))
+                explode(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|parts| enc_many(&parts))
             })
         };
         sweep_cells(
@@ -1368,9 +1441,15 @@ fn main() {
             &op_explode,
         );
         let op_from_coords = |xy: &(f64, f64)| {
-            point_from_lon_lat(xy.0, xy.1)
-                .map_err(|e| e.to_string())
-                .and_then(|g| enc(&g))
+            point_from_lon_lat(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                xy.0,
+                xy.1,
+            )
+            .map_err(kernel_error_fixture)
+            .map_err(|e| e.to_string())
+            .and_then(|g| enc(&g))
         };
         sweep_cells(
             &mut results,
@@ -1385,9 +1464,14 @@ fn main() {
         );
         let op_length = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                length(&g)
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                length(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1403,9 +1487,14 @@ fn main() {
         );
         let op_perimeter = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                perimeter(&g)
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                perimeter(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1421,9 +1510,14 @@ fn main() {
         );
         let op_pos = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                point_on_surface(&g)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc_opt(r.as_ref()))
+                point_on_surface(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc_opt(r.as_ref()))
             })
         };
         sweep_cells(
@@ -1439,9 +1533,16 @@ fn main() {
         );
         let op_simplify = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                simplify_with_policy(&g, 1.0, SimplifyPolicy::DouglasPeucker)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                simplify_with_policy(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    1.0,
+                    SimplifyPolicy::DouglasPeucker,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1457,9 +1558,16 @@ fn main() {
         );
         let op_simplify_vw = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                simplify_with_policy(&g, 1.0, SimplifyPolicy::PreserveTopology)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                simplify_with_policy(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    1.0,
+                    SimplifyPolicy::PreserveTopology,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1474,7 +1582,16 @@ fn main() {
             &op_simplify_vw,
         );
         let op_to_wkt = |payload: &Vec<u8>| {
-            dec(payload).and_then(|g| to_wkt(&g).map(|s| s.len()).map_err(|e| e.to_string()))
+            dec(payload).and_then(|g| {
+                to_wkt(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|s| s.len())
+                .map_err(|e| e.to_string())
+            })
         };
         sweep_cells(
             &mut results,
@@ -1489,9 +1606,14 @@ fn main() {
         );
         let op_vcount = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                vertex_count(&g)
-                    .map(|v| v as usize)
-                    .map_err(|e| e.to_string())
+                vertex_count(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| v as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1525,9 +1647,15 @@ fn main() {
         ] {
             let op = move |payload: &Vec<u8>| {
                 dec(payload).and_then(|g| {
-                    evaluate_predicate(&g, ref_poly, predicate)
-                        .map(|v| usize::from(black_box(v)))
-                        .map_err(|e| e.to_string())
+                    evaluate_predicate(
+                        CrsContext::new(&[crs_fixture_metrico(); 2]),
+                        &g,
+                        ref_poly,
+                        predicate,
+                    )
+                    .map_err(kernel_error_fixture)
+                    .map(|v| usize::from(black_box(v)))
+                    .map_err(|e| e.to_string())
                 })
             };
             let leaked: &(dyn Fn(&Vec<u8>) -> Result<usize, String> + Sync) =
@@ -1548,9 +1676,15 @@ fn main() {
         // --- Estensioni storiche per-cella --------------------------------------
         let op_affine = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                affine_transform_validated(&g, [1.1, 0.05, 3.0, -0.02, 0.9, 7.0])
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                affine_transform_validated(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    [1.1, 0.05, 3.0, -0.02, 0.9, 7.0],
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1566,9 +1700,16 @@ fn main() {
         );
         let op_translate = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                translate_validated(&g, 10.0, 20.0)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                translate_validated(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    10.0,
+                    20.0,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1584,9 +1725,17 @@ fn main() {
         );
         let op_scale = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                scale_about_validated(&g, 1.5, 0.75, Point::new(0.0, 0.0))
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                scale_about_validated(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    1.5,
+                    0.75,
+                    Point::new(0.0, 0.0),
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1602,9 +1751,16 @@ fn main() {
         );
         let op_rotate = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                rotate_about_validated(&g, 30.0, Point::new(5_000.0, 5_000.0))
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                rotate_about_validated(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    30.0,
+                    Point::new(5_000.0, 5_000.0),
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1620,9 +1776,17 @@ fn main() {
         );
         let op_concave = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                concave_hull_validated(&g, 2.0, 0.0, 10_000_000)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                concave_hull_validated(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    2.0,
+                    0.0,
+                    10_000_000,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1638,9 +1802,15 @@ fn main() {
         );
         let op_hausdorff = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                hausdorff_distance_validated(&g, &ref_line_geometry, 1_000_000_000)
-                    .map(|v| black_box(v).unwrap_or(0.0) as usize)
-                    .map_err(|e| e.to_string())
+                hausdorff_distance_validated(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    &g,
+                    &ref_line_geometry,
+                    1_000_000_000,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v).unwrap_or(0.0) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1656,9 +1826,14 @@ fn main() {
         );
         let op_haversine = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                haversine_distance_m(as_point(&g)?, ref_geo_point, &wgs84())
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                haversine_distance_m(
+                    CrsContext::new(&[crs_fixture_geografico(); 2]),
+                    as_point(&g)?,
+                    ref_geo_point,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1674,9 +1849,14 @@ fn main() {
         );
         let op_geodesic = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_distance_m(as_point(&g)?, ref_geo_point, &wgs84())
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                geodesic_distance_m(
+                    CrsContext::new(&[crs_fixture_geografico(); 2]),
+                    as_point(&g)?,
+                    ref_geo_point,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1692,9 +1872,14 @@ fn main() {
         );
         let op_geolen = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_line_length_m(as_line(&g)?, &wgs84())
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                geodesic_line_length_m(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:4326", "crs")
+                        .expect("CRS fixture geografico")]),
+                    as_line(&g)?,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1710,9 +1895,16 @@ fn main() {
         );
         let op_densify = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                densify(&g, 5.0, 100_000_000)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                densify(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    5.0,
+                    100_000_000,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1728,9 +1920,15 @@ fn main() {
         );
         let op_snapgrid = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                snap_to_grid(&g, 1.0)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                snap_to_grid(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    1.0,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1746,13 +1944,20 @@ fn main() {
         );
         let op_delaunay = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                delaunay(&g, 1_000_000, 10_000_000)
-                    .map_err(|e| e.to_string())
-                    .and_then(|triangles| {
-                        triangles.iter().try_fold(0_usize, |total, triangle| {
-                            enc(&Geometry::Polygon(triangle.clone())).map(|len| total + len)
-                        })
+                delaunay(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                    1_000_000,
+                    10_000_000,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|triangles| {
+                    triangles.iter().try_fold(0_usize, |total, triangle| {
+                        enc(&Geometry::Polygon(triangle.clone())).map(|len| total + len)
                     })
+                })
             })
         };
         sweep_cells(
@@ -1768,9 +1973,16 @@ fn main() {
         );
         let op_linesub = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                line_substring(as_line(&g)?, 0.2, 0.8)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc_opt(r.as_ref()))
+                line_substring(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    as_line(&g)?,
+                    0.2,
+                    0.8,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc_opt(r.as_ref()))
             })
         };
         sweep_cells(
@@ -1786,9 +1998,15 @@ fn main() {
         );
         let op_lineinterp = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                line_interpolate_point(as_line(&g)?, 0.5)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r.map_or(Ok(0), |p| enc(&Geometry::Point(p))))
+                line_interpolate_point(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    as_line(&g)?,
+                    0.5,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_or(Ok(0), |p| enc(&Geometry::Point(p))))
             })
         };
         sweep_cells(
@@ -1804,9 +2022,15 @@ fn main() {
         );
         let op_frechet = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                frechet_distance(as_line(&g)?, &ref_line, 1_000_000_000)
-                    .map(|v| black_box(v).unwrap_or(0.0) as usize)
-                    .map_err(|e| e.to_string())
+                frechet_distance(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    as_line(&g)?,
+                    &ref_line,
+                    1_000_000_000,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v).unwrap_or(0.0) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1822,9 +2046,14 @@ fn main() {
         );
         let op_bearing = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_bearing_degrees(ref_geo_point, as_point(&g)?, &wgs84())
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                geodesic_bearing_degrees(
+                    CrsContext::new(&[crs_fixture_geografico(); 2]),
+                    ref_geo_point,
+                    as_point(&g)?,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1840,9 +2069,14 @@ fn main() {
         );
         let op_geoarea = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geodesic_area_m2(&g, &wgs84())
-                    .map(|v| black_box(v) as usize)
-                    .map_err(|e| e.to_string())
+                geodesic_area_m2(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:4326", "crs")
+                        .expect("CRS fixture geografico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| black_box(v) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1858,9 +2092,14 @@ fn main() {
         );
         let op_diag = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geometry_diagnostics(&g)
-                    .map(|d| black_box(d.coordinate_count) as usize)
-                    .map_err(|e| e.to_string())
+                geometry_diagnostics(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|d| black_box(d.coordinate_count) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1877,9 +2116,14 @@ fn main() {
 
         // --- Estensioni v1.1 -----------------------------------------------------
         let op_from_wkt = |wkt: &String| {
-            geometry_from_wkt(wkt)
-                .map_err(|e| e.to_string())
-                .and_then(|g| enc(&g))
+            geometry_from_wkt(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                wkt,
+            )
+            .map_err(kernel_error_fixture)
+            .map_err(|e| e.to_string())
+            .and_then(|g| enc(&g))
         };
         sweep_cells(
             &mut results,
@@ -1894,9 +2138,14 @@ fn main() {
         );
         let op_accessors = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                geometry_accessors(&g)
-                    .map(|a| black_box(a.num_geometries) as usize)
-                    .map_err(|e| e.to_string())
+                geometry_accessors(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &g,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|a| black_box(a.num_geometries) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1912,9 +2161,14 @@ fn main() {
         );
         let op_locate = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                line_locate_point(&g, &Point::new(5_000.0, 5_000.0))
-                    .map(|v| (black_box(v).unwrap_or(0.0) * 1e6) as usize)
-                    .map_err(|e| e.to_string())
+                line_locate_point(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    &g,
+                    &Point::new(5_000.0, 5_000.0),
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| (black_box(v).unwrap_or(0.0) * 1e6) as usize)
+                .map_err(|e| e.to_string())
             })
         };
         sweep_cells(
@@ -1931,9 +2185,14 @@ fn main() {
 
         // --- Estensioni v1.2 -----------------------------------------------------
         let op_subdivide = |payload: &Vec<u8>| {
-            subdivide_wkb(payload, 500, precisione())
-                .map(|parts| parts.iter().map(Vec::len).sum())
-                .map_err(|e| e.to_string())
+            subdivide_wkb(
+                CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                payload,
+                500,
+            )
+            .map_err(kernel_error_fixture)
+            .map(|parts| parts.iter().map(Vec::len).sum())
+            .map_err(|e| e.to_string())
         };
         sweep_cells(
             &mut results,
@@ -1948,9 +2207,15 @@ fn main() {
         );
         let op_snap = |payload: &Vec<u8>| {
             dec(payload).and_then(|g| {
-                snap(&g, &ref_complex, 0.5)
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| enc(&r))
+                snap(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    &g,
+                    &ref_complex,
+                    0.5,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|r| enc(&r))
             })
         };
         sweep_cells(
@@ -1973,9 +2238,16 @@ fn main() {
             let mut output_units = 0_usize;
             for _ in 0..3 {
                 let start = Instant::now();
-                let rows = generate_grid_rows(&extent, 1.0, GridShape::Square)
-                    .map_err(|e| e.to_string())
-                    .expect("geo.generate_grid");
+                let rows = generate_grid_rows(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &extent,
+                    1.0,
+                    GridShape::Square,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .expect("geo.generate_grid");
                 durations.push(start.elapsed().as_secs_f64());
                 output_units = rows.iter().map(|row| row.wkb.len()).sum();
                 black_box(rows);
@@ -2014,9 +2286,18 @@ fn main() {
                 left.par_iter()
                     .zip(right.par_iter())
                     .map(|(l, r)| {
-                        boolean_operation_validated(l, r, boolean, precisione())
-                            .map_err(|e| e.to_string())
-                            .and_then(|out| enc(&out))
+                        boolean_operation_validated(
+                            CrsContext::new(&[
+                                &crs_fixture_precision(precisione()),
+                                &crs_fixture_precision(precisione()),
+                            ]),
+                            l,
+                            r,
+                            boolean,
+                        )
+                        .map_err(kernel_error_fixture)
+                        .map_err(|e| e.to_string())
+                        .and_then(|out| enc(&out))
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .map(|v| v.iter().sum())
@@ -2048,9 +2329,16 @@ fn main() {
             &|n| {
                 let left = as_options(decode_prefix(points_wkb(), n)?);
                 let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
-                spatial_join_nullable_validated(&left, &right, JoinPredicate::Intersects, MAX_WORK)
-                    .map(|pairs| pairs.len())
-                    .map_err(|e| e.to_string())
+                spatial_join_nullable_validated(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    &left,
+                    &right,
+                    JoinPredicate::Intersects,
+                    MAX_WORK,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|pairs| pairs.len())
+                .map_err(|e| e.to_string())
             },
         );
         sweep_collective(
@@ -2063,9 +2351,15 @@ fn main() {
             &|n| {
                 let left = as_options(decode_prefix(points_wkb(), n)?);
                 let right = as_options(decode_prefix(grid_wkb(), 10_000)?);
-                within_indexes_validated(&left, &right, MAX_WORK)
-                    .map(|v| v.len())
-                    .map_err(|e| e.to_string())
+                within_indexes_validated(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    &left,
+                    &right,
+                    MAX_WORK,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| v.len())
+                .map_err(|e| e.to_string())
             },
         );
         sweep_collective(
@@ -2078,9 +2372,15 @@ fn main() {
             &|n| {
                 let polys = as_options(decode_prefix(grid_wkb(), 10_000)?);
                 let points = as_options(decode_prefix(points_wkb(), n)?);
-                count_points_in_polygons_validated(&polys, &points, MAX_WORK)
-                    .map(|v| v.len())
-                    .map_err(|e| e.to_string())
+                count_points_in_polygons_validated(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    &polys,
+                    &points,
+                    MAX_WORK,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| v.len())
+                .map_err(|e| e.to_string())
             },
         );
         sweep_collective(
@@ -2093,9 +2393,17 @@ fn main() {
             &|n| {
                 let left = as_options(decode_prefix(points_wkb(), n)?);
                 let right = as_options(decode_prefix(points_wkb(), 10_000)?);
-                nearest_matches_validated(&left, &right, None, MAX_WORK, MAX_WORK)
-                    .map(|v| v.len())
-                    .map_err(|e| e.to_string())
+                nearest_matches_validated(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    &left,
+                    &right,
+                    None,
+                    MAX_WORK,
+                    MAX_WORK,
+                )
+                .map_err(kernel_error_fixture)
+                .map(|v| v.len())
+                .map_err(|e| e.to_string())
             },
         );
         sweep_collective(
@@ -2107,9 +2415,13 @@ fn main() {
             "unary union di rettangoli con overlap jitterati",
             &|n| {
                 let geoms = decode_prefix(grid_jitter_wkb(), n)?;
-                dissolve_validated(&geoms, precisione())
-                    .map_err(|e| e.to_string())
-                    .and_then(|out| enc(&out))
+                dissolve_validated(
+                    CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                    &geoms,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|out| enc(&out))
             },
         );
         sweep_collective(
@@ -2122,13 +2434,21 @@ fn main() {
             &|n| {
                 let geoms = decode_prefix(polys_wkb(), n)?;
                 let masks = decode_prefix(&grid_jitter_wkb()[4_500..], 100)?;
-                clip_to_mask_validated(&geoms, &masks, precisione())
-                    .map_err(|e| e.to_string())
-                    .and_then(|outs| {
-                        outs.iter().try_fold(0_usize, |total, out| {
-                            enc_opt(out.as_ref()).map(|len| total + len)
-                        })
+                clip_to_mask_validated(
+                    CrsContext::new(&[
+                        &crs_fixture_precision(precisione()),
+                        &crs_fixture_precision(precisione()),
+                    ]),
+                    &geoms,
+                    &masks,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|outs| {
+                    outs.iter().try_fold(0_usize, |total, out| {
+                        enc_opt(out.as_ref()).map(|len| total + len)
                     })
+                })
             },
         );
         sweep_collective(
@@ -2142,13 +2462,17 @@ fn main() {
                 let left = decode_prefix(grid_wkb(), n)?;
                 let right = decode_prefix(grid_shift_wkb(), n)?;
                 polygon_overlay_validated(
+                    CrsContext::new(&[
+                        &crs_fixture_precision(precisione()),
+                        &crs_fixture_precision(precisione()),
+                    ]),
                     &left,
                     &right,
                     OverlayMode::Intersection,
                     MAX_WORK,
                     MAX_WORK,
-                    precisione(),
                 )
+                .map_err(kernel_error_fixture)
                 .map_err(|e| e.to_string())
                 .and_then(|pieces| {
                     pieces.iter().try_fold(0_usize, |total, piece| {
@@ -2182,7 +2506,7 @@ fn main() {
                 ]),
                 Vec::new(),
             ))];
-            clip_to_mask_validated(&geoms, &masks, precisione())
+            clip_to_mask_validated(CrsContext::new(&[&crs_fixture_precision(precisione()), &crs_fixture_precision(precisione())]), &geoms, &masks).map_err(kernel_error_fixture)
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {
@@ -2206,13 +2530,17 @@ fn main() {
                 let left = decode_prefix(grid_wkb(), n)?;
                 let right = decode_prefix(grid_far_wkb(), n)?;
                 polygon_overlay_validated(
+                    CrsContext::new(&[
+                        &crs_fixture_precision(precisione()),
+                        &crs_fixture_precision(precisione()),
+                    ]),
                     &left,
                     &right,
                     OverlayMode::Union,
                     MAX_WORK,
                     MAX_WORK,
-                    precisione(),
                 )
+                .map_err(kernel_error_fixture)
                 .map_err(|e| e.to_string())
                 .and_then(|pieces| {
                     pieces.iter().try_fold(0_usize, |total, piece| {
@@ -2231,14 +2559,15 @@ fn main() {
             &|n| {
                 let geoms = decode_prefix(grid_jitter_wkb(), n)?;
                 clean_valid_polygon_topology_validated(
+                    CrsContext::new(&[&crs_fixture_precision(precisione())]),
                     &geoms,
                     1.0,
                     true,
                     true,
                     MAX_WORK,
                     MAX_WORK,
-                    precisione(),
                 )
+                .map_err(kernel_error_fixture)
                 .map_err(|e| e.to_string())
                 .and_then(|outs| {
                     outs.iter().try_fold(0_usize, |total, out| {
@@ -2257,11 +2586,14 @@ fn main() {
             &|n| {
                 let geoms = decode_prefix(points_wkb(), n)?;
                 voronoi_cells(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(0.01)
+                            .expect("precisione"),
+                    )]),
                     &geoms,
                     100_000,
-                    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01)
-                        .expect("precisione"),
                 )
+                .map_err(kernel_error_fixture)
                 .map_err(|e| e.to_string())
                 .and_then(|cells| enc_many(&cells))
             },
@@ -2276,13 +2608,20 @@ fn main() {
             &|n| {
                 let mls =
                     Geometry::MultiLineString(MultiLineString::new(chain_lines()[..n].to_vec()));
-                line_merge(&mls, MAX_WORK, MAX_WORK)
-                    .map_err(|e| e.to_string())
-                    .and_then(|lines| {
-                        lines.iter().try_fold(0_usize, |total, line| {
-                            enc(&Geometry::LineString(line.clone())).map(|len| total + len)
-                        })
+                line_merge(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &mls,
+                    MAX_WORK,
+                    MAX_WORK,
+                )
+                .map_err(kernel_error_fixture)
+                .map_err(|e| e.to_string())
+                .and_then(|lines| {
+                    lines.iter().try_fold(0_usize, |total, line| {
+                        enc(&Geometry::LineString(line.clone())).map(|len| total + len)
                     })
+                })
             },
         );
     } // fine prefisso saltabile (GEO_SWEEP_SKIP_PREFIX)
@@ -2300,7 +2639,8 @@ fn main() {
             options
                 .par_chunks(10)
                 .map(|group| {
-                    collect_geometries(group)
+                    collect_geometries(CrsContext::new(&[crs_fixture_metrico()]), group)
+                        .map_err(kernel_error_fixture)
                         .map_err(|e| e.to_string())
                         .and_then(|out| enc_opt(out.as_ref()))
                 })
@@ -2321,7 +2661,8 @@ fn main() {
             options
                 .par_chunks(1_000)
                 .map(|group| {
-                    line_from_ordered_points(group)
+                    line_from_ordered_points(CrsContext::new(&[crs_fixture_metrico()]), group)
+                        .map_err(kernel_error_fixture)
                         .map_err(|e| e.to_string())
                         .and_then(|out| enc_opt(out.as_ref()))
                 })
@@ -2342,7 +2683,8 @@ fn main() {
             options
                 .par_chunks(1_000)
                 .map(|group| {
-                    polygon_from_ordered_points(group)
+                    polygon_from_ordered_points(CrsContext::new(&[crs_fixture_metrico()]), group)
+                        .map_err(kernel_error_fixture)
                         .map_err(|e| e.to_string())
                         .and_then(|out| enc_opt(out.as_ref()))
                 })
@@ -2361,13 +2703,19 @@ fn main() {
         "griglia 100x100 con overlap jitterati, tolerance=0",
         &|n| {
             let geoms = as_options(decode_prefix(grid_jitter_wkb(), n)?);
-            coverage_validate_nullable(&geoms, 0.0, 1_000_000, precisione())
-                .map_err(|e| e.to_string())
-                .and_then(|issues| {
-                    issues.iter().try_fold(0_usize, |total, issue| {
-                        enc(&issue.geometry).map(|len| total + len)
-                    })
+            coverage_validate_nullable(
+                CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                &geoms,
+                0.0,
+                1_000_000,
+            )
+            .map_err(kernel_error_fixture)
+            .map_err(|e| e.to_string())
+            .and_then(|issues| {
+                issues.iter().try_fold(0_usize, |total, issue| {
+                    enc(&issue.geometry).map(|len| total + len)
                 })
+            })
         },
     );
     sweep_collective(
@@ -2379,13 +2727,20 @@ fn main() {
         "griglia 100x100 esatta (bordi condivisi), min_length=1",
         &|n| {
             let geoms = as_options(decode_prefix(grid_wkb(), n)?);
-            shared_paths_nullable(&geoms, 0.001, 1.0)
-                .map_err(|e| e.to_string())
-                .and_then(|paths| {
-                    paths.iter().try_fold(0_usize, |total, path| {
-                        enc(&path.geometry).map(|len| total + len)
-                    })
+            shared_paths_nullable(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                &geoms,
+                0.001,
+                1.0,
+            )
+            .map_err(kernel_error_fixture)
+            .map_err(|e| e.to_string())
+            .and_then(|paths| {
+                paths.iter().try_fold(0_usize, |total, path| {
+                    enc(&path.geometry).map(|len| total + len)
                 })
+            })
         },
     );
     sweep_collective(
@@ -2397,9 +2752,16 @@ fn main() {
         "eps=10, min_points=5",
         &|n| {
             let geoms = as_options(decode_prefix(dbscan_points_wkb(), n)?);
-            dbscan_nullable(&geoms, 10.0, 5)
-                .map(|labels| labels.len())
-                .map_err(|e| e.to_string())
+            dbscan_nullable(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                &geoms,
+                10.0,
+                5,
+            )
+            .map_err(kernel_error_fixture)
+            .map(|labels| labels.len())
+            .map_err(|e| e.to_string())
         },
     );
 
@@ -2431,4 +2793,42 @@ fn main() {
         "scritti benchmarks/sweep/geo_sweep.json e geo_sweep.md ({} scenari)",
         results.len()
     );
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_geografico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:4326", "crs").expect("CRS fixture"))
 }

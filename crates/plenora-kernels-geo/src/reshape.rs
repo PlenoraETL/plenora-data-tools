@@ -60,7 +60,7 @@ impl From<TrimExtendError> for ReshapeError {
 /// # Errors
 /// Geometria malformata, esclusioni GOP-019, topologia alterata dal rounding,
 /// risorse esaurite, cancellazione o deadline. Nessun risultato parziale.
-pub fn reshape_with_limits(
+pub(crate) fn reshape_with_limits(
     target: &Geometry<f64>,
     reshaper: &Geometry<f64>,
     limits: RelateLimits,

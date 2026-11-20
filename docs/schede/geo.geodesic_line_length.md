@@ -29,7 +29,7 @@ contratto (`sorted_by`, `row_count`).
 ### Righe
 
 1:1: una lunghezza per riga, dal kernel
-(`extended::geodesic_line_length_m`), che riceve **una `LineString`**
+(`extended::with_crs::geodesic_line_length_m`), che riceve **una `LineString`**
 (vuota o di un solo vertice: 0). Una geometria nulla dà una lunghezza
 nulla; una multilinea, un poligono o un punto fermano il passo con un
 errore (vedi «Errori»): l'analisi accetta ogni tipo nella colonna, perché

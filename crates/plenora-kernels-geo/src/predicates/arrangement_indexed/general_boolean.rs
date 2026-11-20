@@ -34,7 +34,7 @@ pub use super::polygon_boolean::{
 /// # Errors
 /// Input invalido, tipo escluso, filtro invalido, pubblicazione non certificabile,
 /// risorse esaurite, allocazione fallita, cancellazione o deadline.
-pub fn boolean_with_limits(
+pub(crate) fn boolean_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     operation: GeneralBooleanOp,
@@ -57,7 +57,7 @@ pub fn boolean_with_limits(
 /// per la provenienza dei vertici, non per l'ordine canonico delle componenti.
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`]; nessun successo parziale.
-pub fn union_with_limits(
+pub(crate) fn union_with_limits(
     inputs: &[Geometry<f64>],
     output_dimension: Option<u8>,
     limits: GeneralBooleanLimits,
@@ -110,7 +110,7 @@ fn array(
 /// Intersezione atomica di ogni A con B, nell'ordine di A, inclusi vuoti e duplicati.
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`]; nessun prefisso pubblicato.
-pub fn intersection_with_limits(
+pub(crate) fn intersection_with_limits(
     inputs: &[Geometry<f64>],
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -130,7 +130,7 @@ pub fn intersection_with_limits(
 /// Differenza atomica di ogni A meno B, nell'ordine di A, inclusi vuoti e duplicati.
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`]; nessun prefisso pubblicato.
-pub fn difference_with_limits(
+pub(crate) fn difference_with_limits(
     inputs: &[Geometry<f64>],
     right: &Geometry<f64>,
     output_dimension: Option<u8>,

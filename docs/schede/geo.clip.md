@@ -3,7 +3,7 @@
 Ritaglia ogni geometria della sinistra sulla maschera data dalla destra:
 tutte le geometrie della destra si uniscono in una sola maschera, e ogni
 riga della sinistra diventa la sua intersezione con la maschera (kernel
-`topology::clip_to_mask_validated`; [Runner, «Operazioni
+`topology::with_crs::clip_to_mask_validated`; [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon`.
 
@@ -68,7 +68,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`topology::clip_to_mask_validated`, errore `TopologyError`,
+Dal kernel (`topology::with_crs::clip_to_mask_validated`, errore `TopologyError`,
 sulle geometrie già validate: restano le validazioni OGC della maschera
 unita e dei ritagli), nella categoria del passo geo indicata fra
 parentesi:

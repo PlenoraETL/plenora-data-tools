@@ -23,8 +23,11 @@
 mod argomenti;
 
 use geo::{Geometry, LineString, Polygon};
+use plenora_kernels_geo::check_geometry_valid;
+use plenora_kernels_geo::crs::CrsContext;
 use plenora_kernels_geo::operations::{self, SimplifyPolicy};
-use plenora_kernels_geo::{check_geometry_valid, transform_geometry, Operation};
+use plenora_kernels_geo::with_crs::transform_geometry;
+use plenora_kernels_geo::Operation;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -102,7 +105,14 @@ fn main() {
         // --- buffer da solo, sul cerchio grezzo (stessa distanza del test
         // originale: 5.0) ---
         let buffer_esito = con_tetto(
-            move || operations::buffer(&circle_polygon(n), 5.0, precisione()),
+            move || {
+                operations::with_crs::buffer(
+                    CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                    &circle_polygon(n),
+                    5.0,
+                )
+                .map_err(kernel_error_fixture)
+            },
             budget_per_taglia,
         );
         let (buffer_secs, buffer_ok) = match &buffer_esito {
@@ -123,11 +133,14 @@ fn main() {
         // precede nella pipeline reale) ---
         let simplify_esito = con_tetto(
             move || {
-                operations::simplify_with_policy(
+                operations::with_crs::simplify_with_policy(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
                     &circle_polygon(n),
                     0.01,
                     SimplifyPolicy::DouglasPeucker,
                 )
+                .map_err(kernel_error_fixture)
             },
             budget_per_taglia,
         );
@@ -139,7 +152,15 @@ fn main() {
 
         // --- centroid da solo ---
         let centroid_esito = con_tetto(
-            move || transform_geometry(Operation::Centroid, &circle_polygon(n)),
+            move || {
+                transform_geometry(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    Operation::Centroid,
+                    &circle_polygon(n),
+                )
+                .map_err(kernel_error_fixture)
+            },
             budget_per_taglia,
         );
         let (centroid_secs, centroid_ok) = match &centroid_esito {
@@ -161,4 +182,30 @@ fn stampa(n: usize, operazione: &str, secs: Option<f64>, ok: Option<bool>) {
         _ => println!("{{\"n\":{n},\"operazione\":\"{operazione}\",\"stato\":\"incompleto\"}}"),
     }
     std::io::stdout().flush().ok();
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

@@ -31,7 +31,7 @@ contratto (`sorted_by`, `row_count`) restano.
 ### Righe
 
 1:1: la geometria di ogni riga diventa quella agganciata alla griglia. Il
-runner chiama il kernel (`extended_algorithms::snap_to_grid`) su ogni
+runner chiama il kernel (`extended_algorithms::with_crs::snap_to_grid`) su ogni
 cella non nulla, in parallelo; una cella nulla resta nulla
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 

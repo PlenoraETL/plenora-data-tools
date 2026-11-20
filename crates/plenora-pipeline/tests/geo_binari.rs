@@ -13,6 +13,7 @@ use plenora_core::arrow::array::{
 };
 use plenora_core::crs::resolve_crs;
 use plenora_core::ErrorCategory;
+use plenora_kernels_geo::crs::CrsContext;
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::spatial_join::JoinPredicate;
 use plenora_kernels_geo::topology::{BooleanOperation, OverlayMode};
@@ -68,8 +69,15 @@ fn i_join_sono_i_kernel() {
         &[sinistra.clone(), destra.clone()],
     )
     .unwrap();
-    let coppie =
-        spatial_join::spatial_join_nullable(&sx, &dx, JoinPredicate::Intersects, u64::MAX).unwrap();
+    let coppie = spatial_join::with_crs::spatial_join_nullable(
+        CrsContext::new(&[crs_fixture_metrico(); 2]),
+        &sx,
+        &dx,
+        JoinPredicate::Intersects,
+        u64::MAX,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(
         coppie.iter().map(|c| (c.left, c.right)).collect::<Vec<_>>(),
         [(0, 0), (0, 1)]
@@ -91,7 +99,16 @@ fn i_join_sono_i_kernel() {
         &[sinistra.clone(), destra.clone()],
     )
     .unwrap();
-    let trovati = analysis::nearest_matches(&sx, &dx, Some(1000.0), u64::MAX, u64::MAX).unwrap();
+    let trovati = analysis::with_crs::nearest_matches(
+        CrsContext::new(&[crs_fixture_metrico(); 2]),
+        &sx,
+        &dx,
+        Some(1000.0),
+        u64::MAX,
+        u64::MAX,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(
         trovati
             .iter()
@@ -117,7 +134,14 @@ fn i_join_sono_i_kernel() {
     // Allineate a left: `within` dei punti nei poligoni, conteggi dei punti.
     let uscita =
         un_passo_verificato("geo.within", json!({}), &[destra.clone(), sinistra.clone()]).unwrap();
-    let dentro = analysis::within_indexes(&dx, &sx, u64::MAX).unwrap();
+    let dentro = analysis::with_crs::within_indexes(
+        CrsContext::new(&[crs_fixture_metrico(); 2]),
+        &dx,
+        &sx,
+        u64::MAX,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(dentro, [1]);
     let attesi: BooleanArray = dx
         .iter()
@@ -136,7 +160,14 @@ fn i_join_sono_i_kernel() {
         &[sinistra, destra],
     )
     .unwrap();
-    let conteggi = analysis::count_points_in_polygons(&sx, &dx, u64::MAX).unwrap();
+    let conteggi = analysis::with_crs::count_points_in_polygons(
+        CrsContext::new(&[crs_fixture_metrico(); 2]),
+        &sx,
+        &dx,
+        u64::MAX,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(conteggi, [1, 0, 0, 0]);
     let attesi: UInt64Array = sx
         .iter()
@@ -158,9 +189,17 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
         un_passo_verificato("geo.clip", json!({}), &[sinistra.clone(), destra.clone()]).unwrap();
     let presenti: Vec<Geometry<f64>> = sx.iter().flatten().cloned().collect();
     let tutte_le_maschere: Vec<Geometry<f64>> = dx.iter().flatten().cloned().collect();
-    let mut ritagliate = topology::clip_to_mask(&presenti, &tutte_le_maschere, centimetro())
-        .unwrap()
-        .into_iter();
+    let mut ritagliate = topology::with_crs::clip_to_mask(
+        CrsContext::new(&[
+            &crs_fixture_precision(centimetro()),
+            &crs_fixture_precision(centimetro()),
+        ]),
+        &presenti,
+        &tutte_le_maschere,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap()
+    .into_iter();
     let attese: Vec<Option<Vec<u8>>> = sx
         .iter()
         .map(|g| {
@@ -198,14 +237,18 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
         &[sinistra.clone(), destra.clone()],
     )
     .unwrap();
-    let pezzi = topology::polygon_overlay(
+    let pezzi = topology::with_crs::polygon_overlay(
+        CrsContext::new(&[
+            &crs_fixture_precision(centimetro()),
+            &crs_fixture_precision(centimetro()),
+        ]),
         &presenti,
         &tutte_le_maschere,
         OverlayMode::Intersection,
         righe_massime(),
         righe_massime(),
-        centimetro(),
     )
+    .map_err(kernel_error_fixture)
     .unwrap();
     let geometrie_pezzi: Vec<Option<Vec<u8>>> =
         pezzi.iter().map(|p| Some(wkb(&p.geometry))).collect();
@@ -268,7 +311,17 @@ fn ritaglio_overlay_e_booleane_sono_i_kernel() {
             .zip(&dx)
             .map(|coppia| match coppia {
                 (Some(a), Some(b)) => {
-                    let r = topology::boolean_operation(a, b, operazione, centimetro()).unwrap();
+                    let r = topology::with_crs::boolean_operation(
+                        CrsContext::new(&[
+                            &crs_fixture_precision(centimetro()),
+                            &crs_fixture_precision(centimetro()),
+                        ]),
+                        a,
+                        b,
+                        operazione,
+                    )
+                    .map_err(kernel_error_fixture)
+                    .unwrap();
                     (r.coords_count() > 0).then(|| wkb(&r))
                 }
                 _ => None,
@@ -452,4 +505,36 @@ fn un_passo_verificato(
         }
     }
     risultato
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
 }

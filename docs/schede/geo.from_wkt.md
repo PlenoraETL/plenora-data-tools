@@ -7,7 +7,7 @@ WKT 2D senza SRID e descrivere una geometria valida: basta una cella che non
 lo è perché l'intera colonna si rifiuti, con la diagnostica delle righe
 colpevoli.
 
-La conversione di colonna è `extensions::from_wkt_column`; il runner ne
+La conversione di colonna è `extensions::with_crs::from_wkt_column`; il runner ne
 chiama la variante `from_wkt_column_named`, che nomina la colonna nella
 diagnostica.
 
@@ -39,7 +39,7 @@ schema e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 ### Righe
 
 1:1: il runner chiama la conversione di colonna dei kernel
-(`extensions::from_wkt_column_named`) sulla colonna intera. Una cella
+(`extensions::with_crs::from_wkt_column_named`) sulla colonna intera. Una cella
 nulla dà una geometria nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Ordine

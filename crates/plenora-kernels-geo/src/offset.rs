@@ -133,7 +133,7 @@ impl From<LineBooleanError> for OffsetError {
 /// # Errors
 /// Configurazione o geometria invalida, dominio escluso, precisione/topologia
 /// non certificabile, coordinate fuori dominio, risorse, cancellazione o deadline.
-pub fn offset_with_limits(
+pub(crate) fn offset_with_limits(
     input: &Geometry<f64>,
     options: OffsetOptions,
     limits: RelateLimits,

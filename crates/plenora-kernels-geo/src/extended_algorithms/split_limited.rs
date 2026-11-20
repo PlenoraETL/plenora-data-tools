@@ -34,7 +34,11 @@ use std::cmp::Ordering;
 /// nodi o prenotazioni, allocazione fallita, cancellazione e deadline.
 /// `CalcoloNonConcluso` per splitter Line/Rect/Triangle non supportati;
 /// `InvalidRoundedTopology` se la pubblicazione altera la topologia.
-pub fn split_line_with_limits(
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "La visibilita' impedisce riesportazioni accidentali senza CRS"
+)]
+pub(crate) fn split_line_with_limits(
     source: &LineString<f64>,
     splitter: &Geometry<f64>,
     limits: RelateLimits,

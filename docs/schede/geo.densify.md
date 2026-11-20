@@ -31,7 +31,7 @@ restano.
 ### Righe
 
 1:1: la geometria di ogni riga diventa la sua densificata. Il runner
-chiama il kernel (`extended_algorithms::densify`) su ogni cella non
+chiama il kernel (`extended_algorithms::with_crs::densify`) su ogni cella non
 nulla, in parallelo, con `MAX_CELL_COORDINATES` (4 194 304) come massimo
 di coordinate d'uscita per geometria; una cella nulla resta nulla
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).

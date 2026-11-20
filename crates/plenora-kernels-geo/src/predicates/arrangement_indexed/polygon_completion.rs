@@ -74,7 +74,7 @@ impl From<LineBooleanError> for PolygonCompletionError {
 /// # Errors
 /// Errori tipizzati per dominio escluso, geometria invalida/non finita,
 /// pubblicazione non certificabile, risorse, cancellazione e deadline.
-pub fn polygon_completion_with_limits(
+pub(crate) fn polygon_completion_with_limits(
     polygons: &[Polygon<f64>],
     linework: &Geometry<f64>,
     limits: RelateLimits,

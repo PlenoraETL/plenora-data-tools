@@ -37,7 +37,7 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 
 1:1: un azimut per riga. Per il contratto `other_wkb` è il secondo
 operando: la riga è il punto di partenza, `other_wkb` quello d'arrivo
-(`extended_algorithms::geodesic_bearing_degrees(riga, other_wkb)`). Dove
+(`extended_algorithms::with_crs::geodesic_bearing_degrees(context, riga, other_wkb)`). Il contesto contiene lo SR della colonna per entrambi gli operandi. Dove
 l'azimut non è definito il passo si ferma (vedi «Errori»): punti
 coincidenti, partenza su un polo, geodetica più breve non unica. Una
 geometria nulla dà un azimut nullo; una riga che non è un `Point` ferma il passo con un errore

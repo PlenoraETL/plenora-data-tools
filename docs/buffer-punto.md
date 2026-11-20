@@ -228,7 +228,7 @@ un testimone nel corrispondente operando dell'altra unione. L'argomento
 si applica nei due versi. Per un'ulteriore approssimazione U dell'unione
 dei B_i con bound E, la disuguaglianza triangolare da' max_i e_i+E.
 
-L'API `polygon_boolean::union_with_limits` certifica un'unione nel
+L'API `polygon_boolean::with_crs::union_with_limits` certifica un'unione nel
 piano delle coordinate. Il suo rounding dei nodi e' nearest-even,
 con al piu' mezza ulp per ordinata; la verifica della pubblicazione
 riguarda segmenti planari. Non dichiara un E per la sostituzione dei

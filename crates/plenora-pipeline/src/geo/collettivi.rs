@@ -15,6 +15,7 @@
 // giusti, non refusi.
 #![allow(clippy::similar_names)]
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::sync::Arc;
 
 use geo::{Geometry, GeometryCollection};
@@ -67,10 +68,7 @@ const PULIZIA_GEOMETRIE_MASSIME: u64 = 100_000_000;
 pub(super) enum Espansione {
     Esplodi,
     Triangola,
-    Suddividi {
-        vertici: usize,
-        precisione: Precision,
-    },
+    Suddividi { vertici: usize },
 }
 
 /// Il kernel di un'operazione bloccante, con la config letta.
@@ -87,7 +85,7 @@ pub(super) enum KernelCollettivo {
     /// `make_valid`: l'adapter dei kernel, in place.
     Ripara(Precision),
     /// Una riga con l'aggregato di tutte le geometrie.
-    Dissolvi(Precision),
+    Dissolvi,
     Linea,
     Poligono,
     /// Una riga per linea fusa.
@@ -99,13 +97,11 @@ pub(super) enum KernelCollettivo {
     /// Collettive allineate alle righe non-null.
     Voronoi {
         punti: usize,
-        precisione: Precision,
     },
     Pulisci {
         aggancio: f64,
         sovrapposizioni: bool,
         buchi: bool,
-        precisione: Precision,
     },
     Raggruppa {
         eps: f64,
@@ -115,7 +111,6 @@ pub(super) enum KernelCollettivo {
     Copertura {
         tolleranza: f64,
         problemi: usize,
-        precisione: Precision,
     },
     TrattiComuni {
         tolleranza: f64,
@@ -123,6 +118,7 @@ pub(super) enum KernelCollettivo {
     },
     /// La griglia: l'ingresso fa solo da innesco.
     Griglia {
+        crs: Box<plenora_core::crs::ResolvedCrs>,
         estensione: GridExtent,
         lato: f64,
         forma: GridShape,
@@ -146,6 +142,7 @@ impl KernelCollettivo {
         valore: &Value,
         lati: &[Option<Lato>],
         ingressi: &[DataContract],
+        uscita: &DataContract,
     ) -> Result<Option<Self>> {
         let [contratto] = ingressi else {
             return Ok(None);
@@ -160,6 +157,22 @@ impl KernelCollettivo {
             )
             .map_err(|e| del_kernel(op, &e))?;
             return Ok(Some(Self::Griglia {
+                crs: Box::new(
+                    uscita
+                        .geometries
+                        .iter()
+                        .find(|g| {
+                            !contratto
+                                .geometries
+                                .iter()
+                                .any(|source| source.field_id == g.field_id)
+                        })
+                        .and_then(|g| g.crs.as_resolved())
+                        .cloned()
+                        .ok_or_else(|| {
+                            PlenoraError::Crs("geo.generate_grid: CRS di uscita assente".into())
+                        })?,
+                ),
                 estensione,
                 lato: letta.cell_size,
                 forma: letta.shape.unwrap_or(GridShape::Square),
@@ -176,7 +189,6 @@ impl KernelCollettivo {
                 let letta: SubdivideConfig = config(op, valore)?;
                 Self::Espandi(Espansione::Suddividi {
                     vertici: letta.max_vertices,
-                    precisione: geometria.precisione()?,
                 })
             }
             "geo.split" => {
@@ -194,7 +206,7 @@ impl KernelCollettivo {
                 }
             }
             "geo.make_valid" => Self::Ripara(geometria.precisione()?),
-            "geo.dissolve" => Self::Dissolvi(geometria.precisione()?),
+            "geo.dissolve" => Self::Dissolvi,
             "geo.line_builder" => Self::Linea,
             "geo.polygon_builder" => Self::Poligono,
             "geo.line_merge" => Self::FondiLinee,
@@ -231,7 +243,6 @@ impl KernelCollettivo {
                         "max_points",
                         letta.max_points.unwrap_or(VORONOI_PUNTI_PREDEFINITI),
                     )?,
-                    precisione: geometria.precisione()?,
                 }
             }
             "geo.clean_topology" => {
@@ -240,7 +251,6 @@ impl KernelCollettivo {
                     aggancio: letta.snap_tolerance,
                     sovrapposizioni: letta.remove_overlaps,
                     buchi: letta.fill_gaps,
-                    precisione: geometria.precisione()?,
                 }
             }
             "geo.cluster_dbscan" => {
@@ -255,7 +265,6 @@ impl KernelCollettivo {
                 Self::Copertura {
                     tolleranza: letta.tolerance.unwrap_or(0.0),
                     problemi: letta.max_issues.unwrap_or(extensions3::DEFAULT_MAX_ISSUES),
-                    precisione: geometria.precisione()?,
                 }
             }
             "geo.shared_paths" => {
@@ -280,13 +289,14 @@ impl KernelCollettivo {
         margine: MargineMemoria,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         if let Self::Griglia {
+            crs,
             estensione,
             lato,
             forma,
             centroidi,
         } = self
         {
-            return griglia(estensione, *lato, *forma, *centroidi);
+            return griglia(crs, estensione, *lato, *forma, *centroidi);
         }
         let lato = lato.ok_or_else(|| {
             PlenoraError::Internal(format!("{op}: operazione senza colonna geometria"))
@@ -330,33 +340,43 @@ impl KernelCollettivo {
                 sostituisci(op, &mut colonne, lato.indice, vec![riparate])?;
                 Ok((colonne, righe))
             }
-            Self::Dissolvi(precisione) => {
+            Self::Dissolvi => {
                 let poligoni: Vec<Geometry<f64>> =
                     decodifica(celle)?.into_iter().flatten().collect();
                 let unione = if poligoni.is_empty() {
                     None
                 } else {
                     Some(
-                        topology::dissolve_validated(&poligoni, *precisione)
-                            .map_err(|e| del_kernel(op, &e))?,
+                        topology::with_crs::dissolve_validated(
+                            CrsContext::new(&[&lato.crs]),
+                            &poligoni,
+                        )
+                        .map_err(|e| del_kernel(op, &e))?,
                     )
                 };
                 una_geometria(unione.as_ref())
             }
             Self::Linea => {
-                let linea = construction::line_from_ordered_points(&decodifica(celle)?)
-                    .map_err(|e| del_kernel(op, &e))?;
+                let linea = construction::with_crs::line_from_ordered_points(
+                    CrsContext::new(&[&lato.crs]),
+                    &decodifica(celle)?,
+                )
+                .map_err(|e| del_kernel(op, &e))?;
                 una_geometria(linea.as_ref())
             }
             Self::Poligono => {
-                let poligono = construction::polygon_from_ordered_points(&decodifica(celle)?)
-                    .map_err(|e| del_kernel(op, &e))?;
+                let poligono = construction::with_crs::polygon_from_ordered_points(
+                    CrsContext::new(&[&lato.crs]),
+                    &decodifica(celle)?,
+                )
+                .map_err(|e| del_kernel(op, &e))?;
                 una_geometria(poligono.as_ref())
             }
             Self::FondiLinee => {
                 let linee: GeometryCollection<f64> =
                     decodifica(celle)?.into_iter().flatten().collect();
-                let fuse = extended_algorithms::line_merge(
+                let fuse = extended_algorithms::with_crs::line_merge(
+                    CrsContext::new(&[&lato.crs]),
                     &Geometry::GeometryCollection(linee),
                     MAX_CLEAN_VERTICES,
                     righe_massime,
@@ -380,33 +400,35 @@ impl KernelCollettivo {
                 )?;
                 un_batch(op, &uscite)
             }
-            Self::Raccogli(chiavi) => raccogli(op, celle, batch, chiavi),
-            Self::Voronoi { punti, precisione } => {
-                allineate_alle_righe(op, lato, batch, |geometrie| {
-                    advanced::voronoi_cells(geometrie, *punti, *precisione)
-                        .map(|celle| celle.into_iter().map(Some).collect())
-                        .map_err(|e| del_kernel(op, &e))
-                })
-            }
+            Self::Raccogli(chiavi) => raccogli(&lato.crs, op, celle, batch, chiavi),
+            Self::Voronoi { punti } => allineate_alle_righe(op, lato, batch, |geometrie| {
+                advanced::with_crs::voronoi_cells(CrsContext::new(&[&lato.crs]), geometrie, *punti)
+                    .map(|celle| celle.into_iter().map(Some).collect())
+                    .map_err(|e| del_kernel(op, &e))
+            }),
             Self::Pulisci {
                 aggancio,
                 sovrapposizioni,
                 buchi,
-                precisione,
             } => allineate_alle_righe(op, lato, batch, |geometrie| {
-                topology::clean_valid_polygon_topology_validated(
+                topology::with_crs::clean_valid_polygon_topology_validated(
+                    CrsContext::new(&[&lato.crs]),
                     geometrie,
                     *aggancio,
                     *sovrapposizioni,
                     *buchi,
                     PULIZIA_GEOMETRIE_MASSIME,
                     MAX_CLEAN_VERTICES,
-                    *precisione,
                 )
                 .map_err(|e| del_kernel(op, &e))
             }),
             Self::Raggruppa { eps, punti } => {
-                let etichette = cluster::dbscan_column(celle, *eps, *punti)?;
+                let etichette = cluster::with_crs::dbscan_column(
+                    CrsContext::new(&[&lato.crs]),
+                    celle,
+                    *eps,
+                    *punti,
+                )?;
                 let mut colonne = batch.columns().to_vec();
                 colonne.push(Arc::new(UInt64Array::from(etichette)));
                 Ok((colonne, righe))
@@ -414,14 +436,13 @@ impl KernelCollettivo {
             Self::Copertura {
                 tolleranza,
                 problemi,
-                precisione,
             } => {
                 // Una riga d'uscita per problema: tipo, due indici, area.
-                let problemi = extensions3::coverage_validate_rows_con_margine(
+                let problemi = extensions3::with_crs::coverage_validate_rows_con_margine(
+                    CrsContext::new(&[&lato.crs]),
                     celle,
                     *tolleranza,
                     *problemi,
-                    *precisione,
                     margine.con_uscita_per_risultato(BYTE_RIGA_PROBLEMA),
                 )?;
                 let righe = problemi.len();
@@ -453,7 +474,12 @@ impl KernelCollettivo {
                 tolleranza,
                 lunghezza,
             } => {
-                let tratti = extensions3::shared_paths_rows(celle, *tolleranza, *lunghezza)?;
+                let tratti = extensions3::with_crs::shared_paths_rows(
+                    CrsContext::new(&[&lato.crs]),
+                    celle,
+                    *tolleranza,
+                    *lunghezza,
+                )?;
                 let righe = tratti.len();
                 Ok((
                     vec![
@@ -517,13 +543,14 @@ fn espandi(
 ) -> Result<(Vec<ArrayRef>, usize)> {
     let parti = map_nullable(lato.celle(batch)?, |cella| {
         let parti: Vec<Vec<u8>> = match espansione {
-            Espansione::Suddividi {
-                vertici,
-                precisione,
-            } => extensions2::subdivide_wkb(cella, *vertici, *precisione)?,
+            Espansione::Suddividi { vertici } => extensions2::with_crs::subdivide_wkb(
+                CrsContext::new(&[&lato.crs]),
+                cella,
+                *vertici,
+            )?,
             Espansione::Esplodi => {
                 let geometria = plenora_kernels_geo::wkb_decoder::decode_validated(cella)?;
-                operations::explode(&geometria)
+                operations::with_crs::explode(CrsContext::new(&[&lato.crs]), &geometria)
                     .map_err(|e| del_kernel(op, &e))?
                     .iter()
                     .map(encode_geometry)
@@ -531,11 +558,16 @@ fn espandi(
             }
             Espansione::Triangola => {
                 let geometria = plenora_kernels_geo::wkb_decoder::decode_validated(cella)?;
-                extended_algorithms::delaunay(&geometria, MAX_CELL_COORDINATES, righe_massime)
-                    .map_err(|e| del_kernel(op, &e))?
-                    .into_iter()
-                    .map(|triangolo| encode_geometry(&Geometry::Polygon(triangolo)))
-                    .collect::<Result<_>>()?
+                extended_algorithms::with_crs::delaunay(
+                    CrsContext::new(&[&lato.crs]),
+                    &geometria,
+                    MAX_CELL_COORDINATES,
+                    righe_massime,
+                )
+                .map_err(|e| del_kernel(op, &e))?
+                .into_iter()
+                .map(|triangolo| encode_geometry(&Geometry::Polygon(triangolo)))
+                .collect::<Result<_>>()?
             }
         };
         Ok(Some(parti))
@@ -633,6 +665,7 @@ fn allineate_alle_righe(
 /// stesso gruppo restano nell'ordine d'ingresso, e il gruppo cambia dove
 /// una chiave differisce per lo stesso comparatore.
 fn raccogli(
+    crs: &plenora_core::crs::ResolvedCrs,
     op: &str,
     celle: &BinaryArray,
     batch: &RecordBatch,
@@ -647,7 +680,8 @@ fn raccogli(
             .iter()
             .map(|&riga| geometrie.get(riga).cloned().flatten())
             .collect();
-        let raccolta = extensions::collect_geometries(&gruppo).map_err(|e| del_kernel(op, &e))?;
+        let raccolta = extensions::with_crs::collect_geometries(CrsContext::new(&[crs]), &gruppo)
+            .map_err(|e| del_kernel(op, &e))?;
         raccolte.push(raccolta.as_ref().map(encode_geometry).transpose()?);
         let prima = righe
             .first()
@@ -736,12 +770,18 @@ fn gruppi_in_ordine(op: &str, batch: &RecordBatch, chiavi: &[usize]) -> Result<V
 /// `generate_grid`: geometria, `cell_i`, `cell_j` e, se chiesti, i
 /// centroidi; l'ingresso fa solo da innesco (come a `190c493`).
 fn griglia(
+    crs: &plenora_core::crs::ResolvedCrs,
     estensione: &GridExtent,
     lato: f64,
     forma: GridShape,
     centroidi: bool,
 ) -> Result<(Vec<ArrayRef>, usize)> {
-    let celle = extensions2::generate_grid_rows(estensione, lato, forma)?;
+    let celle = extensions2::with_crs::generate_grid_rows(
+        CrsContext::new(&[crs]),
+        estensione,
+        lato,
+        forma,
+    )?;
     let mut colonne: Vec<ArrayRef> = vec![
         Arc::new(
             celle

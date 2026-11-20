@@ -2,7 +2,7 @@
 
 Sovrappone due tabelle di poligoni e ne produce i pezzi, ognuno con la
 riga sinistra e la riga destra da cui viene (kernel
-`topology::polygon_overlay_validated`; [Runner, «Operazioni
+`topology::with_crs::polygon_overlay_validated`; [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)): le intersezioni delle coppie che si
 sovrappongono e, secondo `mode`, i resti di ciascun lato fuori dall'altro.
 Lavora solo su `Polygon` e `MultiPolygon`.
@@ -88,7 +88,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`topology::polygon_overlay_validated`, errore
+Dal kernel (`topology::with_crs::polygon_overlay_validated`, errore
 `TopologyError`, sulle geometrie già validate: restano le validazioni OGC
 delle unioni e dei pezzi), nella categoria del passo geo indicata fra
 parentesi:

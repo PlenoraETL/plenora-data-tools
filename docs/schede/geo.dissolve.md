@@ -1,7 +1,7 @@
 ### Che cosa fa
 
 Unisce tutte le geometrie della tabella in una sola (kernel
-`topology::dissolve`, `unary_union` di `geo`): le parti che si toccano o
+`topology::with_crs::dissolve`, `unary_union` di `geo`): le parti che si toccano o
 si sovrappongono si fondono, quelle disgiunte restano poligoni distinti
 dello stesso `MultiPolygon`. Lavora solo su `Polygon` e `MultiPolygon`. Le
 colonne attributo non passano e non ci sono gruppi.
@@ -58,7 +58,7 @@ dell'ingresso dichiara con un elenco e che non vi compare. Poi la
 decodifica completa con la validazione OGC: `InvalidPlan` per una
 geometria non valida, `Internal` se la validazione non conclude.
 
-Poi il kernel `topology::dissolve_validated`, con errore `TopologyError`
+Poi il kernel `topology::with_crs::dissolve_validated`, con errore `TopologyError`
 che il runner traduce così: `ValidazioneNonConclusa` e
 `CalcoloNonConcluso` diventano `Internal`, `PrecisionInsufficient`
 diventa `Unsupported`, le altre `InvalidPlan`:

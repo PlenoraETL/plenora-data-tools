@@ -31,7 +31,7 @@ si tolgono dal campo.
 
 ### Righe
 
-1:1: il runner chiama il kernel (`operations::point_on_surface`) su ogni cella non
+1:1: il runner chiama il kernel (`operations::with_crs::point_on_surface`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza punto interno (vuota) dà null: la colonna d'uscita ha

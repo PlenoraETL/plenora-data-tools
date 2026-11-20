@@ -9,7 +9,9 @@
 
 use plenora_core::arrow::array::StringArray;
 use plenora_core::ErrorCategory;
-use plenora_kernels_geo::extensions::{from_wkt_column, OnWktError};
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::extensions::with_crs::from_wkt_column;
+use plenora_kernels_geo::extensions::OnWktError;
 
 /// Il primo reperto di `barriera_validazione.rs`.
 const REPERTO: &[u8] = include_bytes!("fixtures/reperto_a.wkb");
@@ -45,7 +47,15 @@ fn coppia_del_reperto_in_wkt() -> String {
 fn l_adapter_wkt_su_reperto_concluso_resta_datamapping() {
     let wkt = coppia_del_reperto_in_wkt();
     let colonna = StringArray::from(vec![Some(wkt.as_str())]);
-    let errore = from_wkt_column(&colonna, OnWktError::Fail).expect_err("il reperto non passa");
+    let errore = from_wkt_column(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &colonna,
+        OnWktError::Fail,
+    )
+    .map_err(kernel_error_fixture)
+    .expect_err("il reperto non passa");
 
     assert_eq!(
         errore.category(),
@@ -74,8 +84,15 @@ fn l_adapter_wkt_su_reperto_concluso_resta_datamapping() {
 #[test]
 fn una_cella_ordinariamente_invalida_resta_tale() {
     let colonna = StringArray::from(vec![Some("NON E' WKT")]);
-    let errore =
-        from_wkt_column(&colonna, OnWktError::Fail).expect_err("una cella non-WKT non passa");
+    let errore = from_wkt_column(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &colonna,
+        OnWktError::Fail,
+    )
+    .map_err(kernel_error_fixture)
+    .expect_err("una cella non-WKT non passa");
     assert_eq!(
         errore.category(),
         ErrorCategory::DataMapping,
@@ -87,7 +104,23 @@ fn una_cella_ordinariamente_invalida_resta_tale() {
 #[test]
 fn le_celle_valide_passano() {
     let colonna = StringArray::from(vec![Some("POINT (1 2)"), None]);
-    let uscita = from_wkt_column(&colonna, OnWktError::Fail).expect("celle valide");
+    let uscita = from_wkt_column(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &colonna,
+        OnWktError::Fail,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("celle valide");
     assert_eq!(uscita.len(), 2);
     assert!(uscita[0].is_some() && uscita[1].is_none());
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
 }

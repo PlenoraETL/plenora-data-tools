@@ -33,7 +33,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::ContainsProperly)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::ContainsProperly)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -77,7 +77,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 

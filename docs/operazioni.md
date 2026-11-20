@@ -9807,7 +9807,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`extended::affine_transform`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::affine_transform`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -9961,7 +9961,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 #### Righe
 
-1:1: un'area per riga, dal kernel `operations::area`; una geometria
+1:1: un'area per riga, dal kernel `operations::with_crs::area`; una geometria
 nulla dà una cella nulla.
 
 #### Ordine
@@ -10111,7 +10111,7 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 
 1:1: un azimut per riga. Per il contratto `other_wkb` è il secondo
 operando: la riga è il punto di partenza, `other_wkb` quello d'arrivo
-(`extended_algorithms::geodesic_bearing_degrees(riga, other_wkb)`). Dove
+(`extended_algorithms::with_crs::geodesic_bearing_degrees(context, riga, other_wkb)`). Il contesto contiene lo SR della colonna per entrambi gli operandi. Dove
 l'azimut non è definito il passo si ferma (vedi «Errori»): punti
 coincidenti, partenza su un polo, geodetica più breve non unica. Una
 geometria nulla dà un azimut nullo; una riga che non è un `Point` ferma il passo con un errore
@@ -10289,7 +10289,7 @@ si tolgono dal campo.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`operations::boundary`) su ogni cella non
+1:1: il runner chiama il kernel (`operations::with_crs::boundary`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -10432,7 +10432,7 @@ contratto (`sorted_by`, `row_count`) passano invariati.
 
 #### Righe
 
-1:1: un rettangolo per riga, dal kernel `operations::bounds`. Una
+1:1: un rettangolo per riga, dal kernel `operations::with_crs::bounds`. Una
 geometria nulla dà quattro celle nulle, e anche una geometria vuota (il
 kernel non ha un rettangolo da rendere).
 
@@ -10574,7 +10574,7 @@ si tolgono dal campo.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`operations::buffer_with_cap`) su ogni cella non
+1:1: il runner chiama il kernel (`operations::with_crs::buffer_with_cap`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -10868,7 +10868,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 #### Che cosa fa
 
 Pulisce la topologia di una tabella di poligoni già validi, riga per riga
-nell'ordine della tabella (kernel `topology::clean_valid_polygon_topology`,
+nell'ordine della tabella (kernel `topology::with_crs::clean_valid_polygon_topology`,
 con la chiusura dei varchi e la regola «vince la prima riga» di Manipola):
 con `fill_gaps` chiude rientranze e varchi stretti dentro ogni riga, con
 `remove_overlaps` toglie a ogni riga la parte già coperta dalle righe
@@ -10958,7 +10958,7 @@ decodifica completa con la validazione OGC: `InvalidPlan` per una
 geometria non valida (la riparazione è di `geo.make_valid`), `Internal`
 se la validazione non conclude.
 
-Poi il kernel `topology::clean_valid_polygon_topology_validated`, con
+Poi il kernel `topology::with_crs::clean_valid_polygon_topology_validated`, con
 errore `TopologyError` che il runner traduce così: `ValidazioneNonConclusa`
 e `CalcoloNonConcluso` diventano `Internal`, `PrecisionInsufficient`
 diventa `Unsupported`, le altre `InvalidPlan`. Il messaggio è quello del
@@ -11073,7 +11073,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 Ritaglia ogni geometria della sinistra sulla maschera data dalla destra:
 tutte le geometrie della destra si uniscono in una sola maschera, e ogni
 riga della sinistra diventa la sua intersezione con la maschera (kernel
-`topology::clip_to_mask_validated`; [Runner, «Operazioni
+`topology::with_crs::clip_to_mask_validated`; [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon`.
 
@@ -11138,7 +11138,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`topology::clip_to_mask_validated`, errore `TopologyError`,
+Dal kernel (`topology::with_crs::clip_to_mask_validated`, errore `TopologyError`,
 sulle geometrie già validate: restano le validazioni OGC della maschera
 unita e dei ritagli), nella categoria del passo geo indicata fra
 parentesi:
@@ -11257,7 +11257,7 @@ compreso) ci sono almeno `min_points` punti; i cluster sono i core
 collegati per densità più i punti di bordo che raggiungono; gli altri punti
 sono rumore ed escono con etichetta nulla. Accetta solo geometrie `Point`.
 
-La conversione di colonna è `cluster::dbscan_column`, che il runner
+La conversione di colonna è `cluster::with_crs::dbscan_column`, che il runner
 chiama su tutta la colonna e aggiunge in coda l'etichetta ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
@@ -11410,7 +11410,7 @@ resta quella. Le geometrie nulle si saltano. Le colonne che non sono chiavi
 spariscono.
 
 Il runner forma i gruppi su tutta la tabella e per ciascuno chiama
-`extensions::collect_geometries` con le geometrie del gruppo nell'ordine
+`extensions::with_crs::collect_geometries` con le geometrie del gruppo nell'ordine
 delle righe ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Parametri
@@ -11592,7 +11592,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 | `concavity` | numero | obbligatorio | finito, maggiore di zero | concavità relativa: più piccola, più concavo |
 | `length_threshold` | numero | `0` | finito, non negativo | lati più corti di così non si scavano; `0` scava ogni lato |
 
-Il kernel (`extended::concave_hull`) riceve `length_threshold` sempre
+Il kernel (`extended::with_crs::concave_hull`) riceve `length_threshold` sempre
 esplicito, insieme al limite di coordinate `max_coordinates`: il runner
 passa `0` quando manca (ogni lato si può scavare) e `MAX_CELL_COORDINATES`
 (4 194 304) come limite.
@@ -11608,7 +11608,7 @@ ereditate si tolgono dal campo. Le proprietà del contratto (`sorted_by`,
 
 #### Righe
 
-1:1: il runner chiama il kernel (`extended::concave_hull`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::concave_hull`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza coordinate dà un `POLYGON EMPTY`.
@@ -11888,7 +11888,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Aggiunge alla sinistra, di norma poligoni, una colonna con il numero di
 geometrie della destra, di norma punti, che ogni sua geometria contiene
-(kernel `analysis::count_points_in_polygons_validated`; [Runner,
+(kernel `analysis::with_crs::count_points_in_polygons_validated`; [Runner,
 «Operazioni geo»](runner.md#operazioni-geo)). «Contiene» è il
 `contains` di `geo`: i punti sul bordo non contano, come il
 `predicate="within"` di Manipola, e un punto dentro più poligoni conta in
@@ -11959,7 +11959,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`analysis::count_points_in_polygons_validated`, errore
+Dal kernel (`analysis::with_crs::count_points_in_polygons_validated`, errore
 `AnalysisError` che avvolge `SpatialJoinError`, sulle geometrie già
 validate), nella categoria del passo geo indicata fra parentesi:
 
@@ -12075,7 +12075,7 @@ maggiore di `tolerance` scrive una riga `overlap`, con le posizioni delle
 due righe, l'area e la geometria della zona sovrapposta. I buchi fra i
 poligoni (gap) non si cercano: se un buco sia atteso dipende dal dominio.
 
-La conversione di colonna è `extensions3::coverage_validate_rows`, che il
+La conversione di colonna è `extensions3::with_crs::coverage_validate_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto e la
 precisione del CRS della colonna ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -12280,7 +12280,7 @@ del contratto resta `sorted_by`, cade `row_count`.
 Espansione 1:N: ogni riga dà i suoi triangoli, con le altre colonne copiate
 e `__parent_index` alla riga d'origine; meno di tre punti distinti, o punti
 tutti collineari, danno zero righe. Il kernel
-(`extended_algorithms::delaunay`) triangola una geometria alla volta e
+(`extended_algorithms::with_crs::delaunay`) triangola una geometria alla volta e
 riceve come argomenti il massimo di coordinate d'ingresso e di triangoli.
 Il runner lo chiama su ogni cella non nulla, con `MAX_CELL_COORDINATES`
 come massimo di coordinate e il limite di righe dell'arco d'uscita (`max_output_rows` per un output del
@@ -12450,7 +12450,7 @@ restano.
 #### Righe
 
 1:1: la geometria di ogni riga diventa la sua densificata. Il runner
-chiama il kernel (`extended_algorithms::densify`) su ogni cella non
+chiama il kernel (`extended_algorithms::with_crs::densify`) su ogni cella non
 nulla, in parallelo, con `MAX_CELL_COORDINATES` (4 194 304) come massimo
 di coordinate d'uscita per geometria; una cella nulla resta nulla
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
@@ -12583,7 +12583,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con la parte che non sta nella
 geometria della destra, `sinistra \ destra`, calcolata dal kernel
-`topology::boolean_operation_validated` ([Runner, «Operazioni
+`topology::with_crs::boolean_operation_validated` ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
@@ -12650,7 +12650,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   di byte);
 - `InvalidPlan`: le due tabelle hanno un numero di righe diverso.
 
-Dal kernel (`topology::boolean_operation_validated`, errore
+Dal kernel (`topology::with_crs::boolean_operation_validated`, errore
 `TopologyError`, sulle geometrie già validate: resta la validazione OGC
 del risultato), nella categoria del passo geo indicata fra parentesi:
 
@@ -12758,7 +12758,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 #### Che cosa fa
 
 Unisce tutte le geometrie della tabella in una sola (kernel
-`topology::dissolve`, `unary_union` di `geo`): le parti che si toccano o
+`topology::with_crs::dissolve`, `unary_union` di `geo`): le parti che si toccano o
 si sovrappongono si fondono, quelle disgiunte restano poligoni distinti
 dello stesso `MultiPolygon`. Lavora solo su `Polygon` e `MultiPolygon`. Le
 colonne attributo non passano e non ci sono gruppi.
@@ -12815,7 +12815,7 @@ dell'ingresso dichiara con un elenco e che non vi compare. Poi la
 decodifica completa con la validazione OGC: `InvalidPlan` per una
 geometria non valida, `Internal` se la validazione non conclude.
 
-Poi il kernel `topology::dissolve_validated`, con errore `TopologyError`
+Poi il kernel `topology::with_crs::dissolve_validated`, con errore `TopologyError`
 che il runner traduce così: `ValidazioneNonConclusa` e
 `CalcoloNonConcluso` diventano `Internal`, `PrecisionInsufficient`
 diventa `Unsupported`, le altre `InvalidPlan`:
@@ -12945,7 +12945,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 #### Righe
 
-1:1: una distanza per riga, dal kernel `operations::distance` (riga,
+1:1: una distanza per riga, dal kernel `operations::with_crs::distance` (riga,
 `other_wkb`). Una geometria nulla dà una distanza nulla; una geometria
 vuota, da una parte o dall'altra, anche: il kernel non ha una distanza da
 rendere.
@@ -13254,7 +13254,7 @@ assente o `unresolved` resta tale.
 #### Righe
 
 Espansione 1:N: da 0 righe per madre (un multi o una collezione vuoti) a
-una per parte. Il kernel (`operations::explode`) lavora su una geometria
+una per parte. Il kernel (`operations::with_crs::explode`) lavora su una geometria
 alla volta; il runner lo chiama su ogni cella non nulla e ripete sulle
 parti le altre colonne della madre. Una cella nulla non produce righe.
 `__parent_index` è la posizione della madre nella tabella d'ingresso del
@@ -13401,7 +13401,7 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 1:1: una distanza per riga, nelle unità del CRS. Per il contratto
 `other_wkb` è il secondo operando; la distanza discreta è simmetrica, quindi
 l'ordine non cambia il valore. Il kernel
-(`extended_algorithms::frechet_distance`) riceve due `LineString`. Una
+(`extended_algorithms::with_crs::frechet_distance`) riceve due `LineString`. Una
 geometria nulla dà una distanza nulla, e anche una linea vuota, da una
 parte o dall'altra (il kernel non rende un valore); una riga che non è una
 `LineString` ferma il passo con un errore (vedi «Errori»).
@@ -13573,7 +13573,7 @@ senza tipi dichiarati. I metadati di schema e le proprietà del contratto
 
 1:1: un punto per riga. Il runner legge le due colonne (`float64`, o
 `int64` convertito in `f64` solo entro `2^53` in modulo, dove la
-conversione è esatta), chiama il kernel (`construction::point_from_lon_lat`)
+conversione è esatta), chiama il kernel (`construction::with_crs::point_from_lon_lat`)
 riga per riga e controlla che il punto stia nel dominio di validità del
 CRS prodotto. Una x o una y nulla è un errore: la colonna prodotta è
 dichiarata non nullable ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
@@ -13690,7 +13690,7 @@ WKT 2D senza SRID e descrivere una geometria valida: basta una cella che non
 lo è perché l'intera colonna si rifiuti, con la diagnostica delle righe
 colpevoli.
 
-La conversione di colonna è `extensions::from_wkt_column`; il runner ne
+La conversione di colonna è `extensions::with_crs::from_wkt_column`; il runner ne
 chiama la variante `from_wkt_column_named`, che nomina la colonna nella
 diagnostica.
 
@@ -13722,7 +13722,7 @@ schema e le proprietà del contratto (`sorted_by`, `row_count`) restano.
 #### Righe
 
 1:1: il runner chiama la conversione di colonna dei kernel
-(`extensions::from_wkt_column_named`) sulla colonna intera. Una cella
+(`extensions::with_crs::from_wkt_column_named`) sulla colonna intera. Una cella
 nulla dà una geometria nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 #### Ordine
@@ -13838,7 +13838,7 @@ alto, di lato `cell_size`) escono solo se stanno per intero dentro il
 rettangolo. La tabella d'ingresso serve solo da innesco: né le sue colonne
 né le sue righe entrano nell'uscita.
 
-Il calcolo è `extensions2::generate_grid_rows`, che il runner chiama una
+Il calcolo è `extensions2::with_crs::generate_grid_rows`, che il runner chiama una
 volta per passo, qualunque sia l'ingresso ([Runner, «Operazioni geo»](runner.md#operazioni-geo)); il numero di
 celle calcolato a secco entra nel modello di costo del passo.
 
@@ -14016,7 +14016,7 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 
 #### Righe
 
-1:1: un'area per riga. Il kernel (`extended_algorithms::geodesic_area_m2`)
+1:1: un'area per riga. Il kernel (`extended_algorithms::with_crs::geodesic_area_m2`)
 accetta solo `Polygon` e `MultiPolygon`; un poligono o un multi-poligono
 vuoto dà `-0.0`. Una geometria nulla dà un'area nulla; una riga di altro
 tipo ferma il passo con un errore (vedi «Errori»): l'analisi accetta ogni
@@ -14207,7 +14207,7 @@ contratto (`sorted_by`, `row_count`).
 
 #### Righe
 
-1:1: una distanza per riga, dal kernel (`extended::geodesic_distance_m`), che
+1:1: una distanza per riga, dal kernel (`extended::with_crs::geodesic_distance_m`), che
 riceve **due punti**. `other_wkb` deve essere un `Point` (l'analisi lo
 verifica); una geometria nulla dà una distanza nulla, e una riga che non è
 un `Point` ferma il passo con un errore (vedi «Errori»): l'analisi accetta
@@ -14367,7 +14367,7 @@ contratto (`sorted_by`, `row_count`).
 #### Righe
 
 1:1: una lunghezza per riga, dal kernel
-(`extended::geodesic_line_length_m`), che riceve **una `LineString`**
+(`extended::with_crs::geodesic_line_length_m`), che riceve **una `LineString`**
 (vuota o di un solo vertice: 0). Una geometria nulla dà una lunghezza
 nulla; una multilinea, un poligono o un punto fermano il passo con un
 errore (vedi «Errori»): l'analisi accetta ogni tipo nella colonna, perché
@@ -14494,7 +14494,7 @@ numero di parti, il numero di anelli interni, il primo e l'ultimo punto di
 una linea aperta e se la geometria è chiusa. Si sceglie quali colonne con
 `fields`; la geometria non cambia.
 
-Il calcolo per geometria è `extensions::geometry_accessors`, che il
+Il calcolo per geometria è `extensions::with_crs::geometry_accessors`, che il
 runner chiama su ogni riga non nulla.
 
 #### Parametri
@@ -14685,7 +14685,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
 
-1:1: un referto per riga. Il kernel (`extended_algorithms::geometry_diagnostics`)
+1:1: un referto per riga. Il kernel (`extended_algorithms::with_crs::geometry_diagnostics`)
 descrive una geometria alla volta. Una geometria nulla dà dieci celle
 nulle. Il runner verifica solo la struttura WKB e il dominio del CRS, non
 la validità OGC: una geometria non valida si descrive, non si rifiuta.
@@ -14835,7 +14835,7 @@ contratto (`sorted_by`, `row_count`).
 
 #### Righe
 
-1:1: una distanza per riga, dal kernel `extended::hausdorff_distance`
+1:1: una distanza per riga, dal kernel `extended::with_crs::hausdorff_distance`
 (riga, `other_wkb`). Una geometria nulla dà una distanza nulla, e anche
 una geometria senza coordinate, da una parte o dall'altra (il kernel
 rende «nessun valore»).
@@ -14874,7 +14874,7 @@ riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 - `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo.
 
-Dal kernel (`extended::hausdorff_distance`, `ExtendedError`), per riga:
+Dal kernel (`extended::with_crs::hausdorff_distance`, `ExtendedError`), per riga:
 
 - `InvalidPlan`: `InvalidInput` (coordinate non finite o geometria della
   riga non valida OGC; `other_wkb` è già validata in analisi),
@@ -15002,7 +15002,7 @@ contratto (`sorted_by`, `row_count`).
 
 #### Righe
 
-1:1: una distanza per riga, dal kernel (`extended::haversine_distance_m`), che
+1:1: una distanza per riga, dal kernel (`extended::with_crs::haversine_distance_m`), che
 riceve **due punti**. `other_wkb` deve essere un `Point` (l'analisi lo
 verifica); una geometria nulla dà una distanza nulla, e una riga che non è
 un `Point` ferma il passo con un errore (vedi «Errori»): l'analisi accetta
@@ -15142,7 +15142,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con la sua intersezione con la
 geometria della destra, `sinistra ∩ destra`, calcolata dal kernel
-`topology::boolean_operation_validated` ([Runner, «Operazioni
+`topology::with_crs::boolean_operation_validated` ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
@@ -15210,7 +15210,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   di byte);
 - `InvalidPlan`: le due tabelle hanno un numero di righe diverso.
 
-Dal kernel (`topology::boolean_operation_validated`, errore
+Dal kernel (`topology::with_crs::boolean_operation_validated`, errore
 `TopologyError`, sulle geometrie già validate: resta la validazione OGC
 del risultato), nella categoria del passo geo indicata fra parentesi:
 
@@ -15345,7 +15345,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 #### Righe
 
-1:1: una lunghezza per riga, dal kernel `operations::length`; una
+1:1: una lunghezza per riga, dal kernel `operations::with_crs::length`; una
 geometria nulla dà una cella nulla.
 
 #### Ordine
@@ -15487,7 +15487,7 @@ dichiarazione).
 #### Righe
 
 Aggregazione: tutte le righe in una. Il kernel
-(`construction::line_from_ordered_points`) riceve il gruppo ordinato delle
+(`construction::with_crs::line_from_ordered_points`) riceve il gruppo ordinato delle
 geometrie, salta quelle assenti (`None`) e, con meno di due punti, non
 costruisce la linea (`None`, non un errore). Il runner gli passa tutte le
 celle della colonna nell'ordine delle righe, una cella nulla come `None`,
@@ -15631,7 +15631,7 @@ i metadati di schema e le proprietà del contratto (`sorted_by`,
 
 #### Righe
 
-1:1. Il kernel (`extended_algorithms::line_interpolate_point`) riceve una
+1:1. Il kernel (`extended_algorithms::with_crs::line_interpolate_point`) riceve una
 `LineString` e rende nessun punto se è vuota. Il runner lo chiama su ogni
 cella non nulla, in parallelo: una cella nulla resta nulla; una linea
 vuota dà null, e se la colonna d'uscita (con la nullabilità di quella
@@ -15759,7 +15759,7 @@ la frazione della lunghezza totale da 0 (inizio) a 1 (fine), come
 `ST_LineLocatePoint` di PostGIS. Le geometrie che non sono `LineString`
 danno null.
 
-Il calcolo per geometria è `extensions::line_locate_point`, che il
+Il calcolo per geometria è `extensions::with_crs::line_locate_point`, che il
 runner chiama su ogni riga non nulla.
 
 #### Parametri
@@ -15937,7 +15937,7 @@ contratto (`sorted_by`, `row_count`) cadono.
 #### Righe
 
 Aggregazione: per il contratto l'uscita ha solo la colonna geometria, una
-riga per percorso fuso. Il kernel (`extended_algorithms::line_merge`) fonde
+riga per percorso fuso. Il kernel (`extended_algorithms::with_crs::line_merge`) fonde
 le linee di una geometria (`LineString`, `MultiLineString` o una
 `GeometryCollection` di sole linee, anche annidata) e riceve come
 argomenti il massimo di coordinate d'ingresso e di linee d'uscita. Il
@@ -16104,7 +16104,7 @@ del contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
 
-1:1. Il kernel (`extended_algorithms::line_substring`) riceve una
+1:1. Il kernel (`extended_algorithms::with_crs::line_substring`) riceve una
 `LineString`, rende una `LineString`, un `Point` se `start_ratio` e
 `end_ratio` sono uguali (confronto numerico `==`: `-0.0` e `0.0` sono
 uguali), e nessuna geometria se la linea
@@ -16263,7 +16263,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 Nessuno: la config è `{}`. Metodo e parti collassate non si scelgono dal
 piano: l'esecuzione Arrow usa sempre `LINEWORK` con le parti collassate
 conservate. `STRUCTURE` (la regola di `GeometryFixer`) è raggiungibile solo
-dall'API dei kernel (`rust_backend::make_valid_wkb`).
+dall'API dei kernel (`rust_backend::with_crs::make_valid_wkb`).
 
 #### Schema
 
@@ -16438,7 +16438,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Abbina ogni riga della sinistra alla riga della destra più vicina, con la
 distanza planare fra le due geometrie (kernel
-`analysis::nearest_matches_validated`, [Runner, «Operazioni
+`analysis::with_crs::nearest_matches_validated`, [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)): in caso di pari tutte le destre alla
 distanza minima, come `sjoin_nearest` di GeoPandas.
 
@@ -16512,7 +16512,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`analysis::nearest_matches_validated`, errore
+Dal kernel (`analysis::with_crs::nearest_matches_validated`, errore
 `AnalysisError`, sulle geometrie già validate), nella categoria del passo
 geo indicata fra parentesi:
 
@@ -16639,7 +16639,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sovrappone due tabelle di poligoni e ne produce i pezzi, ognuno con la
 riga sinistra e la riga destra da cui viene (kernel
-`topology::polygon_overlay_validated`; [Runner, «Operazioni
+`topology::with_crs::polygon_overlay_validated`; [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)): le intersezioni delle coppie che si
 sovrappongono e, secondo `mode`, i resti di ciascun lato fuori dall'altro.
 Lavora solo su `Polygon` e `MultiPolygon`.
@@ -16725,7 +16725,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`topology::polygon_overlay_validated`, errore
+Dal kernel (`topology::with_crs::polygon_overlay_validated`, errore
 `TopologyError`, sulle geometrie già validate: restano le validazioni OGC
 delle unioni e dei pezzi), nella categoria del passo geo indicata fra
 parentesi:
@@ -16876,7 +16876,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 #### Righe
 
 1:1: un perimetro per riga; una geometria nulla dà una cella nulla. Il
-runner chiama `operations::length`, di cui il kernel `operations::perimeter`
+runner chiama `operations::with_crs::length`, di cui il kernel `operations::with_crs::perimeter`
 è un alias: stessa semantica, stessi errori.
 
 #### Ordine
@@ -17020,7 +17020,7 @@ si tolgono dal campo.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`operations::point_on_surface`) su ogni cella non
+1:1: il runner chiama il kernel (`operations::with_crs::point_on_surface`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza punto interno (vuota) dà null: la colonna d'uscita ha
@@ -17175,7 +17175,7 @@ dichiarazione).
 #### Righe
 
 Aggregazione: tutte le righe in una. Il kernel
-(`construction::polygon_from_ordered_points`) riceve il gruppo ordinato
+(`construction::with_crs::polygon_from_ordered_points`) riceve il gruppo ordinato
 delle geometrie, salta quelle assenti (`None`) e, con meno di tre punti,
 non costruisce il poligono (`None`, non un errore). Il runner gli passa
 tutte le celle della colonna nell'ordine delle righe, una cella nulla come
@@ -17532,7 +17532,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Contains)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Contains)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -17576,7 +17576,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -17716,7 +17716,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::ContainsProperly)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::ContainsProperly)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -17760,7 +17760,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -17900,7 +17900,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::CoveredBy)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::CoveredBy)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -17944,7 +17944,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -18084,7 +18084,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Covers)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Covers)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -18128,7 +18128,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -18268,7 +18268,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Crosses)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Crosses)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -18312,7 +18312,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -18452,7 +18452,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Disjoint)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Disjoint)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -18496,7 +18496,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -18636,7 +18636,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::EqualsTopo)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::EqualsTopo)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -18680,7 +18680,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -18820,7 +18820,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Intersects)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Intersects)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -18864,7 +18864,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -19004,7 +19004,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Overlaps)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Overlaps)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -19048,7 +19048,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -19188,7 +19188,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Touches)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Touches)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -19232,7 +19232,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -19372,7 +19372,7 @@ proprietà del contratto (`sorted_by`, `row_count`) si conservano.
 
 1:1: una cella per riga. Per il contratto `other_wkb` è il secondo
 operando: la geometria della riga è A, `other_wkb` è B, e il kernel valuta
-`predicates::evaluate(A, B, SpatialPredicate::Within)` su ogni riga. Una
+`predicates::with_crs::evaluate(context, A, B, SpatialPredicate::Within)` su ogni riga. `context` contiene lo SR della colonna per entrambi gli operandi. Una
 geometria nulla dà una cella nulla, senza chiamare il kernel; una
 geometria vuota dà il verdetto del predicato sul vuoto (vedi sopra). Le
 righe sono indipendenti: il runner le calcola in parallelo e rende il
@@ -19416,7 +19416,7 @@ riga. Prima del kernel, su ogni cella non nulla:
 - `Schema`: il contratto dell'ingresso dichiara un elenco di tipi
   geometrici e la cella è di un altro tipo.
 
-Poi il kernel (`predicates::evaluate`), con l'errore tradotto nella
+Poi il kernel (`predicates::with_crs::evaluate`), con l'errore tradotto nella
 categoria di `PlenoraError` ([Runner, «Operazioni geo»](runner.md#operazioni-geo),
 voce «Errori»):
 
@@ -19756,7 +19756,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 | `y_origin` | numero | `0` | finito | y del centro di rotazione |
 
 `x_origin` e `y_origin` sono facoltativi, anche uno solo: il kernel
-(`extended::rotate_about`) riceve il centro sempre esplicito, e il runner
+(`extended::with_crs::rotate_about`) riceve il centro sempre esplicito, e il runner
 mette `0` al posto di ciascuno che manca. Senza entrambi si ruota attorno
 a `(0, 0)` del CRS, non attorno alla geometria.
 
@@ -19769,7 +19769,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`extended::rotate_about`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::rotate_about`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -19914,7 +19914,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 | `y_origin` | numero | `0` | finito | y dell'origine fissa |
 
 `x_origin` e `y_origin` sono facoltativi, anche uno solo: il kernel
-(`extended::scale_about`) riceve l'origine sempre esplicita, e il runner
+(`extended::with_crs::scale_about`) riceve l'origine sempre esplicita, e il runner
 mette `0` al posto di ciascuna che manca. Senza entrambe si scala attorno
 a `(0, 0)` del CRS, non attorno alla geometria.
 
@@ -19927,7 +19927,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`extended::scale_about`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::scale_about`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -20051,7 +20051,7 @@ condividono tratti collineari scrive una riga con le posizioni delle due
 righe, la lunghezza condivisa totale e i tratti, sul modello di
 `ST_SharedPaths` di PostGIS. I contatti in un punto solo non contano.
 
-La conversione di colonna è `extensions3::shared_paths_rows`, che il
+La conversione di colonna è `extensions3::with_crs::shared_paths_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -20256,7 +20256,7 @@ passano invariati.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`operations::simplify_with_policy`) su ogni cella non
+1:1: il runner chiama il kernel (`operations::with_crs::simplify_with_policy`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -20402,7 +20402,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 Join spaziale interno: abbina ogni riga della sinistra alle righe della
 destra la cui geometria soddisfa `predicate` con la sua, e dà una riga per
 coppia, con la posizione della riga destra in `__right_index` (kernel
-`spatial_join::spatial_join_nullable_validated`, [Runner, «Operazioni
+`spatial_join::with_crs::spatial_join_nullable_validated`, [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)).
 
 #### Parametri
@@ -20480,7 +20480,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`spatial_join::spatial_join_nullable_validated`, errore
+Dal kernel (`spatial_join::with_crs::spatial_join_nullable_validated`, errore
 `SpatialJoinError`, sulle geometrie già validate), nella categoria del
 passo geo indicata fra parentesi:
 
@@ -20606,7 +20606,7 @@ una geometria di riferimento data nella config, se dista al più
 geometrie che dovrebbero condividere vertici e ne differiscono di poco. Il
 tipo geometrico non cambia; il risultato deve restare valido.
 
-La conversione di colonna è `extensions2::snap_column`, che il runner
+La conversione di colonna è `extensions2::with_crs::snap_column`, che il runner
 chiama sulla colonna intera.
 
 #### Parametri
@@ -20631,7 +20631,7 @@ contratto (`sorted_by`, `row_count`).
 #### Righe
 
 1:1: il runner chiama la conversione di colonna dei kernel
-(`extensions2::snap_column`) sulla colonna intera, con il riferimento letto
+(`extensions2::with_crs::snap_column`) sulla colonna intera, con il riferimento letto
 una volta in validazione. Una cella nulla resta nulla. Con un riferimento
 senza vertici ogni geometria esce invariata ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -20787,7 +20787,7 @@ contratto (`sorted_by`, `row_count`) restano.
 #### Righe
 
 1:1: la geometria di ogni riga diventa quella agganciata alla griglia. Il
-runner chiama il kernel (`extended_algorithms::snap_to_grid`) su ogni
+runner chiama il kernel (`extended_algorithms::with_crs::snap_to_grid`) su ogni
 cella non nulla, in parallelo; una cella nulla resta nulla
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -21130,7 +21130,7 @@ lungo, finché ogni pezzo sta sotto la soglia; linee e `MultiPoint` si
 dividono a blocchi. Una geometria sotto la soglia passa invariata, in una
 riga sola.
 
-Il calcolo per cella è `extensions2::subdivide_wkb`; il runner lo chiama
+Il calcolo per cella è `extensions2::with_crs::subdivide_wkb`; il runner lo chiama
 su ogni cella non nulla, con la precisione del CRS della colonna, e scrive
 l'indice della riga d'origine.
 
@@ -21304,7 +21304,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con le parti che stanno in uno
 solo dei due lati, `(sinistra \ destra) ∪ (destra \ sinistra)`, calcolate
-dal kernel `topology::boolean_operation_validated` ([Runner, «Operazioni
+dal kernel `topology::with_crs::boolean_operation_validated` ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
@@ -21371,7 +21371,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   di byte);
 - `InvalidPlan`: le due tabelle hanno un numero di righe diverso.
 
-Dal kernel (`topology::boolean_operation_validated`, errore
+Dal kernel (`topology::with_crs::boolean_operation_validated`, errore
 `TopologyError`, sulle geometrie già validate: resta la validazione OGC
 del risultato), nella categoria del passo geo indicata fra parentesi:
 
@@ -21505,7 +21505,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 #### Righe
 
-1:1: un testo per riga, dal kernel `operations::to_wkt`; una geometria
+1:1: un testo per riga, dal kernel `operations::with_crs::to_wkt`; una geometria
 nulla dà una cella nulla.
 
 #### Ordine
@@ -21644,7 +21644,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 #### Righe
 
-1:1: il runner chiama il kernel (`extended::translate`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::translate`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -21672,7 +21672,7 @@ fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
 dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
-Poi il kernel (`extended::translate`) rende `ExtendedError`, che il
+Poi il kernel (`extended::with_crs::translate`) rende `ExtendedError`, che il
 runner porta in `Internal` per `ValidazioneNonConclusa` e
 `CalcoloNonConcluso`, in `InvalidPlan` per le altre: `InvalidInput`
 (coordinate non finite o geometria non valida OGC), `InvalidOutput`
@@ -21762,7 +21762,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Sostituisce la geometria della sinistra con la sua unione con la geometria
 della destra, `sinistra ∪ destra`, calcolata dal kernel
-`topology::boolean_operation_validated` ([Runner, «Operazioni
+`topology::with_crs::boolean_operation_validated` ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
@@ -21829,7 +21829,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   di byte);
 - `InvalidPlan`: le due tabelle hanno un numero di righe diverso.
 
-Dal kernel (`topology::boolean_operation_validated`, errore
+Dal kernel (`topology::with_crs::boolean_operation_validated`, errore
 `TopologyError`, sulle geometrie già validate: resta la validazione OGC
 del risultato), nella categoria del passo geo indicata fra parentesi:
 
@@ -21962,7 +21962,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 #### Righe
 
-1:1: un conteggio per riga, dal kernel `operations::vertex_count`; una
+1:1: un conteggio per riga, dal kernel `operations::with_crs::vertex_count`; una
 geometria nulla dà una cella nulla.
 
 #### Ordine
@@ -22103,7 +22103,7 @@ Le altre colonne, i metadati di schema e le proprietà del contratto
 #### Righe
 
 1:1: una cella per riga, ma ogni cella dipende da tutte le righe (il kernel
-`advanced::voronoi_cells` riceve tutti i punti insieme, e il limite
+`advanced::with_crs::voronoi_cells` riceve tutti i punti insieme, e il limite
 `max_points` come argomento). A ogni punto va la prima cella, in ordine di
 prima comparsa del sito, che lo interseca. Il kernel non conosce i
 null: il runner gli passa solo le geometrie non nulle, nell'ordine delle
@@ -22259,7 +22259,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 
 Aggiunge alla sinistra una colonna booleana che dice se la sua geometria
 sta dentro almeno una geometria della destra (kernel
-`analysis::within_indexes_validated`, predicato `within` del join
+`analysis::with_crs::within_indexes_validated`, predicato `within` del join
 spaziale; [Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 «Dentro» è il `contains` di `geo` letto dalla destra: una geometria sul
 solo bordo, come un punto sul lato di un poligono, non è dentro.
@@ -22326,7 +22326,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`analysis::within_indexes_validated`, errore `AnalysisError`
+Dal kernel (`analysis::with_crs::within_indexes_validated`, errore `AnalysisError`
 che avvolge `SpatialJoinError`, sulle geometrie già validate), nella
 categoria del passo geo indicata fra parentesi:
 

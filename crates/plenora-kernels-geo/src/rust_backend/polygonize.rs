@@ -2164,7 +2164,7 @@ fn checked_output(
 /// decidibile; [`PolygonizeError::InvalidOutput`] per una faccia invalida;
 /// [`PolygonizeError::Incomplete`] se `require_complete` e' attivo e
 /// restano residui.
-pub fn polygonize_linework_rust(
+pub(crate) fn polygonize_linework_rust(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<PolygonizeResult, PolygonizeError> {
@@ -2178,7 +2178,7 @@ pub fn polygonize_linework_rust(
 /// # Errors
 ///
 /// Come [`polygonize_linework_rust`].
-pub fn polygonize_linework_rust_with_rounded(
+pub(crate) fn polygonize_linework_rust_with_rounded(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<(PolygonizeResult, Vec<Coord<f64>>), PolygonizeError> {
@@ -2271,7 +2271,7 @@ pub fn polygonize_linework_rust_with_rounded(
 /// Restituisce [`PolygonizeError::UnboundedLimitConfiguration`] se almeno un
 /// limite e' lasciato a [`u64::MAX`]; altrimenti propaga gli errori di
 /// [`polygonize_linework_rust`].
-pub fn polygonize_linework_rust_bounded(
+pub(crate) fn polygonize_linework_rust_bounded(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<PolygonizeResult, PolygonizeError> {

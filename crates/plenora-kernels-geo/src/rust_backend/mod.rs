@@ -547,7 +547,7 @@ fn checked_input(geometry: &Geometry<f64>, max_coordinates: u64) -> Result<(), R
 /// i limiti, [`RustBackendError::InvalidRepair`] se l'output resta invalido
 /// per il kernel o per la validazione del workspace, e gli altri errori del
 /// kernel tradotti in [`RustBackendError`].
-pub fn make_valid_wkb(
+pub(crate) fn make_valid_wkb(
     payload: &[u8],
     method: RepairMethod,
     keep_collapsed: bool,
@@ -568,7 +568,7 @@ pub fn make_valid_wkb(
 ///
 /// Come [`make_valid_wkb`]; [`RustBackendError::UnboundedLimits`] se un
 /// limite e' [`u64::MAX`], anche su input gia' valido.
-pub fn make_valid_wkb_with_limits(
+pub(crate) fn make_valid_wkb_with_limits(
     payload: &[u8],
     method: RepairMethod,
     keep_collapsed: bool,
@@ -622,7 +622,7 @@ pub fn make_valid_wkb_with_limits(
 ///
 /// Come [`make_valid_wkb`]; [`RustBackendError::Internal`] se la codifica
 /// WKB intermedia fallisce.
-pub fn make_valid_geometry(
+pub(crate) fn make_valid_geometry(
     geometry: &Geometry<f64>,
     method: RepairMethod,
     keep_collapsed: bool,
@@ -715,7 +715,7 @@ impl From<polygonize::PolygonizeResult> for PolygonizeResult {
 // Gli argomenti sono quelli di 190c493 piu' la precisione dichiarata:
 // raggrupparli cambierebbe la forma del contratto.
 #[allow(clippy::too_many_arguments)]
-pub fn polygonize_linework(
+pub(crate) fn polygonize_linework(
     linework: &Geometry<f64>,
     node_input: bool,
     require_complete: bool,
@@ -797,7 +797,7 @@ pub fn polygonize_linework(
 /// poligonale o lo splitter non e' linework; limiti; contratto WKB e
 /// validazione OGC degli input; area o copertura non conservate; gli altri
 /// errori del kernel tradotti.
-pub fn split_polygon_by_linework(
+pub(crate) fn split_polygon_by_linework(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
     max_input_coordinates: u64,

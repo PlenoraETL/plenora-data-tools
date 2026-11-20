@@ -27,7 +27,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1: una lunghezza per riga, dal kernel `operations::length`; una
+1:1: una lunghezza per riga, dal kernel `operations::with_crs::length`; una
 geometria nulla dà una cella nulla.
 
 ### Ordine

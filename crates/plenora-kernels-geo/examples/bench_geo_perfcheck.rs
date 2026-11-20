@@ -25,19 +25,20 @@
 // aggiungerebbe solo indirezione (stesso allow di bench_geo_sweep).
 #![allow(clippy::too_many_lines)]
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::hint::black_box;
 use std::time::Instant;
 
 use geo::{Centroid, CoordsIter, Geometry, LineString, Point, Polygon};
 use geozero::{CoordDimensions, ToWkb};
 use plenora_core::arrow::array::BinaryArray;
-use plenora_kernels_geo::advanced::voronoi_cells;
+use plenora_kernels_geo::advanced::with_crs::voronoi_cells;
 use plenora_kernels_geo::arrow_adapter::{encode_geometry, map_nullable};
-use plenora_kernels_geo::extensions2::snap_column;
+use plenora_kernels_geo::extensions2::with_crs::snap_column;
 use plenora_kernels_geo::geometry_from_wkb;
-use plenora_kernels_geo::topology::{
-    clip_to_mask_validated, polygon_overlay_validated, OverlayMode,
-};
+use plenora_kernels_geo::topology::with_crs::clip_to_mask_validated;
+use plenora_kernels_geo::topology::with_crs::polygon_overlay_validated;
+use plenora_kernels_geo::topology::OverlayMode;
 
 /// Precisione dichiarata: 1 cm con coordinate in metri (docs/limiti.md, «Limiti dichiarati»).
 fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
@@ -224,10 +225,14 @@ fn main() {
         // decode (`geometry_from_wkb`, righe sopra) e il kernel non
         // rivalida — precondizione dimostrata per costruzione.
         clip_to_mask_validated(
+            CrsContext::new(&[
+                &crs_fixture_precision(precisione()),
+                &crs_fixture_precision(precisione()),
+            ]),
             &geometries,
             std::slice::from_ref(&full_domain_mask),
-            precisione(),
         )
+        .map_err(kernel_error_fixture)
         .expect("clip")
         .iter()
         .map(|out| {
@@ -259,13 +264,17 @@ fn main() {
         // Variante `*_validated`: come sopra (input validati al decode,
         // nessuna rivalidazione nel kernel).
         polygon_overlay_validated(
+            CrsContext::new(&[
+                &crs_fixture_precision(precisione()),
+                &crs_fixture_precision(precisione()),
+            ]),
             &left,
             &right,
             OverlayMode::Union,
             1_000_000_000_000,
             1_000_000_000_000,
-            precisione(),
         )
+        .map_err(kernel_error_fixture)
         .expect("overlay")
         .iter()
         .map(|piece| encode_geometry(&piece.geometry).expect("encode").len())
@@ -280,9 +289,15 @@ fn main() {
     let cy = rng.range(4_000.0, 6_000.0);
     let reference = Geometry::Polygon(star_polygon(&mut rng, cx, cy, 100.0, 2_000));
     measure("op.snap_reference_2k", 10_000, || {
-        snap_column(&snap_cells, &reference, 250.0)
-            .expect("snap column")
-            .len()
+        snap_column(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
+            &snap_cells,
+            &reference,
+            250.0,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("snap column")
+        .len()
     });
 
     // op.voronoi_2k: 2_000 punti (pre-filtro bounding_rect in HEAD).
@@ -291,10 +306,14 @@ fn main() {
         .collect();
     measure("op.voronoi_2k", 1, || {
         voronoi_cells(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(0.01)
+                    .expect("precisione"),
+            )]),
             &voronoi_geometries,
             100_000,
-            plenora_kernels_geo::rust_backend::precision::Precision::new(0.01).expect("precisione"),
         )
+        .map_err(kernel_error_fixture)
         .map(black_box)
         .expect("voronoi")
         .len()
@@ -306,10 +325,14 @@ fn main() {
         .collect();
     let wkt_column = plenora_core::arrow::array::StringArray::from(wkts);
     measure("op.from_wkt", 10_000, || {
-        plenora_kernels_geo::extensions::from_wkt_column(
+        plenora_kernels_geo::extensions::with_crs::from_wkt_column(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
             &wkt_column,
             plenora_kernels_geo::extensions::OnWktError::Fail,
         )
+        .map_err(kernel_error_fixture)
         .expect("from_wkt")
         .len()
     });
@@ -364,4 +387,36 @@ fn main() {
             .map(|geometry| black_box(wkb_of(geometry)).len())
             .sum()
     });
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
 }

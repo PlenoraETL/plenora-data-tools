@@ -6,7 +6,7 @@ condividono tratti collineari scrive una riga con le posizioni delle due
 righe, la lunghezza condivisa totale e i tratti, sul modello di
 `ST_SharedPaths` di PostGIS. I contatti in un punto solo non contano.
 
-La conversione di colonna è `extensions3::shared_paths_rows`, che il
+La conversione di colonna è `extensions3::with_crs::shared_paths_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 

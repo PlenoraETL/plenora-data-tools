@@ -26,7 +26,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 | `concavity` | numero | obbligatorio | finito, maggiore di zero | concavità relativa: più piccola, più concavo |
 | `length_threshold` | numero | `0` | finito, non negativo | lati più corti di così non si scavano; `0` scava ogni lato |
 
-Il kernel (`extended::concave_hull`) riceve `length_threshold` sempre
+Il kernel (`extended::with_crs::concave_hull`) riceve `length_threshold` sempre
 esplicito, insieme al limite di coordinate `max_coordinates`: il runner
 passa `0` quando manca (ogni lato si può scavare) e `MAX_CELL_COORDINATES`
 (4 194 304) come limite.
@@ -42,7 +42,7 @@ ereditate si tolgono dal campo. Le proprietà del contratto (`sorted_by`,
 
 ### Righe
 
-1:1: il runner chiama il kernel (`extended::concave_hull`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::concave_hull`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 Una geometria senza coordinate dà un `POLYGON EMPTY`.

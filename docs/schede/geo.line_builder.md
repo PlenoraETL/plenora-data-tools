@@ -27,7 +27,7 @@ dichiarazione).
 ### Righe
 
 Aggregazione: tutte le righe in una. Il kernel
-(`construction::line_from_ordered_points`) riceve il gruppo ordinato delle
+(`construction::with_crs::line_from_ordered_points`) riceve il gruppo ordinato delle
 geometrie, salta quelle assenti (`None`) e, con meno di due punti, non
 costruisce la linea (`None`, non un errore). Il runner gli passa tutte le
 celle della colonna nell'ordine delle righe, una cella nulla come `None`,

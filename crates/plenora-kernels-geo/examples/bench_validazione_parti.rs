@@ -23,12 +23,14 @@
 #[path = "comune/argomenti.rs"]
 mod argomenti;
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::hint::black_box;
 use std::time::Instant;
 
 use geo::{Geometry, LineString, Polygon};
 use geozero::{CoordDimensions, ToWkb};
-use plenora_kernels_geo::topology::{boolean_operation, BooleanOperation};
+use plenora_kernels_geo::topology::with_crs::boolean_operation;
+use plenora_kernels_geo::topology::BooleanOperation;
 use plenora_kernels_geo::{check_geometry_valid, geometry_from_wkb};
 
 const RUNS: usize = 5;
@@ -116,11 +118,15 @@ fn main() {
         0.0,
     ));
     let uscita = boolean_operation(
+        CrsContext::new(&[
+            &crs_fixture_precision(precisione()),
+            &crs_fixture_precision(precisione()),
+        ]),
         &sinistra,
         &destra,
         BooleanOperation::Intersection,
-        precisione(),
     )
+    .map_err(kernel_error_fixture)
     .expect("intersezione valida");
     if let Geometry::MultiPolygon(parti) = &uscita {
         eprintln!("parti dell'uscita: {}", parti.0.len());
@@ -130,11 +136,15 @@ fn main() {
     });
     misura("intersezione_stelle_5k", corse, || {
         boolean_operation(
+            CrsContext::new(&[
+                &crs_fixture_precision(precisione()),
+                &crs_fixture_precision(precisione()),
+            ]),
             &sinistra,
             &destra,
             BooleanOperation::Intersection,
-            precisione(),
         )
+        .map_err(kernel_error_fixture)
         .is_ok()
     });
 
@@ -148,4 +158,30 @@ fn main() {
             || geometry_from_wkb(&wkb).is_ok(),
         );
     }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

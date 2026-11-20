@@ -27,7 +27,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 Nessuno: la config è `{}`. Metodo e parti collassate non si scelgono dal
 piano: l'esecuzione Arrow usa sempre `LINEWORK` con le parti collassate
 conservate. `STRUCTURE` (la regola di `GeometryFixer`) è raggiungibile solo
-dall'API dei kernel (`rust_backend::make_valid_wkb`).
+dall'API dei kernel (`rust_backend::with_crs::make_valid_wkb`).
 
 ### Schema
 

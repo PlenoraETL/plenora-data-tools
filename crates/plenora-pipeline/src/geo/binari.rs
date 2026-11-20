@@ -23,6 +23,7 @@
 // `_sx`/`_dx` e singolare/plurale sono coppie volute.
 #![allow(clippy::similar_names)]
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -40,7 +41,6 @@ use plenora_kernels_geo::analyze::config::{NearestConfig, OverlayConfig, SJoinCo
 use plenora_kernels_geo::arrow_adapter::encode_geometry;
 use plenora_kernels_geo::decoded_size::decoded_size_xy;
 use plenora_kernels_geo::margine::{byte_heap_geometria, MargineMemoria};
-use plenora_kernels_geo::rust_backend::precision::Precision;
 use plenora_kernels_geo::spatial_join::JoinPredicate;
 use plenora_kernels_geo::topology::{BooleanOperation, OverlayMode};
 use plenora_kernels_geo::{analysis, spatial_join, topology};
@@ -60,9 +60,9 @@ pub(super) enum KernelBinario {
     },
     Dentro,
     Conta,
-    Ritaglia(Precision),
-    Sovrapponi(OverlayMode, Precision),
-    Booleana(BooleanOperation, Precision),
+    Ritaglia,
+    Sovrapponi(OverlayMode),
+    Booleana(BooleanOperation),
 }
 
 impl KernelBinario {
@@ -73,11 +73,10 @@ impl KernelBinario {
         lati: &[Option<Lato>],
         limiti: &Limits,
     ) -> Result<Option<Self>> {
-        let [Some(sinistra), Some(_)] = lati else {
+        let [Some(_), Some(_)] = lati else {
             return Ok(None);
         };
-        let booleana =
-            |operazione| -> Result<Self> { Ok(Self::Booleana(operazione, sinistra.precisione()?)) };
+        let booleana = |operazione| -> Result<Self> { Ok(Self::Booleana(operazione)) };
         Ok(Some(match op {
             "geo.sjoin" => {
                 let letta: SJoinConfig = config(op, valore)?;
@@ -99,10 +98,10 @@ impl KernelBinario {
             // `output_column` e' gia' nel contratto.
             "geo.within" => Self::Dentro,
             "geo.count_points_in_polygons" => Self::Conta,
-            "geo.clip" => Self::Ritaglia(sinistra.precisione()?),
+            "geo.clip" => Self::Ritaglia,
             "geo.overlay" => {
                 let letta: OverlayConfig = config(op, valore)?;
-                Self::Sovrapponi(letta.mode, sinistra.precisione()?)
+                Self::Sovrapponi(letta.mode)
             }
             "geo.intersection" => booleana(BooleanOperation::Intersection)?,
             "geo.union" => booleana(BooleanOperation::Union)?,
@@ -166,7 +165,8 @@ impl KernelBinario {
         let righe_sx = sinistra.num_rows();
         match self {
             Self::Unione(predicato) => {
-                let coppie = spatial_join::spatial_join_nullable_validated_con_margine(
+                let coppie = spatial_join::with_crs::spatial_join_nullable_validated_con_margine(
+                    CrsContext::new(&[&lato_sx.crs, &lato_dx.crs]),
                     &geometrie_sx,
                     &geometrie_dx,
                     *predicato,
@@ -185,7 +185,8 @@ impl KernelBinario {
                 distanza,
                 confronti,
             } => {
-                let trovati = analysis::nearest_matches_validated_con_margine(
+                let trovati = analysis::with_crs::nearest_matches_validated_con_margine(
+                    CrsContext::new(&[&lato_sx.crs, &lato_dx.crs]),
                     &geometrie_sx,
                     &geometrie_dx,
                     *distanza,
@@ -204,15 +205,17 @@ impl KernelBinario {
                 Ok((colonne, indici.len()))
             }
             Self::Dentro => {
-                let dentro: HashSet<u64> = analysis::within_indexes_validated_con_margine(
-                    &geometrie_sx,
-                    &geometrie_dx,
-                    righe_massime,
-                    margine,
-                )
-                .map_err(|e| del_kernel(op, &e))?
-                .into_iter()
-                .collect();
+                let dentro: HashSet<u64> =
+                    analysis::with_crs::within_indexes_validated_con_margine(
+                        CrsContext::new(&[&lato_sx.crs, &lato_dx.crs]),
+                        &geometrie_sx,
+                        &geometrie_dx,
+                        righe_massime,
+                        margine,
+                    )
+                    .map_err(|e| del_kernel(op, &e))?
+                    .into_iter()
+                    .collect();
                 let mut indici = 0_u64..;
                 let valori: BooleanArray = geometrie_sx
                     .iter()
@@ -226,7 +229,8 @@ impl KernelBinario {
                 Ok((colonne, righe_sx))
             }
             Self::Conta => {
-                let conteggi = analysis::count_points_in_polygons_validated_con_margine(
+                let conteggi = analysis::with_crs::count_points_in_polygons_validated_con_margine(
+                    CrsContext::new(&[&lato_sx.crs, &lato_dx.crs]),
                     &geometrie_sx,
                     &geometrie_dx,
                     righe_massime,
@@ -249,12 +253,15 @@ impl KernelBinario {
                 colonne.push(Arc::new(valori));
                 Ok((colonne, righe_sx))
             }
-            Self::Ritaglia(precisione) => {
+            Self::Ritaglia => {
                 let maschere: Vec<Geometry<f64>> = geometrie_dx.into_iter().flatten().collect();
                 let (posizioni, presenti) = presenti(geometrie_sx);
-                let ritagliate =
-                    topology::clip_to_mask_validated(&presenti, &maschere, *precisione)
-                        .map_err(|e| del_kernel(op, &e))?;
+                let ritagliate = topology::with_crs::clip_to_mask_validated(
+                    CrsContext::new(&[&lato_sx.crs, &lato_dx.crs]),
+                    &presenti,
+                    &maschere,
+                )
+                .map_err(|e| del_kernel(op, &e))?;
                 if ritagliate.len() != posizioni.len() {
                     return Err(PlenoraError::Internal(format!(
                         "{op}: il kernel non ha reso un risultato per ogni riga non nulla"
@@ -271,17 +278,17 @@ impl KernelBinario {
                 sostituisci(op, &mut colonne, lato_sx.indice, vec![binaria(&celle)])?;
                 Ok((colonne, righe_sx))
             }
-            Self::Sovrapponi(modo, precisione) => {
+            Self::Sovrapponi(modo) => {
                 let (posizioni_sx, presenti_sx) = presenti(geometrie_sx);
                 let (posizioni_dx, presenti_dx) = presenti(geometrie_dx);
                 // Per pezzo, oltre alla geometria che il kernel conta: i due
                 // indici con le validita'.
-                let pezzi = topology::polygon_overlay_validated_con_margine(
+                let pezzi = topology::with_crs::polygon_overlay_validated_con_margine(
+                    CrsContext::new(&[&lato_sx.crs, &lato_dx.crs]),
                     &presenti_sx,
                     &presenti_dx,
                     *modo,
                     (righe_massime, righe_massime),
-                    *precisione,
                     margine.con_uscita_per_risultato(24),
                 )
                 .map_err(|e| del_kernel(op, &e))?;
@@ -317,7 +324,7 @@ impl KernelBinario {
                     pezzi.len(),
                 ))
             }
-            Self::Booleana(operazione, precisione) => {
+            Self::Booleana(operazione) => {
                 if righe_sx != destra.num_rows() {
                     return Err(PlenoraError::InvalidPlan(format!(
                         "{op}: le due tabelle devono avere le stesse righe (riga i con riga i)"
@@ -328,11 +335,11 @@ impl KernelBinario {
                     .zip(&geometrie_dx)
                     .map(|coppia| match coppia {
                         (Some(a), Some(b)) => {
-                            let risultato = topology::boolean_operation_validated(
+                            let risultato = topology::with_crs::boolean_operation_validated(
+                                CrsContext::new(&[&lato_sx.crs, &lato_dx.crs]),
                                 a,
                                 b,
                                 *operazione,
-                                *precisione,
                             )
                             .map_err(|e| del_kernel(op, &e))?;
                             // Vuoto -> null, come `clip`.

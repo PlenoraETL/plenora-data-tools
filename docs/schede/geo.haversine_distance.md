@@ -33,7 +33,7 @@ contratto (`sorted_by`, `row_count`).
 
 ### Righe
 
-1:1: una distanza per riga, dal kernel (`extended::haversine_distance_m`), che
+1:1: una distanza per riga, dal kernel (`extended::with_crs::haversine_distance_m`), che
 riceve **due punti**. `other_wkb` deve essere un `Point` (l'analisi lo
 verifica); una geometria nulla dà una distanza nulla, e una riga che non è
 un `Point` ferma il passo con un errore (vedi «Errori»): l'analisi accetta

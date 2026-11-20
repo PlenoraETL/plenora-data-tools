@@ -378,7 +378,7 @@ fn coverage_validate_elements(
 ///   coordinate sono troppo rade per `precision`.
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: una validazione OGC
 ///   che non conclude o un panico di `geo`, `i_overlay` o `rstar` (interni).
-pub fn coverage_validate(
+pub(crate) fn coverage_validate(
     geometries: &[Geometry<f64>],
     tolerance: f64,
     max_issues: usize,
@@ -395,7 +395,7 @@ pub fn coverage_validate(
 ///
 /// Come [`coverage_validate`] (questa e' l'implementazione; la variante
 /// non-null vi delega).
-pub fn coverage_validate_nullable(
+pub(crate) fn coverage_validate_nullable(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
     max_issues: usize,
@@ -422,7 +422,7 @@ pub fn coverage_validate_nullable(
 ///
 /// Come [`coverage_validate_nullable`]; in piu'
 /// [`ExtensionError::MargineMemoria`].
-pub fn coverage_validate_nullable_con_margine(
+pub(crate) fn coverage_validate_nullable_con_margine(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
     max_issues: usize,
@@ -476,7 +476,7 @@ pub struct CoverageIssueRow {
 /// - `PlenoraError::ResourceLimit`: una cella, o la geometria di una issue,
 ///   oltre il limite di byte per cella.
 /// - `PlenoraError::Internal`: gli errori interni del kernel.
-pub fn coverage_validate_rows(
+pub(crate) fn coverage_validate_rows(
     cells: &BinaryArray,
     tolerance: f64,
     max_issues: usize,
@@ -499,7 +499,7 @@ pub fn coverage_validate_rows(
 ///
 /// Come [`coverage_validate_rows`]; `PlenoraError::ResourceLimit` anche per
 /// il margine superato.
-pub fn coverage_validate_rows_con_margine(
+pub(crate) fn coverage_validate_rows_con_margine(
     cells: &BinaryArray,
     tolerance: f64,
     max_issues: usize,
@@ -642,7 +642,7 @@ fn shared_boundary_segments(
 /// - `IndexOverflow`: un conteggio non e' rappresentabile come `u64`.
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: una validazione OGC
 ///   che non conclude o un panico di `geo` o `rstar` (interni).
-pub fn shared_paths(
+pub(crate) fn shared_paths(
     geometries: &[Geometry<f64>],
     tolerance: f64,
     min_length: f64,
@@ -658,7 +658,7 @@ pub fn shared_paths(
 ///
 /// Come [`shared_paths`] (questa e' l'implementazione; la variante non-null
 /// vi delega).
-pub fn shared_paths_nullable(
+pub(crate) fn shared_paths_nullable(
     geometries: &[Option<Geometry<f64>>],
     tolerance: f64,
     min_length: f64,
@@ -746,7 +746,7 @@ pub struct SharedPathRow {
 /// - `PlenoraError::ResourceLimit`: una cella, o la geometria di un tratto,
 ///   oltre il limite di byte per cella.
 /// - `PlenoraError::Internal`: gli errori interni del kernel.
-pub fn shared_paths_rows(
+pub(crate) fn shared_paths_rows(
     cells: &BinaryArray,
     tolerance: f64,
     min_length: f64,
@@ -1215,7 +1215,7 @@ mod tests {
     }
 }
 
-/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
 /// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
 pub mod with_crs {
     use super::{

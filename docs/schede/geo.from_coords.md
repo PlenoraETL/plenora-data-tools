@@ -32,7 +32,7 @@ senza tipi dichiarati. I metadati di schema e le proprietà del contratto
 
 1:1: un punto per riga. Il runner legge le due colonne (`float64`, o
 `int64` convertito in `f64` solo entro `2^53` in modulo, dove la
-conversione è esatta), chiama il kernel (`construction::point_from_lon_lat`)
+conversione è esatta), chiama il kernel (`construction::with_crs::point_from_lon_lat`)
 riga per riga e controlla che il punto stia nel dominio di validità del
 CRS prodotto. Una x o una y nulla è un errore: la colonna prodotta è
 dichiarata non nullable ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).

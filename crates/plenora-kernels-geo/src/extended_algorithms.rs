@@ -264,7 +264,7 @@ fn densified_count(
 ///   `max_output_coordinates`;
 /// - `CalcoloNonConcluso`: la densificazione di `geo` e' andata in panico;
 /// - `InvalidOutput`: geometria prodotta non valida.
-pub fn densify(
+pub(crate) fn densify(
     geometry: &Geometry<f64>,
     max_segment_length: f64,
     max_output_coordinates: u64,
@@ -342,7 +342,7 @@ pub fn densify(
 /// - `InvalidOutput`: coordinata non finita dopo l'arrotondamento
 ///   (overflow), o geometria prodotta non valida (collasso che viola la
 ///   validita' OGC).
-pub fn snap_to_grid(
+pub(crate) fn snap_to_grid(
     geometry: &Geometry<f64>,
     grid_size: f64,
 ) -> Result<Geometry<f64>, ExtendedAlgorithmError> {
@@ -407,7 +407,7 @@ pub fn snap_to_grid(
 /// - `CalcoloNonConcluso`: la triangolazione e' andata in panico;
 /// - `OutputLimit`: triangoli prodotti oltre `max_triangles`;
 /// - `InvalidOutput`: triangolo prodotto non valido.
-pub fn delaunay(
+pub(crate) fn delaunay(
     geometry: &Geometry<f64>,
     max_input_coordinates: u64,
     max_triangles: u64,
@@ -514,7 +514,7 @@ fn validate_ratio(value: f64, name: &'static str) -> Result<(), ExtendedAlgorith
 ///   due punti distinti); `ValidazioneNonConclusa` se la validazione non
 ///   conclude;
 /// - `CalcoloNonConcluso`: l'interpolazione di `geo` e' andata in panico.
-pub fn line_interpolate_point(
+pub(crate) fn line_interpolate_point(
     line: &LineString<f64>,
     ratio: f64,
 ) -> Result<Option<Point<f64>>, ExtendedAlgorithmError> {
@@ -544,7 +544,7 @@ pub fn line_interpolate_point(
 /// - `InvalidOutput`: porzione prodotta non valida (per esempio due
 ///   frazioni diverse i cui punti coincidono in `f64`: una linea di un solo
 ///   punto distinto).
-pub fn line_substring(
+pub(crate) fn line_substring(
     line: &LineString<f64>,
     start_ratio: f64,
     end_ratio: f64,
@@ -616,7 +616,7 @@ pub fn line_substring(
 /// - `WorkLimit`: coppie di coordinate oltre `max_coordinate_pairs` (o
 ///   prodotto non rappresentabile come `u64`);
 /// - `CalcoloNonConcluso`: il calcolo di `geo` e' andato in panico.
-pub fn frechet_distance(
+pub(crate) fn frechet_distance(
     left: &LineString<f64>,
     right: &LineString<f64>,
     max_coordinate_pairs: u64,
@@ -690,7 +690,7 @@ fn validate_geographic_geometry(geometry: &Geometry<f64>) -> Result<(), Extended
 /// - `AzimutNonDefinito`: i tre casi sopra;
 /// - `InvalidOutput`: azimut non finito (mai atteso);
 /// - `CalcoloNonConcluso`: il calcolo e' andato in panico.
-pub fn geodesic_bearing_degrees(
+pub(crate) fn geodesic_bearing_degrees(
     origin: Point<f64>,
     destination: Point<f64>,
     ellissoide: &EllissoideGeodetico,
@@ -777,7 +777,7 @@ fn scarto_angolare_gradi(primo: f64, secondo: f64) -> f64 {
 /// - `UnsupportedGeometry`: geometria diversa da `Polygon`/`MultiPolygon`;
 /// - `CalcoloNonConcluso`: il calcolo e' andato in panico;
 /// - `InvalidOutput`: area NaN o infinita.
-pub fn geodesic_area_m2(
+pub(crate) fn geodesic_area_m2(
     geometry: &Geometry<f64>,
     ellissoide: &EllissoideGeodetico,
 ) -> Result<f64, ExtendedAlgorithmError> {
@@ -934,7 +934,7 @@ pub struct GeometryDiagnostics {
 ///   non si scrive, perche' dichiarerebbe un verdetto che non esiste;
 /// - `IndexOverflow`: conteggio delle coordinate non rappresentabile come
 ///   `u64`.
-pub fn geometry_diagnostics(
+pub(crate) fn geometry_diagnostics(
     geometry: &Geometry<f64>,
 ) -> Result<GeometryDiagnostics, ExtendedAlgorithmError> {
     use geo::BoundingRect;
@@ -1105,7 +1105,7 @@ fn walk_merged_path(
 /// - `Internal`: invariante interna violata (linea non vuota senza estremi);
 /// - `OutputLimit`: linee prodotte oltre `max_output_lines`;
 /// - `InvalidOutput`: linea prodotta non valida.
-pub fn line_merge(
+pub(crate) fn line_merge(
     geometry: &Geometry<f64>,
     max_input_coordinates: u64,
     max_output_lines: u64,
@@ -1380,7 +1380,7 @@ fn expanded_point_envelope(point: Point<f64>, tolerance: f64) -> AABB<[f64; 2]> 
 // bounded, ricostruzione delle parti): lunghezza data dalla sequenza
 // lineare dei passi del contratto, non da complessita' logica.
 #[allow(clippy::too_many_lines)]
-pub fn split_line(
+pub(crate) fn split_line(
     source: &LineString<f64>,
     splitter: &Geometry<f64>,
     tolerance: f64,
@@ -2687,12 +2687,14 @@ mod baseline_600;
 mod compatibility_600;
 
 mod split_limited;
-pub use split_limited::split_line_with_limits;
+#[cfg(test)]
+pub(crate) use split_limited::split_line_with_limits;
 
 mod polygonize_limited;
-pub use polygonize_limited::polygonize_with_limits;
+#[cfg(test)]
+pub(crate) use polygonize_limited::polygonize_with_limits;
 
-/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
 /// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
 pub mod with_crs {
     pub use super::polygonize_limited::with_crs::polygonize_with_limits;

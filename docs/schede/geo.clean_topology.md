@@ -1,7 +1,7 @@
 ### Che cosa fa
 
 Pulisce la topologia di una tabella di poligoni già validi, riga per riga
-nell'ordine della tabella (kernel `topology::clean_valid_polygon_topology`,
+nell'ordine della tabella (kernel `topology::with_crs::clean_valid_polygon_topology`,
 con la chiusura dei varchi e la regola «vince la prima riga» di Manipola):
 con `fill_gaps` chiude rientranze e varchi stretti dentro ogni riga, con
 `remove_overlaps` toglie a ogni riga la parte già coperta dalle righe
@@ -91,7 +91,7 @@ decodifica completa con la validazione OGC: `InvalidPlan` per una
 geometria non valida (la riparazione è di `geo.make_valid`), `Internal`
 se la validazione non conclude.
 
-Poi il kernel `topology::clean_valid_polygon_topology_validated`, con
+Poi il kernel `topology::with_crs::clean_valid_polygon_topology_validated`, con
 errore `TopologyError` che il runner traduce così: `ValidazioneNonConclusa`
 e `CalcoloNonConcluso` diventano `Internal`, `PrecisionInsufficient`
 diventa `Unsupported`, le altre `InvalidPlan`. Il messaggio è quello del

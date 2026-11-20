@@ -1426,7 +1426,7 @@
     "crates/plenora-kernels-geo/src/crs.rs": [
       "missing_backend_never_trusts_an_unverified_declaration",
       "geometry_domain_wrapper_matches_coordinate_level_contract",
-      "every_direct_api_has_the_catalogue_gate",
+      "enumeration_rejects_reintroduced_raw_visibility",
       "catalogue_and_root_transformations_are_completely_enumerated",
       "precision_and_ellipsoid_come_from_the_context",
       "square_units_seam_and_poles_are_explicitly_planar",
@@ -2375,7 +2375,6 @@
       "cornice_fuori_dominio_e_un_errore_esplicito",
       "cornice_sottile_segue_la_politica_del_centimetro",
       "buco_sotto_la_precisione_puo_sparire_il_resto_resta",
-      "griglia_oltre_il_centimetro_e_l_unico_rifiuto",
       "cornice_larga_resta_riparata",
       "linework_conserva_le_linee_sopra_la_precisione_a_2_alla_30",
       "caso_92_in_metri_a_6000_km_structure_e_linework_rispondono",
@@ -2389,7 +2388,7 @@
       "l_aggancio_considera_solo_i_vertici_vicini",
       "noding_arrotondato_oltre_il_centimetro_e_un_errore",
       "noding_esatto_lontano_dall_origine_resta",
-      "precisione_del_polygonize_non_valida_e_un_errore",
+      "precisione_del_polygonize_deriva_solo_dal_crs",
       "linework_non_dipende_dall_ordine_dei_buchi",
       "coordinate_troppo_grandi_per_la_precisione_sono_un_errore",
       "linework_casi_della_campagna_hanno_l_area_di_geos"
@@ -2433,11 +2432,7 @@
       "il_rifiuto_e_unsupported_senza_dati",
       "booleane_e_buffer_non_rifiutano_a_scala_italiana"
     ],
-    "crates/plenora-kernels-geo/tests/heap_reale.rs": [
-      "real_heap_certification"
-    ],
     "crates/plenora-kernels-geo/tests/margine_memoria.rs": [
-      "join_within_e_conteggi_si_fermano_al_margine",
       "vicini_con_pareggi_si_fermano_al_margine",
       "overlay_e_copertura_su_sovrapposizioni_si_fermano_al_margine",
       "buffer_a_zig_zag_si_ferma_al_margine",
@@ -3187,7 +3182,8 @@
       "de9im_resource_and_cancellation_categories",
       "unsupported_and_accuracy_categories",
       "le_categorie_seguono_la_regola_dei_kernel",
-      "buffer_deadline_maps_to_timeout"
+      "buffer_deadline_maps_to_timeout",
+      "direct_gate_preserves_deadline_and_cancellation_categories"
     ],
     "crates/plenora-pipeline/src/geo/mod.rs": [
       "la_config_rifiutata_non_cita_i_valori_scritti",

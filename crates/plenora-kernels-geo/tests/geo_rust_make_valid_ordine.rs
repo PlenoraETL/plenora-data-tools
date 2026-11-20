@@ -15,10 +15,12 @@
 //!   ruotati e invertiti) danno la stessa geometria, per entrambi i metodi e
 //!   entrambi i valori di `keep_collapsed`.
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::collections::BTreeMap;
 
 use geo::{Area, Coord, Geometry, LineString, MultiPolygon, Polygon};
-use plenora_kernels_geo::rust_backend::make_valid::{make_valid_geometry_rust, RepairMethod};
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust;
+use plenora_kernels_geo::rust_backend::make_valid::RepairMethod;
 use proptest::prelude::*;
 use wkt::TryFromWkt;
 
@@ -30,7 +32,17 @@ fn wkt(text: &str) -> Geometry<f64> {
 }
 
 fn repaired(input: &Geometry<f64>, method: RepairMethod) -> Geometry<f64> {
-    make_valid_geometry_rust(input, method, false, PRECISION).expect("riparazione")
+    make_valid_geometry_rust(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISION)
+                .expect("precisione fixture"),
+        )]),
+        input,
+        method,
+        false,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("riparazione")
 }
 
 fn polygonal_area(geometry: &Geometry<f64>) -> f64 {
@@ -376,8 +388,17 @@ fn outcome(
     method: RepairMethod,
     keep_collapsed: bool,
 ) -> Result<Geometry<f64>, String> {
-    make_valid_geometry_rust(input, method, keep_collapsed, PRECISION)
-        .map_err(|error| error.to_string())
+    make_valid_geometry_rust(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISION)
+                .expect("precisione fixture"),
+        )]),
+        input,
+        method,
+        keep_collapsed,
+    )
+    .map_err(kernel_error_fixture)
+    .map_err(|error| error.to_string())
 }
 
 fn as_geometry(polygons: Vec<Polygon<f64>>) -> Geometry<f64> {
@@ -449,4 +470,30 @@ fn holes_touching_at_two_vertices_stay_holes() {
     let output = repaired(&input, RepairMethod::Linework);
     assert_matches_geos("buchi pizzicati", &output, &geos);
     assert!((polygonal_area(&output) - 92.0).abs() < 1e-12);
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

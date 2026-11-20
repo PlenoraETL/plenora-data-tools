@@ -2243,13 +2243,21 @@ Timeout. Queste API non aggiungono visite alle coordinate o allocazioni
 geometriche; assi XY normalizzati e dominio delle coordinate restano
 precondizioni del chiamante, da verificare al confine di ingresso.
 
-### Limite delle API storiche senza SR
+### Rimozione delle API storiche senza SR
 
-Le firme preesistenti che ricevono soltanto `geo::Geometry`, coordinate,
-ellissoide o precisione non portano un SR e non possono verificarlo.
-Restano disponibili per compatibilita' Rust della minor; chiamarle non
-costituisce una prova del requisito del catalogo. Per ottenere il gate
-si deve usare l'ingresso `with_crs`. Rendere obbligatorio un contesto anche
-su quelle firme richiede una modifica incompatibile, distinta dalla
-superficie additiva di D1. Il censimento verifica le famiglie elencate e
-ogni operazione del catalogo; non rende inaccessibili le firme storiche.
+Dalla release 7.0.0, i 138 ingressi diretti con equivalente `with_crs` non
+sono piu' pubblici. La convenzione unica conserva il modulo `with_crs`:
+`operations::area` si sostituisce con `operations::with_crs::area(context, geometry)`.
+Il criterio e' il requisito dichiarato nel catalogo, incluso `Known`:
+anche operazioni non metriche gia' coperte dal contratto richiedono SR.
+Precisione ed ellissoide derivano dal contesto; gli errori originali sono
+in `DirectError::Kernel`, i rifiuti del contratto in `DirectError::Crs`.
+
+Restano le funzioni senza equivalente `with_crs` fuori dal contratto:
+trasporto e decodifica WKB, validazione strutturale/OGC e confronto
+strutturale delle coordinate (`equality::geo_equals_with_tolerance`).
+Le API che gia' ricevono SR restano. Gli adapter Arrow ricevono SR dai
+metadati e conservano firme e limiti propri, compresa la precisione esplicita.
+Il censimento rifiuta la riesposizione degli ingressi diretti senza SR;
+non equipara ogni utilita' interna a un'operazione del catalogo.
+L'elenco delle sostituzioni e' nel [changelog](../CHANGELOG.md).

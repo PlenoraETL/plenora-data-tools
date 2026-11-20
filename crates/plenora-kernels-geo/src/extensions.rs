@@ -247,7 +247,7 @@ fn wkt_cell_to_wkb(value: &str) -> Result<Vec<u8>, CellaNonConvertita> {
 /// WKB oltre il limite per cella (causa `geometry.encoding_failed`).
 /// `PlenoraError::Internal` se la validazione OGC di una cella non
 /// conclude. Entrambi i valori di [`OnWktError`] sono fail-closed.
-pub fn from_wkt_column(
+pub(crate) fn from_wkt_column(
     values: &StringArray,
     on_error: OnWktError,
 ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError> {
@@ -267,7 +267,7 @@ pub fn from_wkt_column(
     clippy::items_after_statements,
     reason = "La guardia Arrow precede gli item locali e ogni uso dei dati"
 )]
-pub fn from_wkt_column_named(
+pub(crate) fn from_wkt_column_named(
     values: &StringArray,
     _on_error: OnWktError,
     column: Option<&str>,
@@ -395,7 +395,9 @@ fn point_wkt(point: Point<f64>) -> String {
 ///   validazione OGC;
 /// - `ExtensionError::IndexOverflow`: un conteggio (parti o anelli
 ///   interni) non e' rappresentabile come `u64`.
-pub fn geometry_accessors(geometry: &Geometry<f64>) -> Result<GeometryAccessors, ExtensionError> {
+pub(crate) fn geometry_accessors(
+    geometry: &Geometry<f64>,
+) -> Result<GeometryAccessors, ExtensionError> {
     ensure_valid(geometry)?;
     let num_geometries = match geometry {
         Geometry::MultiPoint(values) => u64_len(values.0.len())?,
@@ -456,7 +458,7 @@ pub fn geometry_accessors(geometry: &Geometry<f64>) -> Result<GeometryAccessors,
 ///   la validazione OGC;
 /// - `ExtensionError::Internal`: invariante interna violata (omogeneita'
 ///   del gruppo gia' verificata a monte).
-pub fn collect_geometries(
+pub(crate) fn collect_geometries(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ExtensionError> {
     let present: Vec<&Geometry<f64>> = geometries.iter().flatten().collect();
@@ -530,7 +532,7 @@ pub fn collect_geometries(
 ///
 /// `ExtensionError::InvalidInput` se la geometria non supera la
 /// validazione OGC.
-pub fn line_locate_point(
+pub(crate) fn line_locate_point(
     geometry: &Geometry<f64>,
     point: &Point<f64>,
 ) -> Result<Option<f64>, ExtensionError> {
@@ -868,7 +870,7 @@ mod tests {
     }
 }
 
-/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
 /// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
 pub mod with_crs {
     use super::{

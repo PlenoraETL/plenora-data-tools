@@ -198,7 +198,7 @@ fn exact_match(
 ///   `max_pairs`;
 /// - `SpatialJoinError::Internal`: invariante interna violata (mai attesa:
 ///   l'R-tree contiene solo geometrie non nulle).
-pub fn spatial_join(
+pub(crate) fn spatial_join(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
     predicate: JoinPredicate,
@@ -231,7 +231,7 @@ pub fn spatial_join(
 ///
 /// Come [`spatial_join`], eccetto `InvalidGeometry` (gate omesso);
 /// `NonFiniteCoordinate` resta solo come difesa sul bounding box.
-pub fn spatial_join_validated(
+pub(crate) fn spatial_join_validated(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
     predicate: JoinPredicate,
@@ -256,7 +256,7 @@ pub fn spatial_join_validated(
 /// # Errors
 ///
 /// Come [`spatial_join`]; le righe `None` non producono errori ne' coppie.
-pub fn spatial_join_nullable(
+pub(crate) fn spatial_join_nullable(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
     predicate: JoinPredicate,
@@ -281,7 +281,7 @@ pub fn spatial_join_nullable(
 ///
 /// Come [`spatial_join_validated`]; le righe `None` non producono errori
 /// ne' coppie.
-pub fn spatial_join_nullable_validated(
+pub(crate) fn spatial_join_nullable_validated(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
     predicate: JoinPredicate,
@@ -314,7 +314,7 @@ pub fn spatial_join_nullable_validated(
 /// Come [`spatial_join_nullable_validated`]; in piu'
 /// [`SpatialJoinError::MargineMemoria`] se le coppie confermate superano
 /// il margine prima di `max_pairs`.
-pub fn spatial_join_nullable_validated_con_margine(
+pub(crate) fn spatial_join_nullable_validated_con_margine(
     left: &[Option<Geometry<f64>>],
     right: &[Option<Geometry<f64>>],
     predicate: JoinPredicate,
@@ -332,7 +332,7 @@ pub fn spatial_join_nullable_validated_con_margine(
 /// # Errors
 ///
 /// Come [`spatial_join_nullable_validated_con_margine`].
-pub fn spatial_join_validated_con_margine(
+pub(crate) fn spatial_join_validated_con_margine(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
     predicate: JoinPredicate,
@@ -788,7 +788,7 @@ mod tests {
     }
 }
 
-/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
 /// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
 pub mod with_crs {
     use super::{Geometry, JoinPair, JoinPredicate, MargineMemoria, SpatialJoinError};

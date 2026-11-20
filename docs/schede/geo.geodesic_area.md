@@ -33,7 +33,7 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 
 ### Righe
 
-1:1: un'area per riga. Il kernel (`extended_algorithms::geodesic_area_m2`)
+1:1: un'area per riga. Il kernel (`extended_algorithms::with_crs::geodesic_area_m2`)
 accetta solo `Polygon` e `MultiPolygon`; un poligono o un multi-poligono
 vuoto dà `-0.0`. Una geometria nulla dà un'area nulla; una riga di altro
 tipo ferma il passo con un errore (vedi «Errori»): l'analisi accetta ogni

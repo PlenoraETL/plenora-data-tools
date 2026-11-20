@@ -18,8 +18,8 @@
 //!   `8.953e-8` gradi; senza ellissoide (CRS risolto dal chiamante) nessuna
 //!   precisione, e il kernel che la chiede si rifiuta.
 //!
-//! Le funzioni dei kernel chiamate senza CRS ricevono la precisione come
-//! argomento esplicito: nessun valore predefinito.
+//! Le implementazioni interne ricevono la precisione come argomento
+//! esplicito; gli ingressi pubblici `with_crs` la derivano dal contesto.
 
 use geo::Coord;
 use plenora_core::crs::ResolvedCrs;

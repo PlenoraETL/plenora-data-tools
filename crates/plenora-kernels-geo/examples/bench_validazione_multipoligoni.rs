@@ -23,12 +23,13 @@
 //! Uso: `cargo run --release --example bench_validazione_multipoligoni` —
 //! una riga JSON per misura su stdout.
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::hint::black_box;
 use std::time::Instant;
 
 use geo::{Geometry, LineString, MultiPolygon, Polygon};
 use plenora_kernels_geo::check_geometry_valid;
-use plenora_kernels_geo::topology::dissolve_validated;
+use plenora_kernels_geo::topology::with_crs::dissolve_validated;
 
 /// Precisione dichiarata: 1 cm con coordinate in metri (docs/limiti.md, «Limiti dichiarati»).
 fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
@@ -152,8 +153,39 @@ fn main() {
                 .map(Geometry::Polygon)
                 .collect();
             misura("dissolve_reticolo", taglia, || {
-                dissolve_validated(&celle, precisione()).is_ok()
+                dissolve_validated(
+                    CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                    &celle,
+                )
+                .map_err(kernel_error_fixture)
+                .is_ok()
             });
         }
     }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

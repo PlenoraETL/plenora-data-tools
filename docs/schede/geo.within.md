@@ -2,7 +2,7 @@
 
 Aggiunge alla sinistra una colonna booleana che dice se la sua geometria
 sta dentro almeno una geometria della destra (kernel
-`analysis::within_indexes_validated`, predicato `within` del join
+`analysis::with_crs::within_indexes_validated`, predicato `within` del join
 spaziale; [Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 «Dentro» è il `contains` di `geo` letto dalla destra: una geometria sul
 solo bordo, come un punto sul lato di un poligono, non è dentro.
@@ -69,7 +69,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`analysis::within_indexes_validated`, errore `AnalysisError`
+Dal kernel (`analysis::with_crs::within_indexes_validated`, errore `AnalysisError`
 che avvolge `SpatialJoinError`, sulle geometrie già validate), nella
 categoria del passo geo indicata fra parentesi:
 

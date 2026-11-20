@@ -10,11 +10,12 @@
 #[path = "comune/argomenti.rs"]
 mod argomenti;
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::hint::black_box;
 use std::time::Instant;
 
 use geo::{Geometry, LineString, Point, Polygon};
-use plenora_kernels_geo::analysis::nearest_matches_validated;
+use plenora_kernels_geo::analysis::with_crs::nearest_matches_validated;
 
 struct Rng(u64);
 
@@ -77,8 +78,16 @@ fn main() {
     let mut righe_emesse = 0_usize;
     for _ in 0..runs {
         let inizio = Instant::now();
-        let esito = nearest_matches_validated(&left, &right, None, u64::MAX, u64::MAX)
-            .unwrap_or_else(|errore| panic!("nearest fallita: {errore}"));
+        let esito = nearest_matches_validated(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
+            &left,
+            &right,
+            None,
+            u64::MAX,
+            u64::MAX,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("nearest fallita: {errore}"));
         tempi.push(inizio.elapsed().as_secs_f64());
         let mut hash = 0xCBF2_9CE4_8422_2325_u64;
         for riga in &esito {
@@ -98,4 +107,18 @@ fn main() {
         "{{\"n\":{n},\"tipo\":\"{}\",\"runs\":{runs},\"mediana_s\":{mediana:.4},\"righe\":{righe_emesse},\"impronta\":\"{impronta:016x}\"}}",
         if quadrati { "quadrati" } else { "punti" }
     );
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
 }

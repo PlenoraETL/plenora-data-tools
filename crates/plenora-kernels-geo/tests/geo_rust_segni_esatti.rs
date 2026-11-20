@@ -6,6 +6,7 @@
 //! con `require_complete = false` (il default), l'operazione riusciva senza
 //! il poligono. Questi casi passano dall'API pubblica e dall'adapter Arrow.
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::sync::Arc;
 
 use geo::{Area, Coord, Geometry, LineString, MultiLineString, Polygon};
@@ -18,9 +19,10 @@ use plenora_kernels_geo::rust_backend::arrow::{
     polygonize_batches, split_batches, PolygonizeParams, CLASS_COLUMN,
 };
 use plenora_kernels_geo::rust_backend::precision::Precision;
-use plenora_kernels_geo::rust_backend::{
-    make_valid_wkb, polygonize_linework, split_polygon_by_linework, RepairMethod,
-};
+use plenora_kernels_geo::rust_backend::with_crs::make_valid_wkb;
+use plenora_kernels_geo::rust_backend::with_crs::polygonize_linework;
+use plenora_kernels_geo::rust_backend::with_crs::split_polygon_by_linework;
+use plenora_kernels_geo::rust_backend::RepairMethod;
 
 const LIMIT: u64 = 1_000_000;
 
@@ -82,6 +84,9 @@ fn il_quadrato_lontano_dall_origine_resta_un_poligono() {
                 let anello = quadrato(x, y, lato, orario, inizio);
                 for node_input in [true, false] {
                     let risultato = polygonize_linework(
+                        CrsContext::new(&[&crs_fixture_precision(precisione_per(
+                            x.abs().max(y.abs()) + lato,
+                        ))]),
                         &Geometry::LineString(anello.clone()),
                         node_input,
                         true,
@@ -89,8 +94,8 @@ fn il_quadrato_lontano_dall_origine_resta_un_poligono() {
                         LIMIT,
                         LIMIT,
                         LIMIT,
-                        precisione_per(x.abs().max(y.abs()) + lato),
                     )
+                    .map_err(kernel_error_fixture)
                     .unwrap_or_else(|errore| {
                         panic!("({x}, {y}, {lato}) orario={orario} inizio={inizio}: {errore}")
                     });
@@ -113,6 +118,7 @@ fn il_quadrato_con_buco_lontano_dall_origine_conserva_il_buco() {
     let esterno = quadrato(a, a, 4.0, false, 0);
     let interno = quadrato(a + 1.0, a + 1.0, 1.0, true, 2);
     let risultato = polygonize_linework(
+        CrsContext::new(&[&crs_fixture_precision(precisione_per(a + 4.0))]),
         &Geometry::MultiLineString(MultiLineString::new(vec![esterno, interno])),
         true,
         true,
@@ -120,8 +126,8 @@ fn il_quadrato_con_buco_lontano_dall_origine_conserva_il_buco() {
         LIMIT,
         LIMIT,
         LIMIT,
-        precisione_per(a + 4.0),
     )
+    .map_err(kernel_error_fixture)
     .expect("polygonize");
     assert_eq!(risultato.polygons.len(), 2);
     let mut aree: Vec<f64> = risultato.polygons.iter().map(Area::unsigned_area).collect();
@@ -138,14 +144,18 @@ fn split_e_make_valid_lontano_dall_origine() {
         (a + 1.0, a + 3.0),
     ]));
     let parti = split_polygon_by_linework(
+        CrsContext::new(&[
+            &crs_fixture_precision(precisione_per(a + 4.0)),
+            &crs_fixture_precision(precisione_per(a + 4.0)),
+        ]),
         &sorgente,
         &lama,
         LIMIT,
         LIMIT,
         LIMIT,
         LIMIT,
-        precisione_per(a + 4.0),
     )
+    .map_err(kernel_error_fixture)
     .expect("split");
     assert_eq!(parti.len(), 2);
 
@@ -162,8 +172,14 @@ fn split_e_make_valid_lontano_dall_origine() {
     .to_wkb(CoordDimensions::xy())
     .expect("wkb");
     for method in [RepairMethod::Linework, RepairMethod::Structure] {
-        let riparata =
-            make_valid_wkb(&farfalla, method, false, precisione_per(a + 4.0)).expect("make_valid");
+        let riparata = make_valid_wkb(
+            CrsContext::new(&[&crs_fixture_precision(precisione_per(a + 4.0))]),
+            &farfalla,
+            method,
+            false,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("make_valid");
         let area = geometry_from_wkb(&riparata)
             .expect("valida")
             .unsigned_area();
@@ -253,4 +269,30 @@ fn l_adapter_arrow_classifica_il_quadrato_come_poligono() {
     )
     .expect("split");
     assert_eq!(batches[0].num_rows(), 2);
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

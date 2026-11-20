@@ -25,7 +25,7 @@ contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1: un rettangolo per riga, dal kernel `operations::bounds`. Una
+1:1: un rettangolo per riga, dal kernel `operations::with_crs::bounds`. Una
 geometria nulla dà quattro celle nulle, e anche una geometria vuota (il
 kernel non ha un rettangolo da rendere).
 

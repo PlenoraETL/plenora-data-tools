@@ -76,7 +76,7 @@ const fn dimension(g: &Geometry<f64>) -> Result<u8, LineBooleanError> {
 /// # Errors
 /// Tipi o filtro non supportati, geometria invalida/non finita, nodo non
 /// pubblicabile senza alterare la topologia, limiti, allocazione, cancellazione o deadline.
-pub fn boolean_with_limits(
+pub(crate) fn boolean_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     operation: LineBooleanOp,
@@ -1099,7 +1099,7 @@ mod tests;
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn union_with_limits(
+pub(crate) fn union_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -1120,7 +1120,7 @@ pub fn union_with_limits(
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn intersection_with_limits(
+pub(crate) fn intersection_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -1141,7 +1141,7 @@ pub fn intersection_with_limits(
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn difference_with_limits(
+pub(crate) fn difference_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,

@@ -46,7 +46,10 @@
 mod argomenti;
 
 use geo::{line_string, polygon, BoundingRect, Geometry, LineString, Polygon};
-use plenora_kernels_geo::spatial_join::{spatial_join_nullable_validated, JoinPair, JoinPredicate};
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::spatial_join::with_crs::spatial_join_nullable_validated;
+use plenora_kernels_geo::spatial_join::JoinPair;
+use plenora_kernels_geo::spatial_join::JoinPredicate;
 use rstar::{RTree, RTreeObject, AABB};
 use std::time::{Duration, Instant};
 
@@ -505,8 +508,14 @@ fn esegui_scenario(scenario: &Scenario) -> EsitoScenario {
     for ripetizione in 0..=RIPETIZIONI {
         let e_riscaldamento = ripetizione == 0;
         let inizio = Instant::now();
-        let esito =
-            spatial_join_nullable_validated(&left_opt, &right_opt, scenario.predicate, MAX_PAIRS);
+        let esito = spatial_join_nullable_validated(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
+            &left_opt,
+            &right_opt,
+            scenario.predicate,
+            MAX_PAIRS,
+        )
+        .map_err(kernel_error_fixture);
         let durata = inizio.elapsed();
         let pairs = match esito {
             Err(errore) => return EsitoScenario::Errore(errore.to_string()),
@@ -644,4 +653,18 @@ fn main() {
     if incompleti > 0 {
         std::process::exit(2);
     }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
 }

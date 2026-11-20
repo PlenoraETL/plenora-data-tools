@@ -65,7 +65,7 @@ const fn dimension(g: &Geometry<f64>) -> Result<u8, PointBooleanError> {
 /// # Errors
 /// Tipi non supportati, filtro invalido, geometrie invalide/non finite,
 /// limiti superati, allocazione fallita, cancellazione o deadline.
-pub fn boolean_with_limits(
+pub(crate) fn boolean_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     operation: PointBooleanOp,
@@ -293,7 +293,7 @@ fn site_cmp(a: &Point<f64>, b: &Point<f64>) -> std::cmp::Ordering {
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn union_with_limits(
+pub(crate) fn union_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -314,7 +314,7 @@ pub fn union_with_limits(
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn intersection_with_limits(
+pub(crate) fn intersection_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -335,7 +335,7 @@ pub fn intersection_with_limits(
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn difference_with_limits(
+pub(crate) fn difference_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,

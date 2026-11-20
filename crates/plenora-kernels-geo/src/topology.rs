@@ -248,7 +248,7 @@ fn checked_result(result: MultiPolygon<f64>) -> Result<Geometry<f64>, TopologyEr
 /// - `PrecisionInsufficient`: la griglia dell'overlay sposterebbe il
 ///   risultato oltre la precisione.
 /// - `CalcoloNonConcluso`: l'overlay di `geo` e' andato in panico.
-pub fn boolean_operation(
+pub(crate) fn boolean_operation(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     operation: BooleanOperation,
@@ -274,7 +274,7 @@ pub fn boolean_operation(
 ///
 /// Come [`boolean_operation`], ma `InvalidGeometry` resta raggiungibile
 /// solo dall'output (gate di ingresso omesso).
-pub fn boolean_operation_validated(
+pub(crate) fn boolean_operation_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     operation: BooleanOperation,
@@ -343,7 +343,7 @@ fn boolean_raw(
 ///   risultato non e' valido.
 /// - `ValidazioneNonConclusa`, `PrecisionInsufficient`,
 ///   `CalcoloNonConcluso`: come [`boolean_operation`].
-pub fn dissolve(
+pub(crate) fn dissolve(
     geometries: &[Geometry<f64>],
     precision: Precision,
 ) -> Result<Geometry<f64>, TopologyError> {
@@ -358,7 +358,7 @@ pub fn dissolve(
 ///
 /// Come [`dissolve`], ma `InvalidGeometry` resta raggiungibile solo
 /// dall'output (gate di ingresso omesso).
-pub fn dissolve_validated(
+pub(crate) fn dissolve_validated(
     geometries: &[Geometry<f64>],
     precision: Precision,
 ) -> Result<Geometry<f64>, TopologyError> {
@@ -422,7 +422,7 @@ fn is_empty(geometry: &Geometry<f64>) -> bool {
 /// (l'intersezione di ogni riga): ingressi non poligonali o non validi,
 /// maschera o risultato non validi, validazione non conclusa,
 /// `PrecisionInsufficient`, `CalcoloNonConcluso`.
-pub fn clip_to_mask(
+pub(crate) fn clip_to_mask(
     geometries: &[Geometry<f64>],
     masks: &[Geometry<f64>],
     precision: Precision,
@@ -441,7 +441,7 @@ pub fn clip_to_mask(
 ///
 /// Come [`clip_to_mask`], ma `InvalidGeometry` resta raggiungibile solo
 /// dagli output (gate di ingresso omesso).
-pub fn clip_to_mask_validated(
+pub(crate) fn clip_to_mask_validated(
     geometries: &[Geometry<f64>],
     masks: &[Geometry<f64>],
     precision: Precision,
@@ -551,7 +551,7 @@ fn push_piece(
 /// - `IndexOverflow`: un indice non entra in `u64`/`usize`.
 /// - `ValidazioneNonConclusa`, `PrecisionInsufficient`,
 ///   `CalcoloNonConcluso`: come [`boolean_operation`] (anche dal join).
-pub fn polygon_overlay(
+pub(crate) fn polygon_overlay(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
     mode: OverlayMode,
@@ -581,7 +581,7 @@ pub fn polygon_overlay(
 ///
 /// Come [`polygon_overlay`], ma `InvalidGeometry` resta raggiungibile solo
 /// dagli output (gate di ingresso omesso).
-pub fn polygon_overlay_validated(
+pub(crate) fn polygon_overlay_validated(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
     mode: OverlayMode,
@@ -615,7 +615,7 @@ pub fn polygon_overlay_validated(
 /// Come [`polygon_overlay_validated`]; in piu' `ResourceLimit` con nome
 /// `memoria` (byte previsti e margine) se coppie o pezzi superano il
 /// margine.
-pub fn polygon_overlay_validated_con_margine(
+pub(crate) fn polygon_overlay_validated_con_margine(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
     mode: OverlayMode,
@@ -867,7 +867,7 @@ fn polygon_overlay_impl(
 ///   sposterebbe il risultato oltre la precisione.
 /// - `CalcoloNonConcluso`: un buffer o un overlay di `geo` e' andato in
 ///   panico.
-pub fn clean_valid_polygon_topology(
+pub(crate) fn clean_valid_polygon_topology(
     geometries: &[Geometry<f64>],
     snap_tolerance: f64,
     remove_overlaps: bool,
@@ -901,7 +901,7 @@ pub fn clean_valid_polygon_topology(
 /// Come [`clean_valid_polygon_topology`], ma `InvalidGeometry` resta
 /// raggiungibile solo dagli output intermedi/prodotti (gate di ingresso
 /// omesso).
-pub fn clean_valid_polygon_topology_validated(
+pub(crate) fn clean_valid_polygon_topology_validated(
     geometries: &[Geometry<f64>],
     snap_tolerance: f64,
     remove_overlaps: bool,
@@ -1593,7 +1593,7 @@ mod tests {
     }
 }
 
-/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
 /// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
 pub mod with_crs {
     use super::{

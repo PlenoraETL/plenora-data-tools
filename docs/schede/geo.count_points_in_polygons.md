@@ -2,7 +2,7 @@
 
 Aggiunge alla sinistra, di norma poligoni, una colonna con il numero di
 geometrie della destra, di norma punti, che ogni sua geometria contiene
-(kernel `analysis::count_points_in_polygons_validated`; [Runner,
+(kernel `analysis::with_crs::count_points_in_polygons_validated`; [Runner,
 «Operazioni geo»](runner.md#operazioni-geo)). «Contiene» è il
 `contains` di `geo`: i punti sul bordo non contano, come il
 `predicate="within"` di Manipola, e un punto dentro più poligoni conta in
@@ -73,7 +73,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`analysis::count_points_in_polygons_validated`, errore
+Dal kernel (`analysis::with_crs::count_points_in_polygons_validated`, errore
 `AnalysisError` che avvolge `SpatialJoinError`, sulle geometrie già
 validate), nella categoria del passo geo indicata fra parentesi:
 
