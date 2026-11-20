@@ -230,12 +230,17 @@ fn verifica_catalog(esito: &comune::Esito) {
         )
     };
     let registro_comune = contratto("data-kernels-v2.json");
-    let comuni: BTreeSet<_> = registro_comune["operations"]
+    let mut comuni: BTreeSet<_> = registro_comune["operations"]
         .as_array()
         .expect("operations")
         .iter()
         .map(identita)
         .collect();
+    // Il contratto fissato descrive l'hull poligonale (semantica 3).
+    // L'opt-in dimensionale aggiunge Point/LineString: semantica 4.
+    // La fixture storica resta intatta; il solo delta atteso e' esplicito.
+    assert!(comuni.remove(&("geo.concave_hull".to_owned(), 3, "geo".to_owned())));
+    assert!(comuni.insert(("geo.concave_hull".to_owned(), 4, "geo".to_owned())));
     let kernel = risultato["kernels"].as_array().expect("kernels");
     let nostri: BTreeSet<_> = kernel.iter().map(identita).collect();
     assert_eq!(

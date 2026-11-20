@@ -372,15 +372,28 @@ impl PassoGeo {
     ///
     /// Gli errori dei controlli sugli ingressi (dominio del CRS, tipi
     /// dichiarati), dei kernel e del montaggio.
-    pub fn esegui(
+    /// Percorso del runner: propaga il controllo ai kernel che lo supportano.
+    pub(crate) fn esegui_interrompibile(
         &self,
         ingressi: &[&RecordBatch],
         uscita: &DataContract,
         margine: usize,
+        interruzione: &crate::Interruzione,
     ) -> Result<RecordBatch> {
         for batch_arrow in ingressi {
             plenora_core::valida_arrow::batch(batch_arrow)?;
         }
+        self.esegui_validato(ingressi, uscita, margine, interruzione)
+    }
+
+    // Il solo ingresso del runner valida Arrow prima di delegare.
+    fn esegui_validato(
+        &self,
+        ingressi: &[&RecordBatch],
+        uscita: &DataContract,
+        margine: usize,
+        interruzione: &crate::Interruzione,
+    ) -> Result<RecordBatch> {
         let margine = MargineMemoria::byte(u64::try_from(margine).unwrap_or(u64::MAX));
         if ingressi.len() != self.lati.len() {
             return Err(PlenoraError::Internal(format!(
@@ -407,6 +420,7 @@ impl PassoGeo {
                     batch,
                     uscita,
                     margine,
+                    interruzione,
                 )?
             }
             Kernel::Collettivo(kernel, righe_massime) => {

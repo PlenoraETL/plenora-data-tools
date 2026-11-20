@@ -3875,6 +3875,26 @@ mod tests {
         }
     }
 
+    /// Lo schema opt-in ammette esattamente le dimensioni pubblicate.
+    #[test]
+    fn dimensional_concave_hull_declares_all_output_dimensions() {
+        let case = Case {
+            op: "geo.concave_hull",
+            config: json!({"concavity": 2.0, "degeneracy_threshold": 0.0}),
+            binary: false,
+            expected: Expect::Unchanged,
+        };
+        let (output, _, _) = run_case(&case);
+        let types = output
+            .active_geometry_column()
+            .unwrap()
+            .types
+            .value()
+            .unwrap();
+        assert_eq!(types.declaration(), TypesDeclaration::Exact);
+        assert_eq!(types.to_canonical_list(), "point,linestring,polygon");
+    }
+
     /// Contratto con tipi dichiarati (`exact`/`polygon`) e chiavi canoniche
     /// `types`/`types_declaration` sul campo, come prodotto dalla discovery.
     fn geo_contract_with_declared_types() -> DataContract {

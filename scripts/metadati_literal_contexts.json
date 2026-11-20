@@ -1161,7 +1161,12 @@
     "[[\"token\",\"}\"],[\"string\",\"geo.area\"],[\"token\",\"|\"],[\"string\",\"geo.length\"],[\"token\",\"|\"],[\"string\",\"geo.perimeter\"],[\"token\",\"|\"],[\"string\",\"geo.geodesic_line_length\"],[\"token\",\"|\"],[\"string\",\"geo.geodesic_area\"],[\"token\",\"=\"]]",
     "[[\"token\",\"}\"],[\"string\",\"geo.dissolve\"],[\"token\",\"|\"],[\"string\",\"geo.line_builder\"],[\"token\",\"|\"],[\"string\",\"geo.polygon_builder\"],[\"token\",\"|\"],[\"string\",\"geo.line_merge\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"]]",
     "[[\"token\",\"}\"],[\"string\",\"geo.distance\"],[\"token\",\"|\"],[\"string\",\"geo.hausdorff_distance\"],[\"token\",\"|\"],[\"string\",\"geo.frechet_distance\"],[\"token\",\"|\"],[\"string\",\"geo.haversine_distance\"],[\"token\",\"|\"],[\"string\",\"geo.geodesic_distance\"],[\"token\",\"|\"]]",
-    "[[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"geo.simplify\"],[\"token\",\"|\"],[\"string\",\"geo.affine_transform\"],[\"token\",\"|\"],[\"string\",\"geo.translate\"],[\"token\",\"|\"],[\"string\",\"geo.scale\"],[\"token\",\"|\"]]"
+    "[[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"geo.simplify\"],[\"token\",\"|\"],[\"string\",\"geo.affine_transform\"],[\"token\",\"|\"],[\"string\",\"geo.translate\"],[\"token\",\"|\"],[\"string\",\"geo.scale\"],[\"token\",\"|\"]]",
+    "[[\"token\",\"{\"],[\"token\",\"ensure_non_negative\"],[\"token\",\"(\"],[\"token\",\"op\"],[\"token\",\",\"],[\"string\",\"degeneracy_threshold\"],[\"token\",\",\"],[\"token\",\"value\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
+    "[[\"token\",\"map\"],[\"token\",\"(\"],[\"token\",\"Some\"],[\"token\",\")\"],[\"token\",\"}\"],[\"string\",\"geo.concave_hull\"],[\"token\",\"if\"],[\"token\",\"config\"],[\"token\",\".\"],[\"token\",\"get\"],[\"token\",\"(\"]]",
+    "[[\"token\",\"if\"],[\"token\",\"config\"],[\"token\",\".\"],[\"token\",\"get\"],[\"token\",\"(\"],[\"string\",\"degeneracy_threshold\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"is_some\"],[\"token\",\"(\"],[\"token\",\")\"]]",
+    "[[\"token\",\"map\"],[\"token\",\"(\"],[\"token\",\"Some\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"geo.convex_hull\"],[\"token\",\"|\"],[\"string\",\"geo.concave_hull\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"]]",
+    "[[\"token\",\"Some\"],[\"token\",\")\"],[\"token\",\",\"],[\"string\",\"geo.convex_hull\"],[\"token\",\"|\"],[\"string\",\"geo.concave_hull\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"],[\"token\",\"exact_types\"],[\"token\",\"(\"]]"
   ],
   "crates/plenora-kernels-geo/src/analyze/helpers.rs": [
     "[[\"token\",\"(\"],[\"token\",\"invalid_param\"],[\"token\",\"(\"],[\"token\",\"op\"],[\"token\",\",\"],[\"string\",\"output_column\"],[\"token\",\",\"],[\"string\",\"non deve essere vuoto\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\"}\"]]",
@@ -2444,7 +2449,8 @@
     "[[\"token\",\"riferimento\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\")\"],[\"token\",\"}\"],[\"string\",\"geo.distance\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"distanza\"],[\"token\",\"(\"],[\"token\",\"Distanza\"]]",
     "[[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"}\"],[\"string\",\"geo.from_wkt\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"],[\"token\",\"let\"],[\"token\",\"letta\"]]",
     "[[\"token\",\"}\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\")\"],[\"token\",\"}\"],[\"string\",\"geo.translate\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"],[\"token\",\"let\"],[\"token\",\"letta\"]]",
-    "[[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"match\"],[\"token\",\"op\"],[\"token\",\"{\"],[\"string\",\"geo.from_coords\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"],[\"token\",\"let\"],[\"token\",\"letta\"]]"
+    "[[\"token\",\"}\"],[\"token\",\";\"],[\"token\",\"match\"],[\"token\",\"op\"],[\"token\",\"{\"],[\"string\",\"geo.from_coords\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"],[\"token\",\"let\"],[\"token\",\"letta\"]]",
+    "[[\"token\",\".\"],[\"token\",\"degeneracy_threshold\"],[\"token\",\",\"],[\"token\",\"}\"],[\"token\",\"}\"],[\"string\",\"geo.densify\"],[\"token\",\"=\"],[\"token\",\">\"],[\"token\",\"{\"],[\"token\",\"let\"],[\"token\",\"letta\"]]"
   ],
   "crates/plenora-pipeline/src/lib.rs": [
     "[[\"token\",\"[\"],[\"token\",\"cfg\"],[\"token\",\"(\"],[\"token\",\"feature\"],[\"token\",\"=\"],[\"string\",\"sonde-di-prova\"],[\"token\",\")\"],[\"token\",\"]\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"doc\"]]"
@@ -2522,5 +2528,8 @@
     "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"shortest_geodesic\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"UNIT\"],[\"token\",\":\"]]",
     "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"metre\"],[\"token\",\";\"],[\"token\",\"pub\"],[\"token\",\"const\"],[\"token\",\"OUTPUT_MODEL\"],[\"token\",\":\"]]",
     "[[\"token\",\"&\"],[\"token\",\"'\"],[\"token\",\"static\"],[\"token\",\"str\"],[\"token\",\"=\"],[\"string\",\"linear_lonlat\"],[\"token\",\";\"],[\"token\",\"}\"],[\"token\",\"#\"],[\"token\",\"[\"],[\"token\",\"derive\"]]"
+  ],
+  "crates/plenora-kernels-geo/src/extended/dimensional.rs": [
+    "[[\"token\",\":\"],[\"token\",\"InvalidParameter\"],[\"token\",\"{\"],[\"token\",\"name\"],[\"token\",\":\"],[\"string\",\"degeneracy_threshold\"],[\"token\",\",\"],[\"token\",\"reason\"],[\"token\",\":\"],[\"string\",\"deve essere finita e non negativa\"],[\"token\",\",\"]]"
   ]
 }

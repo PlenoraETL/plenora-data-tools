@@ -25,8 +25,8 @@ use plenora_core::contract::DataContract;
 use plenora_core::crs::ResolvedCrs;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::analyze::config::{
-    AccessorFieldParam, AffineTransformConfig, BufferCapParam, BufferConfig, ConcaveHullConfig,
-    DensifyConfig, FromCoordsConfig, FromWktConfig, GeometryAccessorsConfig,
+    AccessorFieldParam, AffineTransformConfig, BufferCapParam, BufferConfig, DensifyConfig,
+    DimensionalConcaveHullConfig, FromCoordsConfig, FromWktConfig, GeometryAccessorsConfig,
     LineInterpolatePointConfig, LineLocatePointConfig, LineSubstringConfig, OtherWkbConfig,
     RotateConfig, ScaleConfig, SimplifyConfig, SimplifyPolicyParam, SnapConfig, SnapToGridConfig,
     TranslateConfig,
@@ -88,6 +88,7 @@ pub(super) enum Trasformazione {
     InviluppoConcavo {
         concavita: f64,
         soglia: f64,
+        degenerazione: Option<f64>,
     },
     Densifica(f64),
     SuGriglia(f64),
@@ -255,10 +256,11 @@ impl Trasformazione {
                 }
             }
             "geo.concave_hull" => {
-                let letta: ConcaveHullConfig = config(op, valore)?;
+                let letta: DimensionalConcaveHullConfig = config(op, valore)?;
                 Self::InviluppoConcavo {
                     concavita: letta.concavity,
                     soglia: letta.length_threshold.unwrap_or(0.0),
+                    degenerazione: letta.degeneracy_threshold,
                 }
             }
             "geo.densify" => {
@@ -291,6 +293,7 @@ impl Trasformazione {
         op: &str,
         geometria: &Geometry<f64>,
         margine: MargineMemoria,
+        interruzione: &crate::Interruzione,
     ) -> Result<Option<Geometry<f64>>> {
         Ok(match self {
             Self::Canonica(operazione) => Some(plenora_kernels_geo::transform_geometry(
@@ -339,7 +342,33 @@ impl Trasformazione {
                 extended::rotate_about(geometria, *gradi, *origine)
                     .map_err(|e| del_kernel(op, &e))?,
             ),
-            Self::InviluppoConcavo { concavita, soglia } => Some(
+            Self::InviluppoConcavo {
+                concavita,
+                soglia,
+                degenerazione: Some(soglia_dimensionale),
+            } => Some(
+                extended::dimensional::concave_hull_dimensional_with_limits(
+                    geometria,
+                    *concavita,
+                    *soglia,
+                    *soglia_dimensionale,
+                    MAX_CELL_COORDINATES,
+                    predicates::RelateLimits {
+                        deadline: interruzione.scadenza,
+                        max_reserved_bytes: margine
+                            .byte_disponibili()
+                            .min(predicates::RelateLimits::default().max_reserved_bytes),
+                        ..predicates::RelateLimits::default()
+                    },
+                    interruzione.annullamento.as_deref(),
+                )
+                .map_err(|e| del_kernel(op, &e))?,
+            ),
+            Self::InviluppoConcavo {
+                concavita,
+                soglia,
+                degenerazione: None,
+            } => Some(
                 extended::concave_hull(geometria, *concavita, *soglia, MAX_CELL_COORDINATES)
                     .map_err(|e| del_kernel(op, &e))?,
             ),
@@ -711,6 +740,7 @@ impl KernelUnario {
         batch: &RecordBatch,
         _uscita: &DataContract,
         margine: MargineMemoria,
+        interruzione: &crate::Interruzione,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         let righe = batch.num_rows();
         let mut colonne = batch.columns().to_vec();
@@ -736,12 +766,12 @@ impl KernelUnario {
             Self::Trasforma(trasformazione) => {
                 let celle = if matches!(trasformazione, Trasformazione::Buffer { .. }) {
                     celle_nel_margine(op, lato.celle(batch)?, margine, |g, margine_riga| {
-                        trasformazione.applica(op, g, margine_riga)
+                        trasformazione.applica(op, g, margine_riga, interruzione)
                     })?
                 } else {
                     per_cella(lato.celle(batch)?, |g| {
                         trasformazione
-                            .applica(op, g, MargineMemoria::ILLIMITATO)?
+                            .applica(op, g, margine, interruzione)?
                             .map(|uscita| encode_geometry(&uscita))
                             .transpose()
                     })?
@@ -1007,6 +1037,36 @@ fn da_wkt(
 #[deny(clippy::disallowed_methods)]
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dimensional_hull_receives_pipeline_interruption() {
+        use plenora_core::ErrorCategory;
+        let transform = super::Trasformazione::InviluppoConcavo {
+            concavita: 2.0,
+            soglia: 0.0,
+            degenerazione: Some(0.0),
+        };
+        let geometry = geo::Point::new(0.0, 0.0).into();
+        for (deadline, expected) in [
+            (None, ErrorCategory::Cancelled),
+            (Some(std::time::Instant::now()), ErrorCategory::Timeout),
+        ] {
+            let interruption = crate::Interruzione {
+                scadenza: deadline,
+                annullamento: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                    true,
+                ))),
+            };
+            let result = transform.applica(
+                "geo.concave_hull",
+                &geometry,
+                plenora_kernels_geo::margine::MargineMemoria::ILLIMITATO,
+                &interruption,
+            );
+            assert!(matches!(result, Err(error) if error.category() == expected
+                && error.phase() == plenora_core::ErrorPhase::Write));
+        }
+    }
+
     use super::*;
 
     /// Il conto unico del passo: ogni riga da sola sta nel margine, ma le

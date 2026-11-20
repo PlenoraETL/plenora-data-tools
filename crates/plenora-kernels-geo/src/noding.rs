@@ -52,6 +52,12 @@ pub struct Work<'a> {
     #[cfg(test)]
     pub polygon_active: bool,
 }
+
+/// Ricevuta di un buffer non vettoriale; rilasciata dopo il buffer proprietario.
+pub struct BufferReservation {
+    _lease: storage::Lease,
+}
+
 impl<'a> Work<'a> {
     pub fn new(limits: RelateLimits, cancelled: Option<&'a std::sync::atomic::AtomicBool>) -> Self {
         let mut budget = storage::Budget::new(limits.max_reserved_bytes);
@@ -77,6 +83,16 @@ impl<'a> Work<'a> {
         self.step()?;
         let lease = storage::Lease::created(&self.budget, bytes)?;
         self.exports.push(lease, &self.budget)
+    }
+
+    pub(crate) fn reserve_buffer(
+        &mut self,
+        bytes: u64,
+    ) -> Result<BufferReservation, PredicateError> {
+        self.step()?;
+        Ok(BufferReservation {
+            _lease: storage::Lease::created(&self.budget, bytes)?,
+        })
     }
 
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
@@ -1090,6 +1106,22 @@ mod gop028 {
     )]
     fn cases() -> Vec<Case> {
         vec![
+            case!(
+                "extended/dimensional.rs",
+                concave_hull_dimensional_with_limits,
+                |f, d, t| crate::extended::dimensional::concave_hull_dimensional_with_limits(
+                    &f.line_geometry,
+                    2.0,
+                    0.0,
+                    0.0,
+                    1000,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::extended::dimensional::DimensionalHullError::Predicate(
+                    PredicateError::DeadlineExceeded
+                )
+            ),
             case!(
                 "geodesic_buffer.rs",
                 geodesic_empty_buffer_with_limits,

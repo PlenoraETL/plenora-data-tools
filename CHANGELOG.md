@@ -10,6 +10,20 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Aggiunte
+
+- Concave hull dimensionale opt-in con
+  `degeneracy_threshold >= 0`. A soglia zero punto e coincidenti rendono Point, due punti
+  distinti e collineari esatti rendono LineString, vuoto Polygon EMPTY.
+  Parametri e percorso poligonale preesistenti conservati; classificazione
+  razionale con limiti e interruzioni condivisi. Soglie positive inclusive
+  tramite un unico adattatore alla distanza di main, da adeguare alla
+  primitiva esatta PR #196. Contabilita' delle visite e dei buffer propri
+  del concaveman, con oracolo differenziale del percorso legacy; quickhull,
+  indici e validazione OGC restano fasi opache dichiarate.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

@@ -1345,6 +1345,7 @@
       "missing_crs_stops_geo_ops_in_analyze_with_the_declared_cause",
       "declared_unresolved_crs_stops_geo_ops_with_a_distinct_cause",
       "output_types_declaration_for_every_geo_op",
+      "dimensional_concave_hull_declares_all_output_dimensions",
       "unidentifiable_geometry_column_is_rejected_in_analysis",
       "canonical_only_geometry_column_is_accepted_in_analysis",
       "make_valid_come_l_analisi",
@@ -3188,6 +3189,7 @@
       "il_tipo_si_legge_dal_type_code_iso_ed_ewkb"
     ],
     "crates/plenora-pipeline/src/geo/unari.rs": [
+      "dimensional_hull_receives_pipeline_interruption",
       "il_buffer_conta_l_uscita_accumulata_nel_margine"
     ],
     "crates/plenora-pipeline/tests/budget.rs": [

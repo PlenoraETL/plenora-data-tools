@@ -9236,17 +9236,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn del_kernel(op: &str, errore: &impl ErroreKernel) -> PlenoraError"
     },
-    "crates/plenora-pipeline/src/geo/mod.rs::esegui": {
-      "checks": [
-        {
-          "function": "crates/plenora-pipeline/src/geo/mod.rs::esegui",
-          "contains": "for batch_arrow in ingressi {\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn esegui( &self, ingressi: &[&RecordBatch], uscita: &DataContract, margine: usize, ) -> Result<RecordBatch>"
-    },
     "crates/plenora-pipeline/src/geo/mod.rs::prepara": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -9521,6 +9510,36 @@
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-kernels-geo/src/extended/dimensional.rs::concave_hull_dimensional_with_limits": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Riceve geometrie native o un errore tipizzato, nessun array o tabella Arrow.",
+      "signature": "pub fn concave_hull_dimensional_with_limits( geometry: &Geometry<f64>, concavity: f64, length_threshold: f64, degeneracy_threshold: f64, max_coordinates: u64, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, DimensionalHullError>"
+    },
+    "crates/plenora-kernels-geo/src/extended/dimensional/concaveman.rs::cmp": {
+      "signature": "fn cmp(&self, other: &Self) -> Ordering",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/extended/dimensional/concaveman.rs::eq": {
+      "signature": "fn eq(&self, other: &Self) -> bool",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/extended/dimensional/concaveman.rs::partial_cmp": {
+      "signature": "fn partial_cmp(&self, other: &Self) -> Option<Ordering>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#23": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Riceve geometrie native o un errore tipizzato, nessun array o tabella Arrow.",
       "signature": "fn classe(&self) -> Classe"
     }
   },

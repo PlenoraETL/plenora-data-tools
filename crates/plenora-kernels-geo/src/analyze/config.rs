@@ -219,6 +219,21 @@ pub struct ConcaveHullConfig {
     pub length_threshold: Option<f64>,
 }
 
+/// Config additiva del concave hull; il vecchio tipo Rust resta invariato.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DimensionalConcaveHullConfig {
+    /// Finita e positiva, anche per ingressi degeneri.
+    pub concavity: f64,
+    /// Soglia di scavo, indipendente dalla degenerazione.
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
+    pub length_threshold: Option<f64>,
+    /// Assente conserva il poligono; zero abilita la dimensione esatta.
+    /// Soglie positive non ancora supportate (primitiva metrica comune).
+    #[serde(default, deserialize_with = "plenora_core::json::mai_null")]
+    pub degeneracy_threshold: Option<f64>,
+}
+
 /// `densify`: un solo parametro, obbligatorio.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -651,6 +666,7 @@ mod tests {
             ScaleConfig,
             RotateConfig,
             ConcaveHullConfig,
+            DimensionalConcaveHullConfig,
             DensifyConfig,
             SnapToGridConfig,
             LineSubstringConfig,

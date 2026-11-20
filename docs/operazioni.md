@@ -11562,7 +11562,7 @@ Verifica: eseguito dal runner come passo unico; l'uscita è confrontata cella pe
 | vincolo di espansione | uscita / ingresso |
 | fusione geo | trasformazione sul posto |
 | maturità | kernel validato |
-| versioni | semantica 3, config 2, analisi 4, kernel 2 |
+| versioni | semantica 4, config 3, analisi 5, kernel 3 |
 
 #### Che cosa fa
 
@@ -11578,6 +11578,16 @@ I confronti di distanza usano i lati adiacenti del bordo corrente, anche
 dopo uno scavo. La coda visita ciascun lato una volta e accoda solo i due
 figli dell'inserimento; non riparte dai lati gia' visitati.
 
+Il percorso dimensionale 6.2.0 e' opt-in: `degeneracy_threshold: 0`
+riconosce la dimensione esatta dei binary64, senza tolleranza implicita.
+Un punto o punti coincidenti producono `Point`; due punti distinti o
+punti collineari producono `LineString` fra minimo e massimo lessicografico
+XY, indipendentemente dall'ordine e dai duplicati. Lo zero con segno viene
+normalizzato. Nessuna coordinata viene costruita. Il vuoto resta
+`Polygon EMPTY`; negli altri casi si usa lo stesso percorso poligonale.
+L'oracolo dimensionale e' il determinante razionale nullo e gli estremi
+della retta, non una presunta specifica Esri di concaveHull.
+
 #### Parametri
 
 `input_geometry` (stringa facoltativa) seleziona per nome la colonna geometrica
@@ -11589,6 +11599,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
+| `degeneracy_threshold` | numero | assente: percorso legacy | finito, non negativo | opt-in dimensionale, separato dallo scavo |
 | `concavity` | numero | obbligatorio | finito, maggiore di zero | concavità relativa: più piccola, più concavo |
 | `length_threshold` | numero | `0` | finito, non negativo | lati più corti di così non si scavano; `0` scava ogni lato |
 
@@ -11605,6 +11616,27 @@ geometria resta al suo posto con lo stesso CRS e le stesse dimensioni
 chiavi `plenora.geometry.types` e `plenora.geometry.types_declaration`
 ereditate si tolgono dal campo. Le proprietà del contratto (`sorted_by`,
 `row_count`) restano.
+
+Con `degeneracy_threshold` presente l'elenco esatto dei tipi d'uscita e'
+`point,linestring,polygon`. Concavita' e soglia di scavo si validano anche
+per vuoti e degeneri, ma non alterano il punto o segmento risultante.
+Soglie di degenerazione negative o non finite sono `InvalidPlan`.
+Con soglia positiva si restituisce il minimo lessicografico XY se ogni
+coordinata dista da esso al massimo la soglia; altrimenti il segmento
+minimo-massimo XY se ogni coordinata dista dal segmento al massimo la
+soglia. Negli altri casi si esegue concaveman. La distanza e' nelle unita'
+del CRS, la soglia e' inclusiva e non e' una precisione numerica implicita.
+Il solo adattatore `metric_within` usa `operations::distance` di main:
+confronto binary64 provvisorio, da adeguare alla primitiva esatta PR #196.
+Distanza assente, non finita o negativa produce errore esplicito.
+In attesa della metrica esatta, nel confronto punto-segmento ogni delta
+non nullo fra le tre coordinate deve avere valore assoluto fra `2^-128`
+e `2^20`; fuori da questo dominio si rende `Unsupported`, evitando
+overflow/underflow interni che la distanza legacy potrebbe nascondere.
+Anche i delta punto-punto devono essere al massimo `2^20` in valore
+assoluto. Il limite superiore restringe gli errori assoluti della formula
+legacy; non qualifica confronti esatti a ridosso della soglia.
+Ogni distanza zero e' inoltre verificata dalla topologia razionale comune.
 
 #### Righe
 
@@ -11685,6 +11717,26 @@ dichiarato), più la validazione OGC di ingresso e uscita; memoria O(n).
 Ordine delle ordinate: dichiarazione esplicita compatibile richiesta dalla 4.0;
 assenza o `unknown` causano `crs/validate` senza effetti. Vedi
 [migrazione e censimento](limiti.md#ordine-delle-ordinate).
+
+L'API Rust `extended::dimensional::concave_hull_dimensional_with_limits`
+conta le coordinate prima di duplicarle. Le scansioni e le verifiche
+razionali consumano passi reali; la memoria aritmetica usa le ricevute
+del noder (GOP-027). Deadline e annullamento usano il controllo condiviso
+GOP-028; deadline diventa Timeout nella pipeline. I limiti forniti governano
+la classificazione dimensionale e i buffer propri del concaveman:
+coda dei lati, heap dei candidati, punti scartati, bordo e uscita. Ogni
+visita o operazione di coda consuma lavoro effettivo, senza prodotti
+preventivi; le coppie contano candidati metrici e confronti geometrici.
+Le ricevute precedono la crescita e comprendono la sovrapposizione dei
+buffer durante la riallocazione. L'ordine RTree/BinaryHeap resta legacy.
+Quickhull, gli interni degli RTree e la validazione OGC restano opachi:
+checkpoint ai confini, scratch interni non coperti, GOP-027 non integrale.
+La pipeline propaga scadenza e token alla classificazione, con limiti standard
+del noder e memoria per invocazione limitata anche dal margine del passo;
+non e' un tetto aggregato sulle invocazioni parallele. La qualifica
+cooperativa e di memoria delle fasi opache resta lavoro necessario
+per completare il contratto 9; le soglie positive attendono la qualifica
+metrica esatta della PR #196.
 
 #### Memoria
 

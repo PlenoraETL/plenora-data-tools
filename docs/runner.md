@@ -263,8 +263,9 @@ ritentativo `safe`: rieseguire lo stesso piano è deterministico (se
 ritentare dopo un annullamento voluto lo decide il chiamante). Una scadenza
 RFC 3339 (`plenora.execution.deadline` del binding di runtime) la converte
 in `Instant` chi la riceve. Con una scadenza l'esito (output o `Timeout`) dipende
-dal tempo, per natura; gli output resi sono sempre quelli di `run`. Il controllo è fra i passi, mai dentro un
-kernel (limite in [«Limiti dichiarati del runner»](#limiti-dichiarati-del-runner)).
+dal tempo, per natura; gli output resi sono sempre quelli di `run`. Il controllo resta fra i passi per gli altri kernel; il concave hull
+dimensionale opt-in riceve anche deadline e token nella classificazione
+razionale, con fasi legacy opache (limite in [«Limiti dichiarati del runner»](#limiti-dichiarati-del-runner)).
 
 Fra un passo e il controllo del successivo, e in `plenora-io` fra un output
 scritto e il controllo del successivo, gira una sonda delle prove
@@ -849,11 +850,11 @@ esplicito.
   duplicano o creano righe (`join`, `explode`, `aggregate`) restano senza
   esempi, perché il contratto v1 vuole un indice della sorgente unico per
   esempio.
-- **Scadenza e annullamento solo fra i passi.**
+- **Scadenza e annullamento prevalentemente fra i passi.**
   *Regola*: `run_interrompibile` controlla scadenza e annullamento prima
   di ogni passo e prima di consegnare gli output
-  ([«Scadenza e annullamento»](#scadenza-e-annullamento)), mai dentro un
-  kernel.
+  ([«Scadenza e annullamento»](#scadenza-e-annullamento)), con controlli anche nella
+  classificazione razionale del concave hull dimensionale opt-in.
   *Ambito*: `PipelineValidata::run_interrompibile`; anche i controlli dopo
   il passo (budget, contratto) e la validazione degli input girano fino in
   fondo.

@@ -84,10 +84,10 @@ dalla suite ([«Suite lunga»](../README.md#suite-lunga)).
 | `plenora-core` | 214 | 107 | 321 |
 | `plenora-data-py` | 0 | 0 | 0 |
 | `plenora-io` | 20 | 268 | 288 |
-| `plenora-kernels-geo` | 869 | 155 | 1024 |
+| `plenora-kernels-geo` | 880 | 155 | 1035 |
 | `plenora-kernels-table` | 478 | 138 | 616 |
-| `plenora-pipeline` | 17 | 177 | 194 |
-| **totale** | 1605 | 920 | 2525 |
+| `plenora-pipeline` | 18 | 177 | 195 |
+| **totale** | 1617 | 920 | 2537 |
 
 ### Prove Python dell'SDK
 

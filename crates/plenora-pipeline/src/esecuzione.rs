@@ -110,7 +110,8 @@ pub struct ReportPasso {
 /// scadenza assoluta e un segnale di annullamento, entrambi facoltativi.
 ///
 /// Il runner li controlla prima di ogni passo e prima di consegnare gli
-/// output, mai durante un kernel: un passo lungo finisce anche oltre la
+/// output; il concave hull dimensionale lo riceve anche nel kernel. Gli altri
+/// kernel possono terminare oltre la
 /// scadenza, e l'errore arriva al controllo successivo (limite dichiarato
 /// in docs/runner.md, «Scadenza e annullamento»). La scadenza prevale
 /// sull'annullamento quando valgono entrambi.
@@ -359,6 +360,7 @@ fn esegui_kernel(
     ingressi: &[&RecordBatch],
     limiti: &plenora_kernels_table::Limits,
     contratto: &DataContract,
+    interruzione: &Interruzione,
 ) -> Result<(RecordBatch, EffettiKernel)> {
     #[cfg(test)]
     CHIAMATE_KERNEL.with(|chiamate| chiamate.set(chiamate.get() + 1));
@@ -368,8 +370,13 @@ fn esegui_kernel(
             for tabella in ingressi {
                 plenora_kernels_geo::valori_arrow::verifica_tabella(tabella)?;
             }
-            geo.esegui(ingressi, contratto, limiti.max_governed_memory_bytes)
-                .map(nessuno)
+            geo.esegui_interrompibile(
+                ingressi,
+                contratto,
+                limiti.max_governed_memory_bytes,
+                interruzione,
+            )
+            .map(nessuno)
         }
         (KernelPasso::Tabellare(preparato), [unico]) => {
             preparato.esegui_unario_con_effetti(unico, limiti)
@@ -679,20 +686,21 @@ impl PipelineValidata {
                 ..self.limiti_kernel.clone()
             };
 
-            let (uscita, effetti) = esegui_kernel(passo, &ingressi, &limiti_kernel, contratto)
-                .map_err(|errore| diagnostica_nella_base(errore, passo))
-                .and_then(|(uscita, effetti)| {
-                    validate_batch(&uscita, &self.limiti_kernel)?;
-                    let righe_out = righe(&uscita)?;
-                    // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
-                    // piano ha solo `max_output_rows`, controllato alla fine.
-                    if !self.outputs.contains(&passo.out) {
-                        check_edge_counts(&self.limiti, righe_out)?;
-                    }
-                    check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
-                    conforma(&uscita, contratto).map(|uscita| (uscita, effetti))
-                })
-                .map_err(nel)?;
+            let (uscita, effetti) =
+                esegui_kernel(passo, &ingressi, &limiti_kernel, contratto, interruzione)
+                    .map_err(|errore| diagnostica_nella_base(errore, passo))
+                    .and_then(|(uscita, effetti)| {
+                        validate_batch(&uscita, &self.limiti_kernel)?;
+                        let righe_out = righe(&uscita)?;
+                        // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
+                        // piano ha solo `max_output_rows`, controllato alla fine.
+                        if !self.outputs.contains(&passo.out) {
+                            check_edge_counts(&self.limiti, righe_out)?;
+                        }
+                        check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
+                        conforma(&uscita, contratto).map(|uscita| (uscita, effetti))
+                    })
+                    .map_err(nel)?;
             let righe_out = righe(&uscita)?;
 
             let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;

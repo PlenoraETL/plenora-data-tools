@@ -98,6 +98,16 @@ impl ErroreKernel for OperationError {
     }
 }
 
+impl ErroreKernel for plenora_kernels_geo::extended::dimensional::DimensionalHullError {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Extended(error) => error.classe(),
+            Self::Predicate(error) => error.classe(),
+            Self::Metric(error) => error.classe(),
+        }
+    }
+}
+
 impl ErroreKernel for ExtendedError {
     fn classe(&self) -> Classe {
         match self {
@@ -400,6 +410,16 @@ impl ErroreKernel for plenora_kernels_geo::offset::OffsetError {
 #[cfg(test)]
 macro_rules! verifica {
     ($errore:expr, $categoria:expr) => {
+        assert_eq!(
+            del_kernel(
+                "op",
+                &plenora_kernels_geo::extended::dimensional::DimensionalHullError::Predicate(
+                    $errore
+                )
+            )
+            .category(),
+            $categoria
+        );
         assert_eq!(
             del_kernel(
                 "op",

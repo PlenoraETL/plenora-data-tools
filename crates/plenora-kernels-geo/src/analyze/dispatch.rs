@@ -14,10 +14,11 @@ use plenora_core::{PlenoraError, Result};
 use serde_json::Value;
 
 use super::config::{
-    AffineTransformConfig, BufferConfig, CleanTopologyConfig, ConcaveHullConfig, DensifyConfig,
-    EmptyConfig, LineInterpolatePointConfig, LineSubstringConfig, NearestConfig, OtherWkbConfig,
-    OutputColumnConfig, OverlayConfig, PolygonizeConfig, RotateConfig, SJoinConfig, ScaleConfig,
-    SimplifyConfig, SnapToGridConfig, SplitConfig, TranslateConfig, VoronoiConfig,
+    AffineTransformConfig, BufferConfig, CleanTopologyConfig, DensifyConfig,
+    DimensionalConcaveHullConfig, EmptyConfig, LineInterpolatePointConfig, LineSubstringConfig,
+    NearestConfig, OtherWkbConfig, OutputColumnConfig, OverlayConfig, PolygonizeConfig,
+    RotateConfig, SJoinConfig, ScaleConfig, SimplifyConfig, SnapToGridConfig, SplitConfig,
+    TranslateConfig, VoronoiConfig,
 };
 use super::helpers::{
     crs_requirement, ensure_finite, ensure_name_free, ensure_non_negative, ensure_positive,
@@ -153,8 +154,11 @@ pub(in crate::analyze) fn validate_transform_params(op: &str, config: &Value) ->
             }
         }
         "geo.concave_hull" => {
-            let parsed: ConcaveHullConfig = parse_config(op, config)?;
+            let parsed: DimensionalConcaveHullConfig = parse_config(op, config)?;
             ensure_positive(op, "concavity", parsed.concavity)?;
+            if let Some(value) = parsed.degeneracy_threshold {
+                ensure_non_negative(op, "degeneracy_threshold", value)?;
+            }
             if let Some(value) = parsed.length_threshold {
                 ensure_non_negative(op, "length_threshold", value)?;
             }
@@ -250,17 +254,23 @@ fn exact_types(types: Vec<GeometryType>) -> Result<GeometryTypesProperty> {
 ///
 /// `Some` con i tipi dell'OUTPUT, verificati contro i kernel, per le op che
 /// cambiano il tipo; `None` per quelle che lo preservano. Casi non ovvi:
-/// `convex_hull` e `concave_hull` producono sempre `Polygon`: un inviluppo
+/// `convex_hull` e `concave_hull` senza opt-in producono `Polygon`: un inviluppo
 /// degenere (punto, segmento, punti allineati) non diventa `Point` o
 /// `LineString` come in GEOS, ma un poligono non valido che il kernel
 /// rifiuta con `InvalidPlan`; `make_valid` dichiara `mixed` senza elenco, perche' la
 /// riparazione cella per cella (backend Rust, `rust_backend`) puo' cambiare
 /// tipo e l'insieme non e' enumerabile a secco.
-fn transform_output_types(op: &str) -> Result<Option<GeometryTypesProperty>> {
+fn transform_output_types(op: &str, config: &Value) -> Result<Option<GeometryTypesProperty>> {
     match op {
         "geo.centroid" | "geo.point_on_surface" | "geo.line_interpolate_point" => {
             exact_types(vec![GeometryType::Point]).map(Some)
         }
+        "geo.concave_hull" if config.get("degeneracy_threshold").is_some() => exact_types(vec![
+            GeometryType::Point,
+            GeometryType::LineString,
+            GeometryType::Polygon,
+        ])
+        .map(Some),
         "geo.convex_hull" | "geo.concave_hull" => {
             exact_types(vec![GeometryType::Polygon]).map(Some)
         }
@@ -378,7 +388,7 @@ fn analyze_unary_shape(
         | "geo.line_interpolate_point" => {
             validate_transform_params(op, config)?;
             validate_requirement(requirement, &[require_resolved_crs(op, geometry)?])?;
-            transform_output_types(op)?.map_or_else(
+            transform_output_types(op, config)?.map_or_else(
                 || Ok(input.clone()),
                 |types| with_geometry_types(input, geometry, types, fields),
             )

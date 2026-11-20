@@ -9,6 +9,8 @@
 //! lavoro) li sceglie il chiamante, cioe' il runner; il secondo operando non
 //! puntuale delle distanze geografiche lo rifiuta l'analisi.
 
+pub mod dimensional;
+
 use crate::geodetica::EllissoideGeodetico;
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::concave_hull::ConcaveHullOptions;
@@ -350,6 +352,26 @@ pub fn concave_hull_validated(
     length_threshold: f64,
     max_coordinates: u64,
 ) -> Result<Geometry<f64>, ExtendedError> {
+    validate_hull_parameters(concavity, length_threshold)?;
+    let actual =
+        u64::try_from(geometry.coords_count()).map_err(|_| ExtendedError::IndexOverflow)?;
+    if actual > max_coordinates {
+        return Err(ExtendedError::CoordinateLimit {
+            actual,
+            limit: max_coordinates,
+        });
+    }
+    let coordinates: Vec<_> = geometry.coords_iter().collect();
+    let hull = protetto(|| {
+        coordinates.concave_hull_with_options(ConcaveHullOptions {
+            concavity,
+            length_threshold,
+        })
+    })?;
+    validate_output(Geometry::Polygon(hull))
+}
+
+fn validate_hull_parameters(concavity: f64, length_threshold: f64) -> Result<(), ExtendedError> {
     if !concavity.is_finite() || concavity <= 0.0 {
         return Err(ExtendedError::InvalidParameter {
             name: "concavity",
@@ -362,21 +384,7 @@ pub fn concave_hull_validated(
             reason: "deve essere finita e non negativa",
         });
     }
-    let coordinates: Vec<_> = geometry.coords_iter().collect();
-    let actual = u64::try_from(coordinates.len()).map_err(|_| ExtendedError::IndexOverflow)?;
-    if actual > max_coordinates {
-        return Err(ExtendedError::CoordinateLimit {
-            actual,
-            limit: max_coordinates,
-        });
-    }
-    let hull = protetto(|| {
-        coordinates.concave_hull_with_options(ConcaveHullOptions {
-            concavity,
-            length_threshold,
-        })
-    })?;
-    validate_output(Geometry::Polygon(hull))
+    Ok(())
 }
 
 /// Distanza di Hausdorff discreta per vertici (`HausdorffDistance` di
