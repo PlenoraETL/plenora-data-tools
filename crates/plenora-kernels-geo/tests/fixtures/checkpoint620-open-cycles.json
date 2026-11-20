@@ -85,21 +85,6 @@
     "source": "for candidate in &mut geometries {\n        if candidate.field_id == geometry.field_id {\n            candidate.nullable = true;\n        }\n    }"
   },
   {
-    "file": "crates/plenora-kernels-geo/src/analyze/helpers.rs",
-    "function": "merge_schema_metadata",
-    "source": "for source in &mut sources {\n        source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/analyze/measures.rs",
-    "function": "analyze_diagnostics",
-    "source": "for (name, _) in &DIAGNOSTIC_COLUMNS {\n        if fields\n            .iter()\n            .enumerate()\n            .any(|(index, field)| index != position && field.name() == name)\n        {\n            return Err(PlenoraError::Schema(format!(\n                \"{op}: la colonna diagnostica `{name}` esiste gia' nello schema\"\n            )));\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/analyze/measures.rs",
-    "function": "analyze_geometry_accessors",
-    "source": "for index in selected {\n        let (name, data_type) = &ACCESSOR_COLUMNS[index];\n        // `start_point` ed `end_point` sono null anche per una geometria\n        // presente che non e' una linea aperta; gli altri solo dove la\n        // geometria e' null.\n        let nullable = geometria_nullable || matches!(*name, \"start_point\" | \"end_point\");\n        let name = format!(\"{prefix}{name}\");\n        if !ensure_name(&name) {\n            return Err(invalid_param(op, \"output_prefix\", \"produce un nome vuoto\"));\n        }\n        ensure_name_free(op, &fields, &name)?;\n        fields.push(Field::new(name, data_type.clone(), nullable));\n    }"
-  },
-  {
     "file": "crates/plenora-kernels-geo/src/analyze/producers.rs",
     "function": "analyze_reproject",
     "source": "for campo in &mut fields {\n        if campo.name() == &geometry.name {\n            *campo = crate::riproiezione::campo_riproiettato(\n                campo,\n                &target,\n                geometry.dimensions,\n                geometry.encoding,\n            )?;\n        }\n    }"
@@ -183,26 +168,6 @@
     "file": "crates/plenora-kernels-geo/src/construction.rs",
     "function": "coda_dopo_la_geometria",
     "source": "for (posizione, carattere) in testo[apertura..].char_indices() {\n        match carattere {\n            '(' => profondita += 1,\n            ')' => {\n                profondita = profondita.saturating_sub(1);\n                if profondita == 0 {\n                    let resto = &testo[apertura + posizione + 1..];\n                    return !resto.chars().all(spazio_wkt);\n                }\n            }\n            _ => {}\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/coordinate_api.rs",
-    "function": "validate",
-    "source": "for (key, requirement) in CoordinateOptionKind::ALL.iter().zip(requirements) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:1\");\n        let count = request\n            .options\n            .iter()\n            .filter(|option| option.kind() == *key)\n            .count();\n        if count != usize::from(requirement == R) {\n            return Err(InvalidConfiguration);\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/coordinate_api.rs",
-    "function": "validate",
-    "source": "for option in CoordinateOptionKind::ALL\n        .iter()\n        .filter_map(|key| request.options.iter().find(|option| option.kind() == *key))\n    {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:2\");\n        match *option {\n            CoordinateOption::Datum(datum) => {\n                if !rule.datums.contains(&datum) {\n                    return Err(CoordinateErrorKind::Crs);\n                }\n                result.datum = datum;\n            }\n            CoordinateOption::Precision(digits) => {\n                let (min, max) = rule.precision.ok_or(InvalidConfiguration)?;\n                if !(min..=max).contains(&digits) {\n                    return Err(InvalidConfiguration);\n                }\n                result.precision = Some(digits);\n            }\n            CoordinateOption::Resolution(resolution) => {\n                if !rule.resolutions.contains(&resolution) {\n                    return Err(InvalidConfiguration);\n                }\n                result.resolution = Some(resolution);\n            }\n            CoordinateOption::Representative(representative) => {\n                result.representative = Some(representative);\n            }\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/coordinate_api.rs",
-    "function": "batch",
-    "source": "for (index, value) in input.iter().enumerate() {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::batch:1\");\n        #[cfg(test)]\n        crate::noding::gop028::unit();\n        checkpoint(work)?;\n        output.push(convert(value).map_err(|kind| CoordinateApiError {\n            kind,\n            index: Some(index),\n        })?);\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/coordinate_utm.rs",
-    "function": "inverse",
-    "source": "for band in BANDS.iter().copied().map(char::from) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_utm.rs::inverse:1\");\n        if (band >= 'N') != is_north {\n            continue;\n        }\n        if let Ok((west, south, east, north)) = bounds(zone, band) {\n            let (x, y) = project(\n                zone,\n                is_north,\n                false,\n                lon.clamp(west, east),\n                lat.clamp(south, north),\n            )?;\n            closest = closest.min((x - easting).hypot(y - northing));\n        }\n    }"
   },
   {
     "file": "crates/plenora-kernels-geo/src/decoded_size.rs",
@@ -495,26 +460,6 @@
     "source": "while b.value.sign() != Sign::NoSign {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/exact.rs::new:1\");\n            crate::noding::check_interruption(\n                a.lease.budget().deadline,\n                None,\n                PredicateError::DeadlineExceeded,\n                PredicateError::Cancelled,\n            )?;\n            let r = a.rem(&b)?;\n            a = b;\n            b = r;\n        }"
   },
   {
-    "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
-    "function": "sum_sign",
-    "source": "for (term, subtract) in terms {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding/exact.rs::sum_sign:1\");\n        work.step()?;\n        filter.add(term, *subtract)?;\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
-    "function": "sum_sign",
-    "source": "for (term, subtract) in terms {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding/exact.rs::sum_sign:2\");\n        work.step()?;\n        // Al massimo usize::MAX denominatori di MAX_BITS bit: su host\n        // fino a 64 bit il contatore di separazione richiede meno di 83 bit.\n        bound += u128::from(term.d.value.bits());\n        let scaled = term.n.shift(128)?;\n        let quotient = scaled.div(&term.d)?;\n        value = if *subtract {\n            value.sub(&quotient)?\n        } else {\n            value.add(&quotient)?\n        };\n        let remainder = scaled.rem(&term.d)?;\n        let remainder = if *subtract {\n            remainder.neg()?\n        } else {\n            remainder\n        };\n        work.push(&mut residuals, (remainder, &term.d))?;\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
-    "function": "sum_sign",
-    "source": "loop {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"noding/exact.rs::sum_sign:3\");\n        work.step()?;\n        // L'errore troncato ha modulo strettamente minore del numero di\n        // termini. Dopo un passo indeciso l'accumulatore ha al massimo\n        // usize::BITS + 2 bit, non cresce col numero di cifre visitate.\n        if value.value.magnitude() >= count.value.magnitude() {\n            return Ok(if value.value.sign() == Sign::Minus {\n                Ordering::Less\n            } else {\n                Ordering::Greater\n            });\n        }\n        // Se S != 0, |S| >= 1/prodotto(d_i) > 2^-sum(bits(d_i)).\n        // Qui l'intervallo indeciso e' piu' stretto di questa separazione:\n        // l'unico valore razionale possibile e' zero.\n        if precision >= bound {\n            return Ok(Ordering::Equal);\n        }\n        value = value.shift(1)?;\n        let mut exact = true;\n        for (remainder, denominator) in residuals.iter_mut() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/exact.rs::sum_sign:4\");\n            work.step()?;\n            let doubled = remainder.shift(1)?;\n            value = value.add(&doubled.div(denominator)?)?;\n            *remainder = doubled.rem(denominator)?;\n            exact &= remainder.value.sign() == Sign::NoSign;\n        }\n        if exact {\n            return Ok(value.value.cmp(&BigInt::from(0)));\n        }\n        precision += 1;\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
-    "function": "sum_sign",
-    "source": "for (remainder, denominator) in residuals.iter_mut() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/exact.rs::sum_sign:4\");\n            work.step()?;\n            let doubled = remainder.shift(1)?;\n            value = value.add(&doubled.div(denominator)?)?;\n            *remainder = doubled.rem(denominator)?;\n            exact &= remainder.value.sign() == Sign::NoSign;\n        }"
-  },
-  {
     "file": "crates/plenora-kernels-geo/src/operations/rdp.rs",
     "function": "accerta_linea",
     "source": "while let Some(coords) = pending.pop() {\n        let [first, _, .., last] = coords else {\n            continue;\n        };\n        let segment = Line::new(*first, *last);\n        if first != last {\n            let dx = last.x - first.x;\n            let dy = last.y - first.y;\n            // Deve coincidere con geo-types::private_utils::line_segment_distance:\n            // mul_add cambierebbe gli arrotondamenti del denominatore verificato.\n            #[expect(\n                clippy::suboptimal_flops,\n                reason = \"stessi arrotondamenti separati di geo-types\"\n            )]\n            let squared = dx * dx + dy * dy;\n            if squared == 0.0 || !squared.is_finite() {\n                return Err(DISTANZA_NON_RAPPRESENTABILE);\n            }\n        }\n        let mut farthest = 0;\n        let mut maximum = 0.0;\n        for (index, coord) in coords.iter().enumerate().take(coords.len() - 1).skip(1) {\n            let distance = Euclidean.distance(*coord, &segment);\n            if !distance.is_finite() {\n                return Err(DISTANZA_NON_RAPPRESENTABILE);\n            }\n            if distance >= maximum {\n                farthest = index;\n                maximum = distance;\n            }\n        }\n        if maximum > tolerance {\n            // Gli estremi restano inclusi nei due segmenti, come in geo.\n            // Gli slice sono validi: farthest proviene dall'enumerazione.\n            pending.push(&coords[farthest..]);\n            pending.push(&coords[..=farthest]);\n        }\n    }"
@@ -528,11 +473,6 @@
     "file": "crates/plenora-kernels-geo/src/operations.rs",
     "function": "multi_line_string_boundary",
     "source": "for line in lines {\n        if line.0.len() < 2 || line.is_closed() {\n            continue;\n        }\n        for coordinate in [line.0[0], line.0[line.0.len() - 1]] {\n            let canonical_x = if coordinate.x == 0.0 {\n                0.0\n            } else {\n                coordinate.x\n            };\n            let canonical_y = if coordinate.y == 0.0 {\n                0.0\n            } else {\n                coordinate.y\n            };\n            let key = (canonical_x.to_bits(), canonical_y.to_bits());\n            endpoints\n                .entry(key)\n                .and_modify(|(_, odd)| *odd = !*odd)\n                .or_insert_with(|| (geo::Point::new(canonical_x, canonical_y), true));\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-kernels-geo/src/predicates.rs",
-    "function": "fmt",
-    "source": "for cell in self.cells() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"predicates.rs::fmt:1\");\n            write!(formatter, \"{}\", char::from(cell))?;\n        }"
   },
   {
     "file": "crates/plenora-kernels-geo/src/riproiezione.rs",
@@ -1743,26 +1683,6 @@
     "file": "crates/plenora-kernels-geo/src/lib.rs",
     "function": "wkb_hex_to_bytes",
     "source": "for coppia in cifre.as_chunks::<2>().0 {\n        let (Some(alto), Some(basso)) = (cifra(coppia[0]), cifra(coppia[1])) else {\n            return None;\n        };\n        bytes.push((alto << 4) | basso);\n    }"
-  },
-  {
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "validate_batch",
-    "source": "for field in batch.schema().fields() {\n        if !names.insert(field.name()) {\n            return Err(PlenoraError::Schema(format!(\n                \"nome colonna duplicato: {}\",\n                field.name()\n            )));\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "normalize_large_utf8",
-    "source": "for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {\n        if field.data_type() == &DataType::LargeUtf8 {\n            let strings = column\n                .as_any()\n                .downcast_ref::<LargeStringArray>()\n                .ok_or_else(|| PlenoraError::Schema(\"downcast LargeUtf8 fallito\".into()))?;\n            let bytes = strings.iter().flatten().try_fold(0_usize, |total, value| {\n                total.checked_add(value.len()).ok_or_else(|| {\n                    PlenoraError::ResourceLimit(\"overflow dimensione colonna LargeUtf8\".into())\n                })\n            })?;\n            if bytes > i32::MAX as usize {\n                return Err(PlenoraError::ResourceLimit(\n                    \"colonna LargeUtf8 oltre il limite sicuro Utf8 di Arrow\".into(),\n                ));\n            }\n            columns.push(Arc::new(strings.iter().collect::<StringArray>()));\n        } else if geometria_large_binary(field) {\n            let celle = column\n                .as_any()\n                .downcast_ref::<LargeBinaryArray>()\n                .ok_or_else(|| PlenoraError::Schema(\"downcast LargeBinary fallito\".into()))?;\n            let bytes = celle.iter().flatten().try_fold(0_usize, |total, value| {\n                total.checked_add(value.len()).ok_or_else(|| {\n                    PlenoraError::ResourceLimit(\"overflow dimensione colonna LargeBinary\".into())\n                })\n            })?;\n            if bytes > i32::MAX as usize {\n                return Err(PlenoraError::ResourceLimit(\n                    \"colonna geometria LargeBinary oltre il limite sicuro Binary di Arrow\".into(),\n                ));\n            }\n            columns.push(Arc::new(celle.iter().collect::<BinaryArray>()));\n        } else {\n            columns.push(column.clone());\n        }\n    }"
-  },
-  {
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "esegui_kernel",
-    "source": "for tabella in ingressi {\n                plenora_kernels_geo::valori_arrow::verifica_tabella(tabella)?;\n            }"
-  },
-  {
-    "file": "crates/plenora-pipeline/src/esecuzione.rs",
-    "function": "run",
-    "source": "for (_, batch_arrow) in &tables {\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
   {
     "file": "crates/plenora-pipeline/src/geo/binari.rs",

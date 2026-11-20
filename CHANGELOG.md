@@ -30,6 +30,12 @@ la cui versione non ha qui una voce datata.
   Il test rifiuta cicli privi di sonda e identificatori duplicati. Le misure
   dei cicli restano distinte dalle primitive: non certificano ancora il
   lavoro interno delle dipendenze, dei costruttori e dei distruttori.
+- Ulteriore lotto di sei moduli coperti localmente: API coordinate, UTM,
+  predicati, helper e misure di analisi, esecuzione pipeline. I tre helper
+  del runner ricevono la stessa interruzione del chiamante. Le prove statiche vincolano anche
+  le dipendenze AST e non vengono rigenerate dal censimento. Riconosciuti
+  inoltre i quattro checkpoint di `noding::exact::sum_sign`; il gcd e i
+  maggioranti composti delle 34 API restano da chiudere.
 - Regola di qualifica dell'interruzione secondo l'opzione A del 20/11:
   checkpoint condiviso o limite statico per i cicli espliciti del repository;
   lavoro interno di librerie esterne, iteratori standard, macro di terzi e

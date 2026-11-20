@@ -9134,7 +9134,7 @@
       "checks": [
         {
           "function": "crates/plenora-pipeline/src/esecuzione.rs::run",
-          "contains": "for (_, batch_arrow) in &tables {\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
+          "contains": "let interruzione = Interruzione::default();\nfor (_, batch_arrow) in &tables {\n    interruzione.verifica(\"esecuzione pipeline\")?;\n    plenora_core::valida_arrow::batch(batch_arrow)?;\n}"
         }
       ],
       "classification": "ingresso guardato",

@@ -2280,7 +2280,8 @@
       "checkpoint620_literal_bounds_are_structural",
       "checkpoint620_entry_requires_unconditional_shared_call",
       "checkpoint620_new_cycles_cannot_hide_in_regeneration",
-      "checkpoint620_callbacks_receivers_and_pipeline_require_propagation"
+      "checkpoint620_callbacks_receivers_and_pipeline_require_propagation",
+      "checkpoint620_coordinate_test_unit_is_not_production_work"
     ],
     "crates/plenora-kernels-geo/tests/concave_scavo.rs": [
       "divergenza_dodici_punti",
@@ -3180,7 +3181,8 @@
     "crates/plenora-pipeline/src/esecuzione.rs": [
       "un_passo_fuori_budget_si_rifiuta_senza_chiamare_il_kernel",
       "metadati_diversi_dal_contratto_sono_un_errore_interno",
-      "un_interruzione_prima_del_primo_passo_non_chiama_kernel"
+      "un_interruzione_prima_del_primo_passo_non_chiama_kernel",
+      "gli_helper_osservano_la_stessa_interruzione"
     ],
     "crates/plenora-pipeline/src/geo/errori.rs": [
       "tutte_le_varianti_di_interruzione_kernel",

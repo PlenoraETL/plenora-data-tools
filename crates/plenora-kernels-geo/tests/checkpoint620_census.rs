@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
+#[path = "checkpoint620_census/static_proofs.rs"]
+mod static_proofs;
+
 fn instrumented_file(path: &str) -> bool {
     let Some(relative) = path.strip_prefix("crates/plenora-kernels-geo/src/") else {
         return false;
@@ -104,6 +107,11 @@ fn literal_range_bound(expression: &syn::Expr) -> Option<u128> {
 // Lotti chiusi: ogni ciclo deve avere una prova locale, anche rigenerando
 // il censimento. La chiusura locale NON e' il maggiorante composto di un'API.
 const CLOSED_MODULES: &[&str] = &[
+    "analyze/helpers.rs",
+    "analyze/measures.rs",
+    "coordinate_api.rs",
+    "coordinate_utm.rs",
+    "predicates.rs",
     "geodesic_buffer/point.rs",
     "noding.rs",
     "geodesic_buffer.rs",
@@ -148,9 +156,10 @@ fn checkpoint_method(file: &str) -> Option<&'static str> {
         "geodesic_densify.rs" | "geodesic_densify/geometry.rs" | "preserve_shape_measure.rs" => {
             Some("checkpoint")
         }
-        "geodesic_buffer/point/union.rs" | "noding/storage.rs" | "offset/enclosure.rs" => {
-            Some("step")
-        }
+        "noding/exact.rs"
+        | "geodesic_buffer/point/union.rs"
+        | "noding/storage.rs"
+        | "offset/enclosure.rs" => Some("step"),
         "geodesic_buffer/point.rs"
         | "noding.rs"
         | "geodesic_buffer.rs"
@@ -179,6 +188,18 @@ fn checkpoint_method(file: &str) -> Option<&'static str> {
 
 fn entry_checkpoint(file: &str, body: &syn::Block) -> Option<String> {
     let offset = usize::from(counter(body).is_some());
+    let offset = if file == "crates/plenora-kernels-geo/src/coordinate_api.rs"
+        && body.stmts.get(offset).is_some_and(|stmt| {
+            matches!(stmt, syn::Stmt::Expr(syn::Expr::Call(call), Some(_))
+                if call.args.is_empty() && call.attrs.len() == 1 && test_only(&call.attrs)
+                && matches!(call.func.as_ref(), syn::Expr::Path(path)
+                    if path.path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>()
+                        == ["crate", "noding", "gop028", "unit"]))
+        }) {
+        offset + 1
+    } else {
+        offset
+    };
     let syn::Stmt::Expr(syn::Expr::Try(attempt), Some(_)) = body.stmts.get(offset)? else {
         return None;
     };
@@ -193,6 +214,18 @@ fn entry_checkpoint(file: &str, body: &syn::Block) -> Option<String> {
                 {
                     return Some("checkpoint()?".into());
                 }
+            }
+        }
+    }
+    if file == "crates/plenora-kernels-geo/src/coordinate_api.rs" {
+        if let syn::Expr::Call(call) = attempt.expr.as_ref() {
+            if matches!(call.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("checkpoint") && path.attrs.is_empty())
+                && call.args.len() == 1
+                && matches!(call.args.first(), Some(syn::Expr::Path(path)) if path.path.is_ident("work") && path.attrs.is_empty())
+                && call.attrs.is_empty()
+                && attempt.attrs.is_empty()
+            {
+                return Some("checkpoint(work)?".into());
             }
         }
     }
@@ -245,13 +278,16 @@ fn locally_covered(record: &serde_json::Value) -> bool {
     !record["entry_checkpoint"].is_null()
         || !record["literal_iteration_bound"].is_null()
         || !record["array_iteration_bound"].is_null()
+        || !record["registered_iteration_bound"].is_null()
 }
 
 fn verify_closed_modules(records: &[serde_json::Value]) {
     for record in records.iter().filter(|record| !record["body"].is_null()) {
         let file = record["file"].as_str().unwrap();
         let relative = file.strip_prefix("crates/plenora-kernels-geo/src/");
-        if relative.is_some_and(|relative| CLOSED_MODULES.contains(&relative)) {
+        if relative.is_some_and(|relative| CLOSED_MODULES.contains(&relative))
+            || file == "crates/plenora-pipeline/src/esecuzione.rs"
+        {
             assert!(
                 locally_covered(record),
                 "ciclo scoperto nel lotto chiuso: {file}:{}",
@@ -584,6 +620,7 @@ fn checkpoint620_census() {
         let directory = root.join("crates").join(name).join("src");
         census.file(&directory.join("lib.rs"), &directory);
     }
+    static_proofs::register(&root, &mut census.records);
     let actual = serde_json::to_string_pretty(&census.records).unwrap() + "\n";
     verify_closed_modules(&census.records);
     let pending: Vec<serde_json::Value> =
@@ -837,6 +874,14 @@ fn checkpoint620_new_cycles_cannot_hide_in_regeneration() {
 fn checkpoint620_callbacks_receivers_and_pipeline_require_propagation() {
     for (file, call) in [
         (
+            "crates/plenora-kernels-geo/src/coordinate_api.rs",
+            "checkpoint(work)",
+        ),
+        (
+            "crates/plenora-kernels-geo/src/noding/exact.rs",
+            "work.step()",
+        ),
+        (
             "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs",
             "checkpoint()",
         ),
@@ -871,5 +916,22 @@ fn checkpoint620_callbacks_receivers_and_pipeline_require_propagation() {
         ] {
             assert!(entry_checkpoint(file, &syn::parse_str(&source).unwrap()).is_none());
         }
+    }
+}
+
+#[test]
+fn checkpoint620_coordinate_test_unit_is_not_production_work() {
+    let file = "crates/plenora-kernels-geo/src/coordinate_api.rs";
+    let body = syn::parse_str("{ #[cfg(test)] crate::noding::gop028::unit(); checkpoint(work)?; }")
+        .unwrap();
+    assert!(entry_checkpoint(file, &body).is_some());
+    for source in [
+        "{ crate::noding::gop028::unit(); checkpoint(work)?; }",
+        "{ #[cfg(feature = \"optional\")] crate::noding::gop028::unit(); checkpoint(work)?; }",
+        "{ #[cfg(test)] other::unit(); checkpoint(work)?; }",
+        "{ #[cfg(test)] crate::noding::gop028::unit(); checkpoint(other)?; }",
+        "{ #[cfg(test)] crate::noding::gop028::unit(); checkpoint(work); }",
+    ] {
+        assert!(entry_checkpoint(file, &syn::parse_str(source).unwrap()).is_none());
     }
 }

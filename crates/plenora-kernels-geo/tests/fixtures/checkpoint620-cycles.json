@@ -2079,6 +2079,8 @@
     "kind": "for",
     "line": 368,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 2,
+    "registered_iteration_reason": "sources e un array locale con due elementi. Il prestito mutabile non ne cambia la cardinalita. Due entrate, senza includere il costo delle mappe e del merge.",
     "source": "for source in &mut sources {\n        source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);\n    }"
   },
   {
@@ -2267,6 +2269,8 @@
     "kind": "for",
     "line": 58,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 10,
+    "registered_iteration_reason": "DIAGNOSTIC_COLUMNS e un array di dieci elementi. selected senza fields contiene 0..6; con fields, column_index restituisce solo 0..5 e sort/dedup elimina i duplicati prima del ciclo, quindi al massimo sei elementi. Le dipendenze sono vincolate anche in analyze/mod.rs e config.rs. Limiti delle entrate, non dei corpi o delle chiamate esterne.",
     "source": "for (name, _) in &DIAGNOSTIC_COLUMNS {\n        if fields\n            .iter()\n            .enumerate()\n            .any(|(index, field)| index != position && field.name() == name)\n        {\n            return Err(PlenoraError::Schema(format!(\n                \"{op}: la colonna diagnostica `{name}` esiste gia' nello schema\"\n            )));\n        }\n    }"
   },
   {
@@ -2492,6 +2496,8 @@
     "kind": "for",
     "line": 150,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 6,
+    "registered_iteration_reason": "DIAGNOSTIC_COLUMNS e un array di dieci elementi. selected senza fields contiene 0..6; con fields, column_index restituisce solo 0..5 e sort/dedup elimina i duplicati prima del ciclo, quindi al massimo sei elementi. Le dipendenze sono vincolate anche in analyze/mod.rs e config.rs. Limiti delle entrate, non dei corpi o delle chiamate esterne.",
     "source": "for index in selected {\n        let (name, data_type) = &ACCESSOR_COLUMNS[index];\n        // `start_point` ed `end_point` sono null anche per una geometria\n        // presente che non e' una linea aperta; gli altri solo dove la\n        // geometria e' null.\n        let nullable = geometria_nullable || matches!(*name, \"start_point\" | \"end_point\");\n        let name = format!(\"{prefix}{name}\");\n        if !ensure_name(&name) {\n            return Err(invalid_param(op, \"output_prefix\", \"produce un nome vuoto\"));\n        }\n        ensure_name_free(op, &fields, &name)?;\n        fields.push(Field::new(name, data_type.clone(), nullable));\n    }"
   },
   {
@@ -4832,6 +4838,8 @@
     "kind": "for",
     "line": 283,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4,
+    "registered_iteration_reason": "ALL e una slice di quattro varianti generata dalla ripetizione uno-a-uno della macro locale; zip non aumenta la cardinalita, filter_map emette al massimo un elemento per chiave. Il controllo iniziale limita anche options a quattro. Solo entrate nei corpi, non costo transitivo.",
     "source": "for (key, requirement) in CoordinateOptionKind::ALL.iter().zip(requirements) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:1\");\n        let count = request\n            .options\n            .iter()\n            .filter(|option| option.kind() == *key)\n            .count();\n        if count != usize::from(requirement == R) {\n            return Err(InvalidConfiguration);\n        }\n    }"
   },
   {
@@ -4873,6 +4881,8 @@
     "kind": "for",
     "line": 303,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 4,
+    "registered_iteration_reason": "ALL e una slice di quattro varianti generata dalla ripetizione uno-a-uno della macro locale; zip non aumenta la cardinalita, filter_map emette al massimo un elemento per chiave. Il controllo iniziale limita anche options a quattro. Solo entrate nei corpi, non costo transitivo.",
     "source": "for option in CoordinateOptionKind::ALL\n        .iter()\n        .filter_map(|key| request.options.iter().find(|option| option.kind() == *key))\n    {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:2\");\n        match *option {\n            CoordinateOption::Datum(datum) => {\n                if !rule.datums.contains(&datum) {\n                    return Err(CoordinateErrorKind::Crs);\n                }\n                result.datum = datum;\n            }\n            CoordinateOption::Precision(digits) => {\n                let (min, max) = rule.precision.ok_or(InvalidConfiguration)?;\n                if !(min..=max).contains(&digits) {\n                    return Err(InvalidConfiguration);\n                }\n                result.precision = Some(digits);\n            }\n            CoordinateOption::Resolution(resolution) => {\n                if !rule.resolutions.contains(&resolution) {\n                    return Err(InvalidConfiguration);\n                }\n                result.resolution = Some(resolution);\n            }\n            CoordinateOption::Representative(representative) => {\n                result.representative = Some(representative);\n            }\n        }\n    }"
   },
   {
@@ -4934,7 +4944,7 @@
     "column": 4,
     "constant": false,
     "counter": "coordinate_api.rs::batch:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "checkpoint(work)?",
     "file": "crates/plenora-kernels-geo/src/coordinate_api.rs",
     "function": "batch",
     "kind": "for",
@@ -5386,6 +5396,8 @@
     "kind": "for",
     "line": 218,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 20,
+    "registered_iteration_reason": "BANDS ha tipo &[u8;20]; iter, copied e map(char::from) preservano la cardinalita. Al massimo venti entrate; chiamate di proiezione e corpo non sono incluse nel limite locale.",
     "source": "for band in BANDS.iter().copied().map(char::from) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_utm.rs::inverse:1\");\n        if (band >= 'N') != is_north {\n            continue;\n        }\n        if let Ok((west, south, east, north)) = bounds(zone, band) {\n            let (x, y) = project(\n                zone,\n                is_north,\n                false,\n                lon.clamp(west, east),\n                lat.clamp(south, north),\n            )?;\n            closest = closest.min((x - easting).hypot(y - northing));\n        }\n    }"
   },
   {
@@ -13310,7 +13322,7 @@
     "column": 4,
     "constant": false,
     "counter": "noding/exact.rs::sum_sign:1",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
     "function": "sum_sign",
     "kind": "for",
@@ -13327,7 +13339,7 @@
     "column": 4,
     "constant": false,
     "counter": "noding/exact.rs::sum_sign:2",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
     "function": "sum_sign",
     "kind": "for",
@@ -13343,7 +13355,7 @@
     "column": 4,
     "constant": false,
     "counter": "noding/exact.rs::sum_sign:3",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
     "function": "sum_sign",
     "kind": "loop",
@@ -13359,7 +13371,7 @@
     "column": 8,
     "constant": false,
     "counter": "noding/exact.rs::sum_sign:4",
-    "entry_checkpoint": null,
+    "entry_checkpoint": "work.step()?",
     "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
     "function": "sum_sign",
     "kind": "for",
@@ -20070,6 +20082,8 @@
     "kind": "for",
     "line": 179,
     "literal_iteration_bound": null,
+    "registered_iteration_bound": 9,
+    "registered_iteration_reason": "cells restituisce [u8;9]; IntoIterator dell array emette nove elementi. Il limite conta le entrate, non il lavoro di formatting o delle chiamate di cells.",
     "source": "for cell in self.cells() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"predicates.rs::fmt:1\");\n            write!(formatter, \"{}\", char::from(cell))?;\n        }"
   },
   {
@@ -31230,7 +31244,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "validate_batch",
     "kind": "macro",
-    "line": 163,
+    "line": 167,
     "path": "format",
     "source": null,
     "tokens": "\"batch con {} righe oltre il limite {}\" , batch . num_rows () , limits . max_rows"
@@ -31244,7 +31258,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "validate_batch",
     "kind": "macro",
-    "line": 170,
+    "line": 174,
     "path": "format",
     "source": null,
     "tokens": "\"schema con {} colonne oltre il limite {}\" , batch . num_columns () , limits . max_columns"
@@ -31252,19 +31266,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      177,
+      181,
       42
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "validate_batch",
     "kind": "for",
-    "line": 177,
+    "line": 181,
     "literal_iteration_bound": null,
-    "source": "for field in batch.schema().fields() {\n        if !names.insert(field.name()) {\n            return Err(PlenoraError::Schema(format!(\n                \"nome colonna duplicato: {}\",\n                field.name()\n            )));\n        }\n    }"
+    "source": "for field in batch.schema().fields() {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        if !names.insert(field.name()) {\n            return Err(PlenoraError::Schema(format!(\n                \"nome colonna duplicato: {}\",\n                field.name()\n            )));\n        }\n    }"
   },
   {
     "body": null,
@@ -31275,7 +31289,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "validate_batch",
     "kind": "macro",
-    "line": 179,
+    "line": 184,
     "path": "format",
     "source": null,
     "tokens": "\"nome colonna duplicato: {}\" , field . name ()"
@@ -31283,19 +31297,19 @@
   {
     "array_iteration_bound": null,
     "body": [
-      198,
+      203,
       80
     ],
     "column": 4,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "for",
-    "line": 198,
+    "line": 203,
     "literal_iteration_bound": null,
-    "source": "for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {\n        if field.data_type() == &DataType::LargeUtf8 {\n            let strings = column\n                .as_any()\n                .downcast_ref::<LargeStringArray>()\n                .ok_or_else(|| PlenoraError::Schema(\"downcast LargeUtf8 fallito\".into()))?;\n            let bytes = strings.iter().flatten().try_fold(0_usize, |total, value| {\n                total.checked_add(value.len()).ok_or_else(|| {\n                    PlenoraError::ResourceLimit(\"overflow dimensione colonna LargeUtf8\".into())\n                })\n            })?;\n            if bytes > i32::MAX as usize {\n                return Err(PlenoraError::ResourceLimit(\n                    \"colonna LargeUtf8 oltre il limite sicuro Utf8 di Arrow\".into(),\n                ));\n            }\n            columns.push(Arc::new(strings.iter().collect::<StringArray>()));\n        } else if geometria_large_binary(field) {\n            let celle = column\n                .as_any()\n                .downcast_ref::<LargeBinaryArray>()\n                .ok_or_else(|| PlenoraError::Schema(\"downcast LargeBinary fallito\".into()))?;\n            let bytes = celle.iter().flatten().try_fold(0_usize, |total, value| {\n                total.checked_add(value.len()).ok_or_else(|| {\n                    PlenoraError::ResourceLimit(\"overflow dimensione colonna LargeBinary\".into())\n                })\n            })?;\n            if bytes > i32::MAX as usize {\n                return Err(PlenoraError::ResourceLimit(\n                    \"colonna geometria LargeBinary oltre il limite sicuro Binary di Arrow\".into(),\n                ));\n            }\n            columns.push(Arc::new(celle.iter().collect::<BinaryArray>()));\n        } else {\n            columns.push(column.clone());\n        }\n    }"
+    "source": "for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        if field.data_type() == &DataType::LargeUtf8 {\n            let strings = column\n                .as_any()\n                .downcast_ref::<LargeStringArray>()\n                .ok_or_else(|| PlenoraError::Schema(\"downcast LargeUtf8 fallito\".into()))?;\n            let bytes = strings.iter().flatten().try_fold(0_usize, |total, value| {\n                total.checked_add(value.len()).ok_or_else(|| {\n                    PlenoraError::ResourceLimit(\"overflow dimensione colonna LargeUtf8\".into())\n                })\n            })?;\n            if bytes > i32::MAX as usize {\n                return Err(PlenoraError::ResourceLimit(\n                    \"colonna LargeUtf8 oltre il limite sicuro Utf8 di Arrow\".into(),\n                ));\n            }\n            columns.push(Arc::new(strings.iter().collect::<StringArray>()));\n        } else if geometria_large_binary(field) {\n            let celle = column\n                .as_any()\n                .downcast_ref::<LargeBinaryArray>()\n                .ok_or_else(|| PlenoraError::Schema(\"downcast LargeBinary fallito\".into()))?;\n            let bytes = celle.iter().flatten().try_fold(0_usize, |total, value| {\n                total.checked_add(value.len()).ok_or_else(|| {\n                    PlenoraError::ResourceLimit(\"overflow dimensione colonna LargeBinary\".into())\n                })\n            })?;\n            if bytes > i32::MAX as usize {\n                return Err(PlenoraError::ResourceLimit(\n                    \"colonna geometria LargeBinary oltre il limite sicuro Binary di Arrow\".into(),\n                ));\n            }\n            columns.push(Arc::new(celle.iter().collect::<BinaryArray>()));\n        } else {\n            columns.push(column.clone());\n        }\n    }"
   },
   {
     "body": null,
@@ -31306,7 +31320,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "method:try_fold",
-    "line": 204,
+    "line": 210,
     "source": null
   },
   {
@@ -31318,7 +31332,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "method:flatten",
-    "line": 204,
+    "line": 210,
     "source": null
   },
   {
@@ -31330,7 +31344,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "method:collect",
-    "line": 214,
+    "line": 220,
     "source": null
   },
   {
@@ -31342,7 +31356,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "method:try_fold",
-    "line": 220,
+    "line": 226,
     "source": null
   },
   {
@@ -31354,7 +31368,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "method:flatten",
-    "line": 220,
+    "line": 226,
     "source": null
   },
   {
@@ -31366,7 +31380,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "method:collect",
-    "line": 230,
+    "line": 236,
     "source": null
   },
   {
@@ -31378,7 +31392,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "normalize_large_utf8",
     "kind": "method:clone",
-    "line": 232,
+    "line": 238,
     "source": null
   },
   {
@@ -31390,7 +31404,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "conforma",
     "kind": "method:any",
-    "line": 249,
+    "line": 255,
     "source": null
   },
   {
@@ -31402,7 +31416,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "conforma",
     "kind": "method:any",
-    "line": 263,
+    "line": 269,
     "source": null
   },
   {
@@ -31414,7 +31428,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "conforma",
     "kind": "method:to_vec",
-    "line": 273,
+    "line": 279,
     "source": null
   },
   {
@@ -31426,7 +31440,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "check_edge_counts",
     "kind": "macro",
-    "line": 286,
+    "line": 292,
     "path": "format",
     "source": null,
     "tokens": "\"max_rows_per_edge superato: {righe} righe > {}\" , limiti . rows . max_rows_per_edge"
@@ -31440,27 +31454,27 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "check_expansion",
     "kind": "macro",
-    "line": 338,
+    "line": 344,
     "path": "format",
     "source": null,
-    "tokens": "\"max_expansion_factor superato (vincolo {:?}): soglia {}, output={righe_out}, \\\r\n             input={righe_in:?}\" , descrittore . expansion_constraint , descrittore . expansion_constraint . binding_threshold (fattore) ,"
+    "tokens": "\"max_expansion_factor superato (vincolo {:?}): soglia {}, output={righe_out}, \\\n             input={righe_in:?}\" , descrittore . expansion_constraint , descrittore . expansion_constraint . binding_threshold (fattore) ,"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      368,
+      375,
       37
     ],
     "column": 12,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "for",
-    "line": 368,
+    "line": 375,
     "literal_iteration_bound": null,
-    "source": "for tabella in ingressi {\n                plenora_kernels_geo::valori_arrow::verifica_tabella(tabella)?;\n            }"
+    "source": "for tabella in ingressi {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                plenora_kernels_geo::valori_arrow::verifica_tabella(tabella)?;\n            }"
   },
   {
     "body": null,
@@ -31471,7 +31485,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 372,
+    "line": 380,
     "source": null
   },
   {
@@ -31483,7 +31497,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 379,
+    "line": 387,
     "source": null
   },
   {
@@ -31495,7 +31509,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "macro",
-    "line": 386,
+    "line": 394,
     "path": "format",
     "source": null,
     "tokens": "\"panico nel kernel {}: {}\" , passo . descrittore . id , plenora_core :: panic_policy :: forma_payload (payload . as_ref ())"
@@ -31509,7 +31523,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "macro",
-    "line": 392,
+    "line": 400,
     "path": "matches",
     "source": null,
     "tokens": "passo . kernel , KernelPasso :: Tabellare (_)"
@@ -31523,7 +31537,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:collect",
-    "line": 394,
+    "line": 402,
     "source": null
   },
   {
@@ -31535,7 +31549,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 394,
+    "line": 402,
     "source": null
   },
   {
@@ -31547,7 +31561,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:collect",
-    "line": 395,
+    "line": 403,
     "source": null
   },
   {
@@ -31559,7 +31573,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:map",
-    "line": 395,
+    "line": 403,
     "source": null
   },
   {
@@ -31571,7 +31585,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "esegui_kernel",
     "kind": "method:to_vec",
-    "line": 403,
+    "line": 411,
     "source": null
   },
   {
@@ -31583,7 +31597,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "diagnostica_nella_base",
     "kind": "macro",
-    "line": 429,
+    "line": 437,
     "path": "format",
     "source": null,
     "tokens": "\"passo `{}`: diagnostica per riga non valida senza gli esempi\" , passo . out"
@@ -31597,10 +31611,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "diagnostica_nella_base",
     "kind": "macro",
-    "line": 435,
+    "line": 443,
     "path": "format",
     "source": null,
-    "tokens": "\"passo `{}`: righe rifiutate nell'ingresso `{ingresso}` del passo, \\\r\n                 non riconducibili alla sorgente (diagnostica senza esempi)\" , passo . out"
+    "tokens": "\"passo `{}`: righe rifiutate nell'ingresso `{ingresso}` del passo, \\\n                 non riconducibili alla sorgente (diagnostica senza esempi)\" , passo . out"
   },
   {
     "body": null,
@@ -31611,7 +31625,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "byte_ingresso",
     "kind": "method:fold",
-    "line": 470,
+    "line": 478,
     "source": null
   },
   {
@@ -31623,25 +31637,25 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "somma",
     "kind": "method:fold",
-    "line": 499,
+    "line": 507,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      523,
+      532,
       41
     ],
     "column": 8,
     "constant": false,
     "counter": null,
-    "entry_checkpoint": null,
+    "entry_checkpoint": "interruzione.verifica(\"esecuzione pipeline\")?",
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run",
     "kind": "for",
-    "line": 523,
+    "line": 532,
     "literal_iteration_bound": null,
-    "source": "for (_, batch_arrow) in &tables {\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
+    "source": "for (_, batch_arrow) in &tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
   {
     "body": null,
@@ -31652,7 +31666,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 549,
+    "line": 559,
     "path": "format",
     "source": null,
     "tokens": "\"prima del passo `{}` ({op})\" , passo . out"
@@ -31660,7 +31674,7 @@
   {
     "array_iteration_bound": null,
     "body": [
-      555,
+      565,
       41
     ],
     "column": 8,
@@ -31670,14 +31684,14 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 555,
+    "line": 565,
     "literal_iteration_bound": null,
     "source": "for (_, batch_arrow) in &tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            plenora_core::valida_arrow::batch(batch_arrow)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      562,
+      572,
       39
     ],
     "column": 8,
@@ -31687,9 +31701,9 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 562,
+    "line": 572,
     "literal_iteration_bound": null,
-    "source": "for (nome, tabella) in tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let Some(atteso) = self.schemi_input.get(&nome) else {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` non dichiarata tra gli input del piano\"\n                )));\n            };\n            let tabella = normalize_large_utf8(tabella)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            if tabella.schema().as_ref() != atteso.as_ref() {\n                return Err(PlenoraError::Schema(format!(\n                    \"input `{nome}`: schema diverso da quello dato in validazione\"\n                )));\n            }\n            // Lo schema del contratto dell'input (blocco canonico delle\n            // geometrie, `validazione::canonico`): stesse colonne, solo\n            // metadati in piu'.\n            let canonico = self.contratti.get(&nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto dell'input `{nome}` assente\"))\n            })?;\n            let righe_tabella = tabella.num_rows();\n            let tabella = plenora_core::batch_with_rows(\n                canonico.schema.clone(),\n                tabella.columns().to_vec(),\n                righe_tabella,\n            )\n            .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            validate_batch(&tabella, &self.limiti_kernel)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            let righe_input = righe(&tabella)?;\n            if righe_input > self.limiti.rows.max_input_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"input `{nome}`: {righe_input} righe oltre max_input_rows {}\",\n                    self.limiti.rows.max_input_rows\n                )));\n            }\n            if vivi.insert(nome.clone(), tabella).is_some() {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` fornita due volte\"\n                )));\n            }\n        }"
+    "source": "for (nome, tabella) in tables {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let Some(atteso) = self.schemi_input.get(&nome) else {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` non dichiarata tra gli input del piano\"\n                )));\n            };\n            let tabella = normalize_large_utf8(tabella, interruzione)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            if tabella.schema().as_ref() != atteso.as_ref() {\n                return Err(PlenoraError::Schema(format!(\n                    \"input `{nome}`: schema diverso da quello dato in validazione\"\n                )));\n            }\n            // Lo schema del contratto dell'input (blocco canonico delle\n            // geometrie, `validazione::canonico`): stesse colonne, solo\n            // metadati in piu'.\n            let canonico = self.contratti.get(&nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto dell'input `{nome}` assente\"))\n            })?;\n            let righe_tabella = tabella.num_rows();\n            let tabella = plenora_core::batch_with_rows(\n                canonico.schema.clone(),\n                tabella.columns().to_vec(),\n                righe_tabella,\n            )\n            .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            validate_batch(&tabella, &self.limiti_kernel, interruzione)\n                .map_err(|errore| errore.con_contesto(&format!(\"input `{nome}`\")))?;\n            let righe_input = righe(&tabella)?;\n            if righe_input > self.limiti.rows.max_input_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"input `{nome}`: {righe_input} righe oltre max_input_rows {}\",\n                    self.limiti.rows.max_input_rows\n                )));\n            }\n            if vivi.insert(nome.clone(), tabella).is_some() {\n                return Err(PlenoraError::InvalidPlan(format!(\n                    \"tabella `{nome}` fornita due volte\"\n                )));\n            }\n        }"
   },
   {
     "body": null,
@@ -31700,7 +31714,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 565,
+    "line": 575,
     "path": "format",
     "source": null,
     "tokens": "\"tabella `{nome}` non dichiarata tra gli input del piano\""
@@ -31714,7 +31728,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 570,
+    "line": 580,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`\""
@@ -31728,7 +31742,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 572,
+    "line": 582,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`: schema diverso da quello dato in validazione\""
@@ -31742,7 +31756,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 580,
+    "line": 590,
     "path": "format",
     "source": null,
     "tokens": "\"contratto dell'input `{nome}` assente\""
@@ -31756,7 +31770,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 584,
+    "line": 594,
     "source": null
   },
   {
@@ -31768,7 +31782,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:to_vec",
-    "line": 585,
+    "line": 595,
     "source": null
   },
   {
@@ -31780,7 +31794,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 588,
+    "line": 598,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`\""
@@ -31794,7 +31808,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 590,
+    "line": 600,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`\""
@@ -31808,7 +31822,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 593,
+    "line": 603,
     "path": "format",
     "source": null,
     "tokens": "\"input `{nome}`: {righe_input} righe oltre max_input_rows {}\" , self . limiti . rows . max_input_rows"
@@ -31822,7 +31836,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 598,
+    "line": 608,
     "source": null
   },
   {
@@ -31834,7 +31848,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 599,
+    "line": 609,
     "path": "format",
     "source": null,
     "tokens": "\"tabella `{nome}` fornita due volte\""
@@ -31848,7 +31862,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:find",
-    "line": 604,
+    "line": 614,
     "source": null
   },
   {
@@ -31860,7 +31874,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 605,
+    "line": 615,
     "path": "format",
     "source": null,
     "tokens": "\"manca la tabella dell'input `{mancante}`\""
@@ -31868,7 +31882,7 @@
   {
     "array_iteration_bound": null,
     "body": [
-      614,
+      624,
       35
     ],
     "column": 8,
@@ -31878,14 +31892,14 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 614,
+    "line": 624,
     "literal_iteration_bound": null,
     "source": "for nome in &self.outputs {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            ultimo_uso.insert(nome, USO_SENZA_FINE);\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      618,
+      628,
       68
     ],
     "column": 8,
@@ -31895,14 +31909,14 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 618,
+    "line": 628,
     "literal_iteration_bound": null,
     "source": "for (indice, passo) in self.passi.iter().enumerate().rev() {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            for sorgente in &passo.inputs {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }\n            ultimo_uso.entry(&passo.out).or_insert(indice);\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      620,
+      630,
       43
     ],
     "column": 12,
@@ -31912,7 +31926,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 620,
+    "line": 630,
     "literal_iteration_bound": null,
     "source": "for sorgente in &passo.inputs {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                ultimo_uso.entry(sorgente).or_insert(indice);\n            }"
   },
@@ -31925,7 +31939,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 632,
+    "line": 642,
     "source": null
   },
   {
@@ -31937,13 +31951,13 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:filter",
-    "line": 630,
+    "line": 640,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      633,
+      643,
       41
     ],
     "column": 8,
@@ -31953,7 +31967,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 633,
+    "line": 643,
     "literal_iteration_bound": null,
     "source": "for nome in &liberati_all_avvio {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            vivi.remove(nome);\n        }"
   },
@@ -31966,15 +31980,15 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 641,
+    "line": 651,
     "path": "format",
     "source": null,
-    "tokens": "\"input: byte vivi iniziali {byte_vivi_iniziali} oltre il budget {budget} \\\r\n                 (max_governed_memory_bytes)\""
+    "tokens": "\"input: byte vivi iniziali {byte_vivi_iniziali} oltre il budget {budget} \\\n                 (max_governed_memory_bytes)\""
   },
   {
     "array_iteration_bound": null,
     "body": [
-      648,
+      658,
       62
     ],
     "column": 8,
@@ -31984,9 +31998,9 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 648,
+    "line": 658,
     "literal_iteration_bound": null,
-    "source": "for (indice, passo) in self.passi.iter().enumerate() {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let op = passo.descrittore.id;\n            #[cfg(feature = \"sonde-di-prova\")]\n            if indice > 0 {\n                crate::sonda::chiama(crate::sonda::Punto::FraPassi, interruzione)?;\n            }\n            interruzione.verifica(&format!(\"prima del passo `{}` ({op})\", passo.out))?;\n            let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);\n            let ingressi: Vec<&RecordBatch> = passo\n                .inputs\n                .iter()\n                .map(|sorgente| {\n                    vivi.get(sorgente).ok_or_else(|| {\n                        PlenoraError::Internal(format!(\n                            \"`{sorgente}` non residente al passo che lo usa\"\n                        ))\n                    })\n                })\n                .collect::<Result<_>>()?;\n            let righe_in: Vec<u64> = ingressi.iter().map(|t| righe(t)).collect::<Result<_>>()?;\n            let contratto = self.contratti.get(&passo.out).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto di `{}` assente\", passo.out))\n            })?;\n\n            // Prima di eseguire: byte vivi delle residenti piu' il picco\n            // previsto nel budget, o il passo si rifiuta senza girare.\n            let residenti = byte_vivi(vivi.values()).map_err(nel)?;\n            let byte_previsti = passo.costo.in_memoria.picco(ingresso_del_passo(\n                passo,\n                &righe_in,\n                byte_ingresso(&ingressi).map_err(nel)?,\n            ));\n            if residenti\n                .checked_add(byte_previsti)\n                .is_none_or(|totale| totale > budget)\n            {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\"\n                ))));\n            }\n            // Al kernel tutto il margine: i suoi preflight usano lo spazio\n            // che c'e'.\n            let margine = budget - residenti;\n            let limiti_kernel = plenora_kernels_table::Limits {\n                max_governed_memory_bytes: usize::try_from(margine).unwrap_or(usize::MAX),\n                ..self.limiti_kernel.clone()\n            };\n\n            let (uscita, effetti) = esegui_kernel(passo, &ingressi, &limiti_kernel, contratto)\n                .map_err(|errore| diagnostica_nella_base(errore, passo))\n                .and_then(|(uscita, effetti)| {\n                    validate_batch(&uscita, &self.limiti_kernel)?;\n                    let righe_out = righe(&uscita)?;\n                    // Come a `190c493` (`blocking.rs`), l'arco d'uscita del\n                    // piano ha solo `max_output_rows`, controllato alla fine.\n                    if !self.outputs.contains(&passo.out) {\n                        check_edge_counts(&self.limiti, righe_out)?;\n                    }\n                    check_expansion(passo, &self.limiti, &righe_in, righe_out)?;\n                    conforma(&uscita, contratto).map(|uscita| (uscita, effetti))\n                })\n                .map_err(nel)?;\n            let righe_out = righe(&uscita)?;\n\n            let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;\n            let byte_output_esclusivi = con_uscita.checked_sub(residenti).ok_or_else(|| {\n                PlenoraError::Internal(\"byte vivi diminuiti aggiungendo una tabella\".to_owned())\n            })?;\n            if con_uscita > budget {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\"\n                ))));\n            }\n            vivi.insert(passo.out.clone(), uscita);\n\n            let liberati: Vec<String> = ultimo_uso\n                .iter()\n                .filter(|(_, ultimo)| **ultimo == indice)\n                .map(|(nome, _)| (*nome).to_owned())\n                .collect();\n            for nome in &liberati {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                vivi.remove(nome);\n            }\n            passi.push(ReportPasso {\n                effetti_localizzati: passo.effetti_localizzati.clone(),\n                out: passo.out.clone(),\n                op,\n                righe_in,\n                righe_out,\n                byte_previsti,\n                margine_kernel: margine,\n                byte_output_esclusivi,\n                byte_vivi_con_uscita: con_uscita,\n                liberati,\n                byte_vivi: byte_vivi(vivi.values())?,\n                righe_divisione_per_zero: effetti.righe_divisione_per_zero,\n            });\n        }"
+    "source": "for (indice, passo) in self.passi.iter().enumerate() {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let op = passo.descrittore.id;\n            #[cfg(feature = \"sonde-di-prova\")]\n            if indice > 0 {\n                crate::sonda::chiama(crate::sonda::Punto::FraPassi, interruzione)?;\n            }\n            interruzione.verifica(&format!(\"prima del passo `{}` ({op})\", passo.out))?;\n            let nel = |errore: PlenoraError| nel_passo(&passo.out, errore);\n            let ingressi: Vec<&RecordBatch> = passo\n                .inputs\n                .iter()\n                .map(|sorgente| {\n                    vivi.get(sorgente).ok_or_else(|| {\n                        PlenoraError::Internal(format!(\n                            \"`{sorgente}` non residente al passo che lo usa\"\n                        ))\n                    })\n                })\n                .collect::<Result<_>>()?;\n            let righe_in: Vec<u64> = ingressi.iter().map(|t| righe(t)).collect::<Result<_>>()?;\n            let contratto = self.contratti.get(&passo.out).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"contratto di `{}` assente\", passo.out))\n            })?;\n\n            // Prima di eseguire: byte vivi delle residenti piu' il picco\n            // previsto nel budget, o il passo si rifiuta senza girare.\n            let residenti = byte_vivi(vivi.values()).map_err(nel)?;\n            let byte_previsti = passo.costo.in_memoria.picco(ingresso_del_passo(\n                passo,\n                &righe_in,\n                byte_ingresso(&ingressi).map_err(nel)?,\n            ));\n            if residenti\n                .checked_add(byte_previsti)\n                .is_none_or(|totale| totale > budget)\n            {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\"\n                ))));\n            }\n            // Al kernel tutto il margine: i suoi preflight usano lo spazio\n            // che c'e'.\n            let margine = budget - residenti;\n            let limiti_kernel = plenora_kernels_table::Limits {\n                max_governed_memory_bytes: usize::try_from(margine).unwrap_or(usize::MAX),\n                ..self.limiti_kernel.clone()\n            };\n\n            let (uscita, effetti) =\n                esegui_kernel(passo, &ingressi, &limiti_kernel, contratto, interruzione)\n                    .map_err(|errore| diagnostica_nella_base(errore, passo))\n                    .and_then(|(uscita, effetti)| {\n                        validate_batch(&uscita, &self.limiti_kernel, interruzione)?;\n                        let righe_out = righe(&uscita)?;\n                        // Come a `190c493` (`blocking.rs`), l'arco d'uscita del\n                        // piano ha solo `max_output_rows`, controllato alla fine.\n                        if !self.outputs.contains(&passo.out) {\n                            check_edge_counts(&self.limiti, righe_out)?;\n                        }\n                        check_expansion(passo, &self.limiti, &righe_in, righe_out)?;\n                        conforma(&uscita, contratto).map(|uscita| (uscita, effetti))\n                    })\n                    .map_err(nel)?;\n            let righe_out = righe(&uscita)?;\n\n            let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;\n            let byte_output_esclusivi = con_uscita.checked_sub(residenti).ok_or_else(|| {\n                PlenoraError::Internal(\"byte vivi diminuiti aggiungendo una tabella\".to_owned())\n            })?;\n            if con_uscita > budget {\n                return Err(nel(PlenoraError::ResourceLimit(format!(\n                    \"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\"\n                ))));\n            }\n            vivi.insert(passo.out.clone(), uscita);\n\n            let liberati: Vec<String> = ultimo_uso\n                .iter()\n                .filter(|(_, ultimo)| **ultimo == indice)\n                .map(|(nome, _)| (*nome).to_owned())\n                .collect();\n            for nome in &liberati {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                vivi.remove(nome);\n            }\n            passi.push(ReportPasso {\n                effetti_localizzati: passo.effetti_localizzati.clone(),\n                out: passo.out.clone(),\n                op,\n                righe_in,\n                righe_out,\n                byte_previsti,\n                margine_kernel: margine,\n                byte_output_esclusivi,\n                byte_vivi_con_uscita: con_uscita,\n                liberati,\n                byte_vivi: byte_vivi(vivi.values())?,\n                righe_divisione_per_zero: effetti.righe_divisione_per_zero,\n            });\n        }"
   },
   {
     "body": null,
@@ -31997,7 +32011,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 655,
+    "line": 665,
     "path": "format",
     "source": null,
     "tokens": "\"prima del passo `{}` ({op})\" , passo . out"
@@ -32011,7 +32025,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 667,
+    "line": 677,
     "source": null
   },
   {
@@ -32023,7 +32037,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 660,
+    "line": 670,
     "source": null
   },
   {
@@ -32035,7 +32049,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 662,
+    "line": 672,
     "path": "format",
     "source": null,
     "tokens": "\"`{sorgente}` non residente al passo che lo usa\""
@@ -32049,7 +32063,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 668,
+    "line": 678,
     "source": null
   },
   {
@@ -32061,7 +32075,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 668,
+    "line": 678,
     "source": null
   },
   {
@@ -32073,7 +32087,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 670,
+    "line": 680,
     "path": "format",
     "source": null,
     "tokens": "\"contratto di `{}` assente\" , passo . out"
@@ -32087,10 +32101,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 685,
+    "line": 695,
     "path": "format",
     "source": null,
-    "tokens": "\"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\r\n                     oltre il budget {budget} (max_governed_memory_bytes)\""
+    "tokens": "\"{op}: previsti {byte_previsti} byte oltre i {residenti} residenti, \\\n                     oltre il budget {budget} (max_governed_memory_bytes)\""
   },
   {
     "body": null,
@@ -32101,19 +32115,19 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 695,
+    "line": 705,
     "source": null
   },
   {
     "body": null,
-    "column": 49,
+    "column": 53,
     "constant": false,
     "counter": null,
     "entry_checkpoint": null,
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 709,
+    "line": 720,
     "source": null
   },
   {
@@ -32125,10 +32139,10 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 719,
+    "line": 730,
     "path": "format",
     "source": null,
-    "tokens": "\"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\r\n                     (max_governed_memory_bytes)\""
+    "tokens": "\"{op}: byte vivi con l'output {con_uscita} oltre il budget {budget} \\\n                     (max_governed_memory_bytes)\""
   },
   {
     "body": null,
@@ -32139,7 +32153,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 724,
+    "line": 735,
     "source": null
   },
   {
@@ -32151,7 +32165,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:collect",
-    "line": 730,
+    "line": 741,
     "source": null
   },
   {
@@ -32163,7 +32177,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:map",
-    "line": 729,
+    "line": 740,
     "source": null
   },
   {
@@ -32175,13 +32189,13 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:filter",
-    "line": 728,
+    "line": 739,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      731,
+      742,
       35
     ],
     "column": 12,
@@ -32191,7 +32205,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 731,
+    "line": 742,
     "literal_iteration_bound": null,
     "source": "for nome in &liberati {\n                interruzione.verifica(\"esecuzione pipeline\")?;\n                vivi.remove(nome);\n            }"
   },
@@ -32204,7 +32218,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 736,
+    "line": 747,
     "source": null
   },
   {
@@ -32216,7 +32230,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 737,
+    "line": 748,
     "source": null
   },
   {
@@ -32228,15 +32242,15 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 754,
+    "line": 765,
     "path": "format",
     "source": null,
-    "tokens": "\"output: byte vivi finali {finali} oltre il budget {budget} \\\r\n                 (max_governed_memory_bytes)\""
+    "tokens": "\"output: byte vivi finali {finali} oltre il budget {budget} \\\n                 (max_governed_memory_bytes)\""
   },
   {
     "array_iteration_bound": null,
     "body": [
-      760,
+      771,
       35
     ],
     "column": 8,
@@ -32246,7 +32260,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "for",
-    "line": 760,
+    "line": 771,
     "literal_iteration_bound": null,
     "source": "for nome in &self.outputs {\n            interruzione.verifica(\"esecuzione pipeline\")?;\n            let tabella = vivi.remove(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"output `{nome}` non residente a fine piano\"))\n            })?;\n            let righe_output = righe(&tabella)?;\n            if righe_output > self.limiti.rows.max_output_rows {\n                return Err(PlenoraError::ResourceLimit(format!(\n                    \"output `{nome}`: {righe_output} righe oltre max_output_rows {}\",\n                    self.limiti.rows.max_output_rows\n                )));\n            }\n            // Lo schema pubblicato (versione e identità dei campi), deciso\n            // in validazione: stesse colonne, solo metadati in più.\n            let pubblicato = self.schemi_uscita.get(nome).ok_or_else(|| {\n                PlenoraError::Internal(format!(\"schema pubblicato dell'output `{nome}` assente\"))\n            })?;\n            let tabella = plenora_core::batch_with_rows(\n                pubblicato.clone(),\n                tabella.columns().to_vec(),\n                tabella.num_rows(),\n            )\n            .map_err(|_| {\n                PlenoraError::Internal(format!(\n                    \"output `{nome}`: la tabella non rispetta lo schema pubblicato\"\n                ))\n            })?;\n            outputs.push((nome.clone(), tabella));\n        }"
   },
@@ -32259,7 +32273,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 763,
+    "line": 774,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}` non residente a fine piano\""
@@ -32273,7 +32287,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 767,
+    "line": 778,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}`: {righe_output} righe oltre max_output_rows {}\" , self . limiti . rows . max_output_rows"
@@ -32287,7 +32301,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 775,
+    "line": 786,
     "path": "format",
     "source": null,
     "tokens": "\"schema pubblicato dell'output `{nome}` assente\""
@@ -32301,7 +32315,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 778,
+    "line": 789,
     "source": null
   },
   {
@@ -32313,7 +32327,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:to_vec",
-    "line": 779,
+    "line": 790,
     "source": null
   },
   {
@@ -32325,7 +32339,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "macro",
-    "line": 783,
+    "line": 794,
     "path": "format",
     "source": null,
     "tokens": "\"output `{nome}`: la tabella non rispetta lo schema pubblicato\""
@@ -32339,7 +32353,7 @@
     "file": "crates/plenora-pipeline/src/esecuzione.rs",
     "function": "run_interrompibile",
     "kind": "method:clone",
-    "line": 787,
+    "line": 798,
     "source": null
   },
   {
