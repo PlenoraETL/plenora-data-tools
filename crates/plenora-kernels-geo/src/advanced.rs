@@ -199,6 +199,65 @@ impl VoronoiCells {
             .map(|cell| Geometry::Polygon(cell.clone()))
             .collect()
     }
+
+    /// Materializza l'uscita 1:1 con un unico budget per tutte le copie.
+    ///
+    /// `RelateLimits` governa passi, coordinate copiate (`max_nodes`) e
+    /// capacita' vive, comprese le sovrapposizioni durante la crescita.
+    /// L'ingresso condiviso e' preso in prestito: questo limite riguarda
+    /// soltanto l'adapter, non la precedente costruzione delle celle.
+    /// Nessuna serializzazione viene eseguita. Come per `RelateLimits`,
+    /// il conteggio delle prenotazioni non e' una misura di RSS.
+    /// GOP-028: deadline prima del token, anche su uscita vuota e prima
+    /// della consegna. Un errore scarta tutte le copie, senza uscita parziale.
+    ///
+    /// # Errors
+    /// Limite di passi, coordinate o prenotazioni, allocazione fallita,
+    /// cancellazione o deadline, come `PredicateError`.
+    pub fn materialize_with_limits(
+        &self,
+        limits: crate::predicates::RelateLimits,
+        cancelled: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Vec<Geometry<f64>>, crate::predicates::PredicateError> {
+        self.materialize_in(&mut crate::noding::Work::new(limits, cancelled))
+    }
+
+    fn materialize_in(
+        &self,
+        work: &mut crate::noding::Work<'_>,
+    ) -> Result<Vec<Geometry<f64>>, crate::predicates::PredicateError> {
+        use crate::noding::CountedVec;
+
+        fn copy_ring(
+            ring: &LineString<f64>,
+            work: &mut crate::noding::Work<'_>,
+        ) -> Result<LineString<f64>, crate::predicates::PredicateError> {
+            let mut coordinates = CountedVec::new();
+            for &coordinate in &ring.0 {
+                work.nodes(1)?;
+                work.push(&mut coordinates, coordinate)?;
+            }
+            Ok(LineString::new(coordinates.export(work)?))
+        }
+
+        work.step()?;
+        let mut output = CountedVec::new();
+        for cell in self.per_input() {
+            work.step()?;
+            let exterior = copy_ring(cell.exterior(), work)?;
+            let mut interiors = CountedVec::new();
+            for ring in cell.interiors() {
+                work.step()?;
+                let copied = copy_ring(ring, work)?;
+                work.push(&mut interiors, copied)?;
+            }
+            let polygon = Polygon::new(exterior, interiors.export(work)?);
+            work.push(&mut output, Geometry::Polygon(polygon))?;
+        }
+        let output = output.export(work)?;
+        work.step()?;
+        Ok(output)
+    }
 }
 
 /// Costruisce una sola copia di ogni cella con l'indice per ciascun input.
@@ -233,6 +292,11 @@ pub fn voronoi_cells_distinct(
 /// possa far girare la stessa pipeline con `voronoi_cells` di `geo`
 /// (inserimento incrementale).
 type Costruzione = fn(&[Point<f64>], Precision) -> Result<Vec<Polygon<f64>>, AdvancedError>;
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+#[path = "advanced/materialization_tests.rs"]
+mod materialization_tests;
 
 fn voronoi_cells_con<T>(
     geometries: &[Geometry<f64>],

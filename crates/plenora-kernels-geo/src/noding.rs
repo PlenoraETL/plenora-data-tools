@@ -1091,6 +1091,28 @@ mod gop028 {
     fn cases() -> Vec<Case> {
         vec![
             case!(
+                "advanced.rs",
+                materialize_with_limits,
+                |f, d, t| {
+                    let inputs: Vec<_> = f
+                        .polygon
+                        .exterior()
+                        .0
+                        .iter()
+                        .copied()
+                        .map(|p| Geometry::Point(Point(p)))
+                        .collect();
+                    let cells = crate::advanced::voronoi_cells_distinct(
+                        &inputs,
+                        5,
+                        crate::rust_backend::precision::Precision::new(0.01).unwrap(),
+                    )
+                    .unwrap();
+                    cells.materialize_with_limits(limits(d), Some(t))
+                },
+                PredicateError::DeadlineExceeded
+            ),
+            case!(
                 "geodesic_buffer.rs",
                 geodesic_empty_buffer_with_limits,
                 |f, d, t| crate::geodesic_buffer::geodesic_empty_buffer_with_limits(

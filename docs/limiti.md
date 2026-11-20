@@ -1086,7 +1086,7 @@ punti casuali UTM al centimetro; prima -> dopo): `delaunay` 10k 27,5 ->
 28 ms, 100k 1.221 -> 253 ms, 1M 86,5 -> 3,9 s (a 1M il prima è una sola
 esecuzione; `examples/bench_delaunay_voronoi.rs`).
 
-La preparazione 6.2.0 conserva esattamente ordine e bit della baseline
+La preparazione 7.0.0 conserva esattamente ordine e bit della baseline
 6.1.0, anche sui cocircolari: terne di ranghi per le facce Delaunay,
 riuso degli indici della deduplicazione e rilascio anticipato degli
 intermedi. `advanced::voronoi_cells_distinct` restituisce le celle una
@@ -1094,7 +1094,17 @@ sola volta e un indice per input; `per_input` le visita senza clonarle,
 `materialize` ricostruisce l'uscita 1:1. L'adapter e la serializzazione
 materializzata restano proporzionali alle celle ripetute.
 
-Questi percorsi non offrono ancora un budget globale di memoria o
+`VoronoiCells::materialize_with_limits` governa soltanto questa copia 1:1:
+un unico `noding::Work` con `RelateLimits` per passi, coordinate copiate
+(`max_nodes`) e capacita' vive, incluse le ricevute dei buffer esportati e
+la sovrapposizione durante realloc. Un checkpoint per coordinata e prima
+della consegna osserva deadline prima del token (GOP-028). I default sono
+100 milioni di passi, 10 milioni di coordinate e 256 MiB di prenotazioni.
+Le celle prese in prestito sono escluse, cosi' come la costruzione gia'
+terminata e la serializzazione successiva. Fallimento atomico, nessuna
+uscita parziale. I bit, gli anelli e l'ordine della copia sono invariati.
+
+I percorsi di costruzione non offrono ancora un budget globale di memoria o
 checkpoint cooperativi: il caricamento Spade, il ritaglio e la validazione
 hanno temporanei interni non governati. Le prove dell'heap misurano il
 picco richiesto all'allocatore, non un tetto di ammissione n? RSS. Non ?

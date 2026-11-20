@@ -1487,6 +1487,10 @@
     "crates/plenora-kernels-geo/src/extended_algorithms/compatibility_600.rs": [
       "published_split_matches_literal_600_on_sourced_corpus"
     ],
+    "crates/plenora-kernels-geo/src/extended_algorithms/compatibility_620.rs": [
+      "all_bits_and_order",
+      "degenerate_and_extreme_bits"
+    ],
     "crates/plenora-kernels-geo/src/extended_algorithms/polygonize_limited/tests.rs": [
       "rectangular_grids_have_exact_faces",
       "nested_rings_holes_overlaps_and_dangles",
@@ -2207,6 +2211,12 @@
       "validated_variants_document_the_caller_precondition",
       "boolean_area_identities_hold_for_generated_rectangles"
     ],
+    "crates/plenora-kernels-geo/src/triangolazione/tests.rs": [
+      "dedup_preserves_total_order",
+      "zero_bits_through_collinear_transition",
+      "voronoi_baseline_bits_and_errors",
+      "distinct_cells_scale_with_sites_not_input_copies"
+    ],
     "crates/plenora-kernels-geo/src/trim_extend/tests.rs": [
       "resource_prefixes_never_publish_a_partial_trim",
       "left_half_plane_and_internal_vertex",
@@ -2459,6 +2469,9 @@
       "simplify_tolleranza_zero_non_calcola_distanze",
       "simplify_componente_minuscola_normalizzata_resta_ammessa",
       "simplify_ordinario_conserva_oracolo_geo_e_spareggi"
+    ],
+    "crates/plenora-kernels-geo/tests/triangolazioni_heap.rs": [
+      "duplicate_circle_heap_curve"
     ],
     "crates/plenora-kernels-geo/tests/wkt_testo_in_coda.rs": [
       "il_testo_dopo_la_geometria_e_rifiutato",

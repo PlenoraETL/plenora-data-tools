@@ -10,12 +10,16 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [6.2.0] - non rilasciata
+## [7.0.0] - non rilasciata
 
 ### Aggiunte
 
 - API Rust `voronoi_cells_distinct`: celle condivise con indice per input,
   visita senza copie e adapter per materializzare l'uscita 1:1.
+- Adapter `VoronoiCells::materialize_with_limits`: copie 1:1 con budget
+  cumulativo di lavoro, coordinate e capacita', e checkpoint GOP-028.
+  Il limite copre la materializzazione da celle gia' costruite, non la
+  triangolazione, il clipping o la serializzazione.
 
 ### Ottimizzazioni
 
