@@ -38,7 +38,8 @@ log.workspace = true
 tracking-allocator = { version = "=0.4.0", default-features = false }
 # Censimento O-M3 dei cicli sul vero AST Rust, inclusi i corpi degli iteratori;
 # evita una scansione regex che confonda macro, commenti e blocchi annidati.
-syn = { version = "=2.0.119", features = ["full", "visit"] }
+# Versione esatta allineata alla famiglia (database-tools).
+syn = { version = "=3.0.6", features = ["full", "visit"] }
 # Posizioni dei nodi AST per collegare ogni ciclo al sorgente verificato.
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 
