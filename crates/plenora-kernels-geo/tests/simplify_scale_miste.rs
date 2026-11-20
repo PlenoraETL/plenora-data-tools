@@ -10,23 +10,29 @@ fn linee_a_scale_diverse() -> Geometry<f64> {
     ]))
 }
 
-fn rifiuto_numerico(geometry: &Geometry<f64>, tolerance: f64, vertici: u64) {
+fn linee_semplificate() -> Geometry<f64> {
+    Geometry::MultiLineString(MultiLineString(vec![
+        LineString::from(vec![(0.0, 0.0), (1e-200, 0.0)]),
+        LineString::from(vec![(1.0, 1.0), (2.0, 2.0)]),
+    ]))
+}
+
+fn esito_esatto(geometry: &Geometry<f64>, tolerance: f64, vertici: u64, expected: &Geometry<f64>) {
     // Il contatore pubblico esegue ensure_valid prima di contare.
     assert_eq!(
         (operations::vertex_count(geometry)).expect("successo atteso"),
         vertici
     );
-    assert!(matches!(
-        operations::simplify(geometry, tolerance),
-        Err(operations::OperationError::Internal(
-            "semplificazione: distanza non rappresentabile"
-        ))
-    ));
+    assert_eq!(
+        &operations::simplify(geometry, tolerance).expect("selezione razionale"),
+        expected
+    );
 }
 
 #[test]
 fn simplify_segmento_subnormale_con_coordinate_finite() {
-    rifiuto_numerico(&linee_a_scale_diverse(), 1e-220, 5);
+    let geometry = linee_a_scale_diverse();
+    esito_esatto(&geometry, 1e-220, 5, &geometry);
 }
 
 #[test]
@@ -72,22 +78,27 @@ fn simplify_poligoni_a_scale_diverse_con_coordinate_finite() {
             vec![],
         ),
     ]));
-    rifiuto_numerico(&geometry, 1e-220, 9);
+    esito_esatto(&geometry, 1e-220, 9, &geometry);
 }
 
 #[test]
 fn simplify_wkt_finito_attraversa_parser_e_validazione() {
     let geometry = geometry_from_wkt("MULTILINESTRING((0 0,0 1e-200,1e-200 0),(1 1,2 2))").unwrap();
-    rifiuto_numerico(&geometry, 1.0, 5);
+    let expected = linee_semplificate();
+    esito_esatto(&geometry, 1.0, 5, &expected);
 }
 
 #[test]
-fn simplify_collezione_non_restituisce_componenti_parziali() {
+fn simplify_collezione_conserva_tutte_le_componenti() {
     let geometry = Geometry::GeometryCollection(GeometryCollection(vec![
         Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)])),
         linee_a_scale_diverse(),
     ]));
-    rifiuto_numerico(&geometry, 0.1, 7);
+    let expected = Geometry::GeometryCollection(GeometryCollection(vec![
+        Geometry::LineString(LineString::from(vec![(0.0, 0.0), (1.0, 1.0)])),
+        linee_semplificate(),
+    ]));
+    esito_esatto(&geometry, 0.1, 7, &expected);
 }
 
 #[test]

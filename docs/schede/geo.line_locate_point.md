@@ -85,13 +85,13 @@ voce «Geo senza diagnostica per riga»).
 
 ### Precisione
 
-Nessun controllo dedicato: distanze e frazione sono calcolate in `f64` da
-`geo` (distanza dai segmenti, proiezione sul segmento più vicino, lunghezze
-cumulate), con errori d'arrotondamento relativi alla lunghezza della linea,
-molto sotto 1 cm per le lunghezze dei CRS reali. Dove due segmenti sono alla
-stessa distanza dal punto entro l'arrotondamento, la scelta fra i due, e
-con essa la frazione, può cambiare con l'ultimo bit delle coordinate
-([Limiti dichiarati, «Precisione delle operazioni geografiche: 1 cm a terra»](limiti.md#precisione-delle-operazioni-geografiche-1-cm-a-terra)).
+Il segmento piu' vicino e la proiezione sono selezionati con confronti
+razionali esatti. A parita' esatta vince il primo segmento della linea.
+Le lunghezze dei segmenti sono arrotondate in f64 e cumulate; numeratore
+e rapporto finale della frazione sono calcolati in Q su questi valori,
+cosi' un prodotto intermedio subnormale non si annulla. Una frazione
+positiva non pubblicabile, un overflow del cumulo o un calcolo non
+certificabile danno `Execution`; il bilancio esaurito da' `ResourceLimit`.
 
 ### Complessità
 

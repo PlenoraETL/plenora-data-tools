@@ -1,6 +1,6 @@
 //! Noding razionale comune: inviluppi esatti, coppie candidate e nodi.
 //!
-//! Sweep sugli estremi X ordinati: il filtro inclusivo X/Y non perde
+//! Indice sugli inviluppi, in ordine X: il filtro inclusivo X/Y non perde
 //! contatti e non converte mai un razionale in floating point.
 #![allow(clippy::many_single_char_names, clippy::float_cmp)]
 
@@ -328,13 +328,6 @@ impl Q {
             other
         })
     }
-    fn max_ref<'a>(&'a self, other: &'a Self) -> Result<&'a Self, PredicateError> {
-        Ok(if self.try_cmp(other)?.is_ge() {
-            self
-        } else {
-            other
-        })
-    }
 }
 
 // Heapsort in place: ogni confronto ha un checkpoint, senza scratch heap.
@@ -387,34 +380,17 @@ pub fn visit(
         index.swap(0, end);
         sift(&mut index[..end], 0, edges, work)?;
     }
+    let segments =
+        crate::segment_index::SegmentIndex::edges(index.iter().map(|&i| edges[i]), work)?;
     for (position, &i) in index.iter().enumerate() {
-        let a = edges[i];
-        for &j in &index[position + 1..] {
+        for next in segments.candidates(segments.at(position), work)? {
             work.step()?;
-            let b = edges[j];
-            if b.a
-                .x
-                .min_ref(&b.b.x)?
-                .try_cmp(a.a.x.max_ref(&a.b.x)?)?
-                .is_gt()
-            {
-                break;
-            }
-            if b.a
-                .y
-                .min_ref(&b.b.y)?
-                .try_cmp(a.a.y.max_ref(&a.b.y)?)?
-                .is_gt()
-                || b.a
-                    .y
-                    .max_ref(&b.b.y)?
-                    .try_cmp(a.a.y.min_ref(&a.b.y)?)?
-                    .is_lt()
-            {
+            if next <= position {
                 continue;
             }
+            let j = index[next];
             work.pair()?;
-            let hits = intersections(a, b, work)?;
+            let hits = intersections(edges[i], edges[j], work)?;
             emit(i, j, hits, work)?;
         }
     }

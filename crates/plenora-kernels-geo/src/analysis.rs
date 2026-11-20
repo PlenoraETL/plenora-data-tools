@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::margine::{MargineMemoria, TettoRisultati};
 use crate::ValidazioneProtetta as _;
-use geo::algorithm::line_measures::{Distance, Euclidean};
 use geo::{BoundingRect, CoordsIter, Geometry, LineString, Polygon};
 use rayon::prelude::*;
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
@@ -29,8 +28,7 @@ pub struct NearestMatch {
     pub left: u64,
     /// Posizione della riga destra.
     pub right: u64,
-    /// La distanza planare, `Euclidean.distance` di `geo`, nelle unita' del
-    /// CRS.
+    /// Distanza planare correttamente arrotondata, nelle unita' del CRS.
     pub distance: f64,
 }
 
@@ -38,6 +36,9 @@ pub struct NearestMatch {
 /// delle geometrie.
 #[derive(Debug, Error)]
 pub enum AnalysisError {
+    /// Errore del percorso razionale: categoria e limiti preservati.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// Un errore del join spaziale su cui poggiano [`within_indexes`] e
     /// [`count_points_in_polygons`], invariato.
     #[error(transparent)]
@@ -89,11 +90,11 @@ pub enum AnalysisError {
     CalcoloNonConcluso(&'static str),
 }
 
-/// `Euclidean.distance` di `geo` dietro la barriera dei panici: la sola
-/// chiamata a `geo` sta nella barriera.
+/// Distanza razionale con indice dei segmenti e arrotondamento certificato.
 fn distanza_protetta(left: &Geometry<f64>, right: &Geometry<f64>) -> Result<f64, AnalysisError> {
-    crate::calcolo_protetto(|| Euclidean.distance(left, right))
-        .map_err(AnalysisError::CalcoloNonConcluso)
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    crate::predicates::arrangement_indexed::distance(left, right, &mut work)
+        .map_err(AnalysisError::Exact)
 }
 
 fn validate_geometries(
@@ -215,13 +216,22 @@ fn minimum_distances_impl(
             if geometry.coords_count() == 0 || usable_right.is_empty() {
                 return Ok(None);
             }
-            // Stesso ordine e stessa riduzione di `reduce(f64::min)`.
-            let mut minimo: Option<f64> = None;
+            let mut work =
+                crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+            let mut minimum: Option<crate::segment_index::DistanceKey> = None;
             for right in &usable_right {
-                let distanza = distanza_protetta(geometry, right)?;
-                minimo = Some(minimo.map_or(distanza, |attuale| attuale.min(distanza)));
+                let candidate = crate::predicates::arrangement_indexed::distance_key(
+                    geometry, right, &mut work, true,
+                )?;
+                if let Some(current) = &mut minimum {
+                    current.select(candidate)?;
+                } else {
+                    minimum = Some(candidate);
+                }
             }
-            Ok(minimo)
+            minimum
+                .map(|key| key.rounded(&mut work).map_err(AnalysisError::Exact))
+                .transpose()
         })
         .collect();
     per_riga.into_iter().collect()
@@ -235,10 +245,9 @@ fn minimum_distances_impl(
 /// `sjoin_nearest` di `GeoPandas`. Una riga sinistra nulla o vuota, senza
 /// destre utilizzabili o con il minimo oltre `max_distance` (se dato) non
 /// emette nulla. Gli abbinamenti sono in ordine `(sinistra, destra)`
-/// crescente. La distanza e' `Euclidean.distance` di `geo`, la stessa
-/// della forza bruta: un R-tree sceglie i candidati senza cambiare il
-/// risultato (docs/limiti.md, «`geo.nearest`: lo scarto dell'R-tree si appoggia
-/// alla stima d'errore di `geo`»).
+/// crescente. Minimi e pari sono geometrici esatti; soltanto la distanza
+/// pubblicata viene arrotondata al binary64 piu' vicino, meta' al pari.
+/// I candidati sono scelti da filtri conservativi e dall'indice razionale.
 ///
 /// # Errors
 ///
@@ -387,11 +396,11 @@ fn nearest_matches_impl(
 
     let indice = IndiceVicini::nuovo(&usable_right);
     let result_count = AtomicU64::new(0);
-    // Determinismo: i `Result` sono raccolti per riga (ordine preservato) e
-    // il primo errore IN ORDINE DI RIGA e' selezionato dal collect
-    // sequenziale; il collect parallelo diretto sarebbe non deterministico.
+    // La quota e' assegnata in ordine di riga: decide se eseguire il secondo
+    // giro, che puo' esaurire il Work cumulativo. Una gara fra thread potrebbe
+    // quindi nascondere o esporre un errore di lavoro a parita' di input.
     let groups: Vec<Result<Vec<NearestMatch>, AnalysisError>> = left
-        .par_iter()
+        .iter()
         .enumerate()
         .map(|(left_index, geometry)| {
             let Some(geometry) = geometry.as_ref().filter(|value| value.coords_count() > 0) else {
@@ -401,34 +410,42 @@ fn nearest_matches_impl(
             // distanza minima (vedi `IndiceVicini`), visitati senza
             // raccoglierli. La distanza di ogni candidato e' la stessa
             // chiamata della forza bruta, quindi minimo, pari e valori sono
-            // gli stessi bit. Primo giro: il minimo (`f64::min` come
-            // `reduce`) e quanti candidati lo eguagliano, senza allocare;
+            // gli stessi bit. Primo giro: minimo razionale e numero di
+            // candidati esattamente pari, senza raccoglierli;
             // il tetto conta i pari prima di raccoglierli; secondo giro (solo
             // con piu' di un pari): i pari, a capacita' esatta.
-            let mut minimo: Option<f64> = None;
+            let mut work =
+                crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+            let mut minimo: Option<crate::segment_index::DistanceKey> = None;
             let mut pari = 0_usize;
-            let mut unico: Option<(usize, f64)> = None;
+            let mut unico: Option<usize> = None;
             indice.visita_candidati(geometry, &usable_right, |posizione| {
                 let (right_index, right) = usable_right[posizione];
-                let distanza = distanza_protetta(geometry, right)?;
-                let nuovo = minimo.map_or(distanza, |attuale| attuale.min(distanza));
-                // Uguaglianze esatte: confronti fra gli stessi valori.
-                #[allow(clippy::float_cmp)]
-                if minimo.is_none_or(|attuale| nuovo < attuale || attuale.is_nan()) {
-                    minimo = Some(nuovo);
-                    pari = usize::from(distanza == nuovo);
-                    unico = (distanza == nuovo).then_some((right_index, distanza));
-                } else if distanza == nuovo {
+                let candidate = crate::predicates::arrangement_indexed::distance_key(
+                    geometry, right, &mut work, true,
+                )?;
+                let order = match &minimo {
+                    Some(old) => candidate.compare(old)?,
+                    None => std::cmp::Ordering::Less,
+                };
+                if order.is_lt() {
+                    minimo = Some(candidate);
+                    pari = 1;
+                    unico = Some(right_index);
+                } else if order.is_eq() {
                     pari += 1;
                 }
                 Ok(())
             })?;
-            let Some(minimum) = minimo else {
+            let Some(minimum_key) = minimo else {
                 return Ok(Vec::new());
             };
-            if max_distance.is_some_and(|limit| minimum > limit) {
-                return Ok(Vec::new());
+            if let Some(limit) = max_distance {
+                if !minimum_key.within(limit, &work)? {
+                    return Ok(Vec::new());
+                }
             }
+            let minimum = minimum_key.rounded(&mut work)?;
             let additional = u64::try_from(pari).map_err(|_| AnalysisError::IndexOverflow)?;
             result_count
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -449,15 +466,16 @@ fn nearest_matches_impl(
                     distance,
                 })
             };
-            if let (1, Some((right_index, distance))) = (pari, unico) {
-                trovati.push(a_match(right_index, distance)?);
+            if let (1, Some(right_index)) = (pari, unico) {
+                trovati.push(a_match(right_index, minimum)?);
             } else {
                 indice.visita_candidati(geometry, &usable_right, |posizione| {
                     let (right_index, right) = usable_right[posizione];
-                    let distanza = distanza_protetta(geometry, right)?;
-                    #[allow(clippy::float_cmp)]
-                    if distanza == minimum && trovati.len() < pari {
-                        trovati.push(a_match(right_index, distanza)?);
+                    let candidate = crate::predicates::arrangement_indexed::distance_key(
+                        geometry, right, &mut work, true,
+                    )?;
+                    if candidate.compare(&minimum_key)?.is_eq() && trovati.len() < pari {
+                        trovati.push(a_match(right_index, minimum)?);
                     }
                     Ok(())
                 })?;
@@ -471,10 +489,9 @@ fn nearest_matches_impl(
             Ok(trovati)
         })
         .collect();
-    // Quale riga supera `max_results` dipende dall'ordine dei thread (il
-    // contatore e' condiviso), l'esistenza del superamento no: ogni altro
-    // errore vince quindi sul limite dei risultati, il primo in ordine di
-    // riga, e l'esito resta deterministico.
+    // Gli errori osservati prevalgono sul limite dei risultati, in ordine
+    // di riga. Dopo quota negata il secondo giro viene saltato sempre sulle
+    // stesse righe; anche gli errori osservati sono quindi deterministici.
     // Capacita' esatta: anche il risultato e' nel conto per abbinamento.
     let totale = groups
         .iter()
@@ -500,9 +517,8 @@ fn nearest_matches_impl(
     limite_superato.map_or(Ok(matches), Err)
 }
 
-/// Modulo minimo non nullo delle coordinate per cui vale la stima d'errore di
-/// [`IndiceVicini`]: `2^-400`. Sotto, prodotti di differenze possono andare
-/// in underflow e l'errore di `Euclidean.distance` non e' piu' relativo.
+/// Dominio conservativo del filtro esterno delle righe: sotto 2^-400
+/// si enumera senza pruning floating point. La distanza resta razionale.
 const MODULO_MINIMO: f64 = f64::from_bits((1023 - 400) << 52);
 /// Modulo massimo delle coordinate per la stessa stima: `2^400`, lontano
 /// dall'overflow dei quadrati.
@@ -533,35 +549,14 @@ impl PointDistance for InvolucroRight {
     }
 }
 
-/// Indice dei candidati di `geo.nearest`: per una geometria left restituisce
-/// un sovrainsieme delle righe right che possono stare alla distanza minima
-/// della forza bruta. Il risultato non cambia: minimo, pari e valori si
-/// calcolano poi con la stessa `Euclidean.distance` sui soli candidati.
-///
-/// # Perche' lo scarto e' esatto
-///
-/// Sia `d` la distanza calcolata di un candidato qualunque (il primo vicino
-/// del centro del rettangolo left), che entra sempre fra i candidati, e `S` il
-/// modulo massimo delle coordinate del left e dei right regolari. Si tengono
-/// i right il cui rettangolo interseca il rettangolo left allargato di
-/// `e = d + 2 * S * 2^-40`. Un right scartato ha un asse su cui la distanza
-/// esatta fra i rettangoli supera `d + S * 2^-40` (l'arrotondamento del bordo
-/// della finestra e' sotto `ulp(S)`), quindi anche la distanza vera fra le
-/// geometrie. Su geometrie regolari (vedi [`involucro_regolare`])
-/// `Euclidean.distance` di `geo` 0.33.1 restituisce o zero da un predicato
-/// d'intersezione esatto (i rettangoli allora si toccano e l'elemento non e'
-/// scartato), o il minimo di distanze punto-segmento e punto-punto calcolate,
-/// ciascuna sotto il valore vero di meno di `64 * eps * S` (differenze di
-/// coordinate, `hypot`, scelta del ramo di `line_segment_distance`,
-/// tolleranza parametrica di `line_string_contains_point`). La distanza
-/// calcolata di uno scartato supera dunque `d`, che non e' sotto il minimo
-/// dei candidati: nessuno scartato e' al minimo, ne' lo cambia.
-///
-/// Le geometrie fuori da quella stima non si scartano mai: i right irregolari
-/// sono candidati di ogni riga, un left irregolare prende tutti i right.
-/// Irregolare vuol dire una coordinata fuori da `{0} ∪ [2^-400, 2^400]` in
-/// modulo (anche NaN o infinita), o una parte vuota o degenere, su cui `geo`
-/// risponde zero o con tolleranze assolute (`point_contains_point` in `f32`).
+/// Filtro conservativo delle righe. Il vicino R-tree e' soltanto un seed
+/// arbitrario: i suoi quadrati floating point non selezionano il risultato.
+/// Su coordinate regolari di modulo <= S la distanza esatta e' <= 3S;
+/// l'arrotondamento corretto e' entro 4*EPSILON*S. L'espansione aggiunge
+/// 2*S*2^-40, che copre sia questo errore sia i bordi della finestra.
+/// Le coordinate fuori dal dominio regolare sono sempre candidate.
+/// Un seed non pubblicabile non interrompe la ricerca: visita tutte le righe.
+/// Minimo, soglia e pari sono decisi sulle chiavi razionali esatte.
 struct IndiceVicini {
     albero: RTree<InvolucroRight>,
     sempre: Vec<usize>,
@@ -627,7 +622,13 @@ impl IndiceVicini {
         let Some((_, destra)) = usable_right.get(primo.posizione) else {
             return tutti(&mut visita);
         };
-        let limite = distanza_protetta(geometria, destra)?;
+        let limite = match distanza_protetta(geometria, destra) {
+            Ok(value) => value,
+            Err(AnalysisError::Exact(crate::predicates::PredicateError::AccuracyUnproven)) => {
+                return tutti(&mut visita)
+            }
+            Err(error) => return Err(error),
+        };
         let margine = modulo_left.max(self.modulo_right) * MARGINE_RELATIVO;
         let espansione = limite + (margine + margine);
         if !espansione.is_finite() {
@@ -679,7 +680,13 @@ impl IndiceVicini {
         let Some((_, destra)) = usable_right.get(primo.posizione) else {
             return tutti();
         };
-        let limite = distanza_protetta(geometria, destra)?;
+        let limite = match distanza_protetta(geometria, destra) {
+            Ok(value) => value,
+            Err(AnalysisError::Exact(crate::predicates::PredicateError::AccuracyUnproven)) => {
+                return tutti()
+            }
+            Err(error) => return Err(error),
+        };
         let margine = modulo_left.max(self.modulo_right) * MARGINE_RELATIVO;
         let espansione = limite + (margine + margine);
         // NaN o infinito: nessuna stima, nessuno scarto.

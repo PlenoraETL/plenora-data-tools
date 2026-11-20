@@ -71,7 +71,7 @@ fn scarto_massimo(
             let immagine = Coord { x, y };
             let distanza = uscita
                 .lines()
-                .map(|l| distanza_dal_segmento(immagine, l.start, l.end))
+                .map(|l| distanza_dal_segmento(immagine, l.start, l.end).expect("distanza"))
                 .fold(f64::INFINITY, f64::min);
             massimo = massimo.max(distanza);
         }

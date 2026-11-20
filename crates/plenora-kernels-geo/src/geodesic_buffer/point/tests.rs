@@ -202,10 +202,14 @@ fn refinement_duplicates_and_distance_major() {
     let crs = resolve_crs("EPSG:4326", "crs").unwrap();
     let p = Point::new(10.0, 20.0);
     let inputs = [p.into(), MultiPoint::new(vec![p, p, p]).into()];
-    let a = geodesic_point_buffer_with_limits(&inputs, &crs, &[1.0, 2.0], 0.01, limits(), None)
-        .unwrap();
-    let b = geodesic_point_buffer_with_limits(&inputs, &crs, &[1.0, 2.0], 0.005, limits(), None)
-        .unwrap();
+    // Il batch raffinato include le visite dell'indice nelle due verifiche
+    // topologiche per disco; le soglie esatte sono provate separatamente.
+    let mut budget = limits();
+    budget.batch.max_work = 1_000_000_000;
+    let a =
+        geodesic_point_buffer_with_limits(&inputs, &crs, &[1.0, 2.0], 0.01, budget, None).unwrap();
+    let b =
+        geodesic_point_buffer_with_limits(&inputs, &crs, &[1.0, 2.0], 0.005, budget, None).unwrap();
     assert_eq!(a.disks.len(), 4);
     assert_eq!(a.disks[0].polygon, a.disks[1].polygon);
     assert_eq!(a.disks[2].polygon, a.disks[3].polygon);

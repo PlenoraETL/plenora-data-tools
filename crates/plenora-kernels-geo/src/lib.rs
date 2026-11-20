@@ -60,6 +60,7 @@ pub mod preserve_shape_measure;
 pub mod reshape;
 pub mod riproiezione;
 pub mod rust_backend;
+mod segment_index;
 pub mod spatial_join;
 #[deny(clippy::disallowed_methods)]
 #[cfg(test)]

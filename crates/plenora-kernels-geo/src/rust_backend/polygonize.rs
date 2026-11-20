@@ -124,6 +124,9 @@ impl PolygonizeResult {
 /// Errori del polygonize.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolygonizeError {
+    /// Errore del confronto razionale condiviso, senza perdita della categoria.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// L'ingresso non e' linework (`LineString`, `MultiLineString` o
     /// collezioni di linee). Il tipo della cella resta nel valore, non nel
     /// messaggio («errori senza dati»).
@@ -558,8 +561,13 @@ const NODING_PRECISION_SHARE: f64 = 0.2;
 /// si misura, per entrambi i segmenti, e che la precisione dichiarata
 /// limita, con il margine d'arrotondamento di
 /// [`super::precision::punto_entro_segmento`].
-fn noding_point_within(point: Coord<f64>, segment: Segment, budget: f64) -> bool {
+fn noding_point_within(
+    point: Coord<f64>,
+    segment: Segment,
+    budget: f64,
+) -> Result<bool, PolygonizeError> {
     super::precision::punto_entro_segmento(point, segment.start, segment.end, budget)
+        .map_err(PolygonizeError::Exact)
 }
 
 /// Double-double minimo per il noding. La sequenza delle operazioni segue
@@ -838,8 +846,8 @@ fn node_segments(
         let right = segments[right_index];
         match robust_line_intersection(left, right) {
             Some(LineIntersection::SinglePoint { intersection, .. }) => {
-                if !noding_point_within(intersection, left, displacement)
-                    || !noding_point_within(intersection, right, displacement)
+                if !noding_point_within(intersection, left, displacement)?
+                    || !noding_point_within(intersection, right, displacement)?
                 {
                     return Err(PolygonizeError::PrecisionInsufficient);
                 }
@@ -873,8 +881,8 @@ fn node_segments(
             }
             Some(LineIntersection::Collinear { intersection }) => {
                 for point in [intersection.start, intersection.end] {
-                    if !noding_point_within(point, left, displacement)
-                        || !noding_point_within(point, right, displacement)
+                    if !noding_point_within(point, left, displacement)?
+                        || !noding_point_within(point, right, displacement)?
                     {
                         return Err(PolygonizeError::PrecisionInsufficient);
                     }
@@ -1091,6 +1099,7 @@ fn outgoing_neighbors(
     active: &BTreeSet<EdgeKey>,
     coordinates: &BTreeMap<CoordKey, Coord<f64>>,
 ) -> Result<BTreeMap<CoordKey, Vec<CoordKey>>, PolygonizeError> {
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
     let mut output = BTreeMap::<CoordKey, Vec<CoordKey>>::new();
     for edge in active {
         output.entry(edge.0).or_default().push(edge.1);
@@ -1103,10 +1112,8 @@ fn outgoing_neighbors(
             .ok_or(PolygonizeError::InternalInvariant(
                 "coordinata del vertice del grafo assente",
             ))?;
-        let mut ordered = Vec::new();
-        ordered
-            .try_reserve_exact(neighbors.len())
-            .map_err(|_| PolygonizeError::AllocationFailed("vicini ordinati del grafo"))?;
+        let mut ordered = crate::noding::CountedVec::new();
+
         for neighbor in neighbors.iter().copied() {
             let coordinate =
                 coordinates
@@ -1115,28 +1122,34 @@ fn outgoing_neighbors(
                     .ok_or(PolygonizeError::InternalInvariant(
                         "coordinata del vicino del grafo assente",
                     ))?;
-            ordered.push((neighbor, coordinate));
+            let direction = crate::noding::P::of_in(coordinate, &work)?
+                .try_sub(&crate::noding::P::of_in(origin, &work)?)?;
+            let key = crate::segment_index::DistanceKey::coordinates(
+                coordinate, origin, origin, &mut work,
+            )?;
+            work.push(&mut ordered, (neighbor, coordinate, direction, key))?;
         }
-        ordered.sort_by(|left, right| {
-            let left_dx = left.1.x - origin.x;
-            let left_dy = left.1.y - origin.y;
-            let right_dx = right.1.x - origin.x;
-            let right_dy = right.1.y - origin.y;
-            let left_half = left_dy < 0.0 || (left_dy == 0.0 && left_dx < 0.0);
-            let right_half = right_dy < 0.0 || (right_dy == 0.0 && right_dx < 0.0);
-            left_half.cmp(&right_half).then_with(|| {
-                match RobustKernel::orient2d(origin, left.1, right.1) {
-                    Orientation::CounterClockwise => std::cmp::Ordering::Less,
-                    Orientation::Clockwise => std::cmp::Ordering::Greater,
-                    Orientation::Collinear => left_dx
-                        .hypot(left_dy)
-                        .total_cmp(&right_dx.hypot(right_dy))
-                        .then_with(|| left.0.cmp(&right.0)),
+        crate::noding::sorted(
+            &mut ordered,
+            |left, right| {
+                let left_half =
+                    left.1.y < origin.y || (left.1.y == origin.y && left.1.x < origin.x);
+                let right_half =
+                    right.1.y < origin.y || (right.1.y == origin.y && right.1.x < origin.x);
+                let half = left_half.cmp(&right_half);
+                if !half.is_eq() {
+                    return Ok(half);
                 }
-            })
-        });
+                let turn = left.2.try_cross(&right.2)?.sign().reverse();
+                if !turn.is_eq() {
+                    return Ok(turn);
+                }
+                Ok(left.3.compare(&right.3)?.then(left.0.cmp(&right.0)))
+            },
+            &mut work,
+        )?;
         neighbors.clear();
-        neighbors.extend(ordered.into_iter().map(|(neighbor, _)| neighbor));
+        neighbors.extend(ordered.into_iter().map(|(neighbor, _, _, _)| neighbor));
     }
     Ok(output)
 }

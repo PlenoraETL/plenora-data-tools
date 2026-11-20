@@ -105,34 +105,20 @@ pub(crate) fn modulo_massimo(coordinate: impl IntoIterator<Item = Coord<f64>>) -
 
 /// Il punto dista dal segmento `start -> end` al piu' `budget`?
 ///
-/// La distanza e' calcolata sulle differenze da `start` e maggiorata di un
-/// margine d'arrotondamento relativo alle grandezze in gioco (`16 *
-/// EPSILON`, piu' largo dei pochi arrotondamenti del calcolo): il controllo
-/// puo' rifiutare un punto al limite, mai accettarne uno oltre.
+/// Confronto razionale esatto della distanza quadrata con il budget al
+/// quadrato; nessun arrotondamento intermedio o margine relativo.
 pub(crate) fn punto_entro_segmento(
     point: Coord<f64>,
     start: Coord<f64>,
     end: Coord<f64>,
     budget: f64,
-) -> bool {
-    let point_x = point.x - start.x;
-    let point_y = point.y - start.y;
-    let direction_x = end.x - start.x;
-    let direction_y = end.y - start.y;
-    let length_squared = direction_x.mul_add(direction_x, direction_y * direction_y);
-    let parameter = if length_squared > 0.0 {
-        (point_x.mul_add(direction_x, point_y * direction_y) / length_squared).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let distance = parameter
-        .mul_add(-direction_x, point_x)
-        .hypot(parameter.mul_add(-direction_y, point_y));
-    let rounding = 16.0
-        * f64::EPSILON
-        * (point_x.abs() + point_y.abs() + direction_x.abs() + direction_y.abs());
-    let bound = distance + rounding;
-    bound.is_finite() && bound <= budget
+) -> Result<bool, crate::predicates::PredicateError> {
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    if !crate::segment_index::metric_candidate(point, start, end, budget, &mut work)? {
+        return Ok(false);
+    }
+    crate::segment_index::DistanceKey::coordinates(point, start, end, &mut work)
+        .and_then(|key| key.within(budget, &work))
 }
 
 #[deny(clippy::disallowed_methods)]
@@ -144,6 +130,46 @@ mod tests {
 
     fn crs(kind: CrsKind, unit: Option<f64>) -> ResolvedCrs {
         ResolvedCrs::from_resolved_parts("EPSG:0".to_owned(), json!({}), kind, unit)
+    }
+
+    #[test]
+    fn metric_window_filter_matches_exact_threshold_oracle() {
+        for scale in [f64::from_bits(1), 1e-300, 1., 1e300] {
+            for x in -8..9 {
+                for y in -8..9 {
+                    let point = Coord {
+                        x: f64::from(x) * scale,
+                        y: f64::from(y) * scale,
+                    };
+                    let start = Coord {
+                        x: -2. * scale,
+                        y: -scale,
+                    };
+                    let end = Coord {
+                        x: 3. * scale,
+                        y: 2. * scale,
+                    };
+                    for end in [end, start] {
+                        for radius in [0., scale, 3. * scale] {
+                            let mut work = crate::noding::Work::new(
+                                crate::predicates::RelateLimits::default(),
+                                None,
+                            );
+                            let expected = crate::segment_index::DistanceKey::coordinates(
+                                point, start, end, &mut work,
+                            )
+                            .unwrap()
+                            .within(radius, &work)
+                            .unwrap();
+                            assert_eq!(
+                                punto_entro_segmento(point, start, end, radius).unwrap(),
+                                expected
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

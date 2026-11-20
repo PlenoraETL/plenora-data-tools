@@ -12,9 +12,7 @@
 use crate::geodetica::EllissoideGeodetico;
 use crate::ValidazioneProtetta as _;
 use geo::algorithm::concave_hull::ConcaveHullOptions;
-use geo::{
-    AffineOps, AffineTransform, ConcaveHull, CoordsIter, Geometry, HausdorffDistance, Point,
-};
+use geo::{AffineOps, AffineTransform, ConcaveHull, CoordsIter, Geometry, Point};
 use geographiclib_rs::InverseGeodesic as _;
 use thiserror::Error;
 
@@ -22,6 +20,9 @@ use thiserror::Error;
 /// i soli numeri sono conteggi e limiti.
 #[derive(Debug, Error)]
 pub enum ExtendedError {
+    /// Errore del percorso metrico razionale.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// Un parametro fuori dominio. `name` e' `coefficients` anche per
     /// offset, fattori e origini, che entrano nella matrice.
     #[error("parametro {name} non valido: {reason}")]
@@ -379,8 +380,7 @@ pub fn concave_hull_validated(
     validate_output(Geometry::Polygon(hull))
 }
 
-/// Distanza di Hausdorff discreta per vertici (`HausdorffDistance` di
-/// `geo`).
+/// Distanza di Hausdorff discreta per vertici con selezione razionale.
 ///
 /// E' il massimo, nei due versi, della distanza euclidea fra un
 /// vertice di una geometria e il vertice piu' vicino dell'altra, nelle
@@ -448,7 +448,28 @@ pub fn hausdorff_distance_validated(
             limit: max_coordinate_pairs,
         });
     }
-    Ok(Some(protetto(|| left.hausdorff_distance(right))?))
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    let mut maximum = crate::segment_index::DistanceKey::zero(&work)?;
+    for (source, target) in [(left, right), (right, left)] {
+        for point in source.coords_iter() {
+            let mut minimum: Option<crate::segment_index::DistanceKey> = None;
+            for other in target.coords_iter() {
+                let key =
+                    crate::segment_index::DistanceKey::coordinates(point, other, other, &mut work)?;
+                if let Some(best) = &mut minimum {
+                    best.select(key)?;
+                } else {
+                    minimum = Some(key);
+                }
+            }
+            if let Some(minimum) = minimum {
+                if minimum.compare(&maximum)?.is_gt() {
+                    maximum = minimum;
+                }
+            }
+        }
+    }
+    Ok(Some(maximum.rounded(&mut work)?))
 }
 
 fn validate_geographic_point(point: Point<f64>) -> Result<(), ExtendedError> {

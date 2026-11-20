@@ -443,6 +443,27 @@ pub struct Q {
 }
 
 impl Q {
+    /// Solo un suggerimento: il chiamante certifica i midpoint razionali
+    /// prima di usare il risultato; nessun intero temporaneo viene allocato.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Suggerimento approssimato, certificato dai midpoint razionali prima dell uso."
+    )]
+    pub fn sqrt_hint(&self) -> Option<f64> {
+        let approximate = |integer: &BigInt| {
+            let digits = integer.iter_u64_digits();
+            if digits.len() > 16 {
+                return None;
+            }
+            let value = digits.rev().fold(0.0_f64, |v, digit| {
+                v.mul_add(18_446_744_073_709_551_616.0, digit as f64)
+            });
+            value.is_finite().then_some(value)
+        };
+        let value = (approximate(&self.n.value)? / approximate(&self.d.value)?).sqrt();
+        (value.is_finite() && value > 0.0 && value < f64::MAX).then_some(value)
+    }
+
     /// Radice razionale esatta, oppure assenza se il valore e' irrazionale.
     pub fn try_sqrt_exact(&self) -> Result<Option<Self>, PredicateError> {
         if self.sign().is_lt() {

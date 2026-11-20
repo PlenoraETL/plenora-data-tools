@@ -26,6 +26,7 @@
 //! Il calcolo gira dietro la barriera dei panici (`calcolo_protetto`). Gli
 //! errori non riportano coordinate.
 
+use crate::segment_index::DistanceKey;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -438,20 +439,28 @@ fn segmento_nelle_aree(a: Coord<f64>, b: Coord<f64>, aree: &[GeographicBounds]) 
 }
 
 /// Distanza di `punto` dal segmento `inizio`-`fine`.
-fn distanza_dal_segmento(punto: Coord<f64>, inizio: Coord<f64>, fine: Coord<f64>) -> f64 {
-    let direzione = fine - inizio;
-    let lunghezza2 = direzione.x.mul_add(direzione.x, direzione.y * direzione.y);
-    if lunghezza2 == 0.0 {
-        return (punto.x - inizio.x).hypot(punto.y - inizio.y);
-    }
-    let parametro = ((punto.x - inizio.x).mul_add(direzione.x, (punto.y - inizio.y) * direzione.y)
-        / lunghezza2)
-        .clamp(0.0, 1.0);
-    let piede = Coord {
-        x: parametro.mul_add(direzione.x, inizio.x),
-        y: parametro.mul_add(direzione.y, inizio.y),
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+fn distanza_dal_segmento(
+    punto: Coord<f64>,
+    inizio: Coord<f64>,
+    fine: Coord<f64>,
+) -> Result<f64, PlenoraError> {
+    let direction = fine - inizio;
+    let length = direction.x.mul_add(direction.x, direction.y * direction.y);
+    let t = if length > 0.0 {
+        ((punto.x - inizio.x).mul_add(direction.x, (punto.y - inizio.y) * direction.y) / length)
+            .clamp(0.0, 1.0)
+    } else {
+        0.0
     };
-    (punto.x - piede.x).hypot(punto.y - piede.y)
+    let distance = (punto.x - t.mul_add(direction.x, inizio.x))
+        .hypot(punto.y - t.mul_add(direction.y, inizio.y));
+    if distance.is_finite() {
+        Ok(distance)
+    } else {
+        Err(CrsError::ReprojectionEdgeNotConverged.into())
+    }
 }
 
 fn interpola(a: Coord<f64>, b: Coord<f64>, t: f64) -> Coord<f64> {
@@ -489,18 +498,24 @@ fn lato(
     // immagini ai due lati dell'antimeridiano, che il primo non vede (le
     // immagini stanno sulla corda).
     let spezzata = [fa.c, immagini[0], immagini[1], immagini[2], fb.c];
-    let mut scarto: f64 = 0.0;
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    let mut scarto_entro = true;
     for (indice, t) in [0.25, 0.5, 0.75].into_iter().enumerate() {
-        scarto = scarto.max(distanza_dal_segmento(immagini[indice], fa.c, fb.c));
+        let forward = DistanceKey::coordinates(immagini[indice], fa.c, fb.c, &mut work)
+            .map_err(|e| e.in_core("geo.reproject"))?;
+        scarto_entro &= forward
+            .within(contesto.tolleranza, &work)
+            .map_err(|e| e.in_core("geo.reproject"))?;
         let sulla_corda = interpola(fa.c, fb.c, t);
-        let dalla_spezzata = spezzata
-            .windows(2)
-            .map(|coppia| distanza_dal_segmento(sulla_corda, coppia[0], coppia[1]))
-            .fold(f64::INFINITY, f64::min);
-        scarto = scarto.max(dalla_spezzata);
-    }
-    if scarto.is_nan() {
-        return Err(CrsError::ReprojectionEdgeNotConverged.into());
+        let mut backward = false;
+        for pair in spezzata.windows(2) {
+            let key = DistanceKey::coordinates(sulla_corda, pair[0], pair[1], &mut work)
+                .map_err(|e| e.in_core("geo.reproject"))?;
+            backward |= key
+                .within(contesto.tolleranza, &work)
+                .map_err(|e| e.in_core("geo.reproject"))?;
+        }
+        scarto_entro &= backward;
     }
     // Continuita': su una funzione continua le due meta' del lato hanno
     // immagini piu' corte dell'intero (per un lato abbastanza corto, circa
@@ -510,11 +525,16 @@ fn lato(
     // errore. Un lato regolare che non passa la prova si divide ancora, e
     // basta.
     let fm = campioni[1];
-    let intero = (fb.c.x - fa.c.x).hypot(fb.c.y - fa.c.y);
-    let meta = (fm.c.x - fa.c.x)
-        .hypot(fm.c.y - fa.c.y)
-        .max((fb.c.x - fm.c.x).hypot(fb.c.y - fm.c.y));
-    let continuo = meta <= 0.75f64.mul_add(intero, contesto.tolleranza);
+    let intero = DistanceKey::coordinates(fa.c, fb.c, fb.c, &mut work)
+        .map_err(|e| e.in_core("geo.reproject"))?;
+    let mut continuo = true;
+    for endpoint in [fa.c, fb.c] {
+        let half = DistanceKey::coordinates(fm.c, endpoint, endpoint, &mut work)
+            .map_err(|e| e.in_core("geo.reproject"))?;
+        continuo &= half
+            .within_sum_scaled(&intero, 0.75, contesto.tolleranza, &work)
+            .map_err(|e| e.in_core("geo.reproject"))?;
+    }
     // Griglie NTv2: il campo di spostamenti e' bilineare a pezzi, e i tre
     // campioni non vedono una cella attraversata fra due di loro. Un lato
     // si accetta solo se estremi e campioni stanno nella stessa cella di
@@ -527,8 +547,10 @@ fn lato(
             .iter()
             .chain([&fb])
             .all(|campione| campione.celle == fa.celle)
-        || intero <= contesto.tolleranza;
-    if scarto <= contesto.tolleranza && continuo && stessa_cella {
+        || intero
+            .within(contesto.tolleranza, &work)
+            .map_err(|e| e.in_core("geo.reproject"))?;
+    if scarto_entro && continuo && stessa_cella {
         contesto.attraversa_precedenti(fa.sorgente, fb.sorgente);
         contesto.conta(1)?;
         uscita.push(fb.c);

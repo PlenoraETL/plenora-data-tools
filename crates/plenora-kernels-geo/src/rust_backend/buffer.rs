@@ -73,8 +73,7 @@ use geo::algorithm::bool_ops::unary_union;
 use geo::algorithm::buffer::{BufferStyle, LineCap, LineJoin};
 use geo::orient::{Direction, Orient};
 use geo::{
-    Area, BoundingRect, Buffer, Coord, CoordsIter, Geometry, LineString, MultiPolygon, Point,
-    Polygon,
+    BoundingRect, Buffer, Coord, CoordsIter, Geometry, LineString, MultiPolygon, Point, Polygon,
 };
 
 use super::griglia::{self, PrecisioneInsufficiente};
@@ -95,8 +94,10 @@ pub enum Estremita {
 }
 
 /// Perche' il buffer non si calcola.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum ErroreBuffer {
+    /// Errore del confronto razionale delle componenti sottili.
+    Exact(crate::predicates::PredicateError),
     /// La griglia supererebbe la precisione.
     PrecisioneInsufficiente,
     /// Un calcolo di `geo` o `i_overlay` e' andato in panico dentro
@@ -270,7 +271,11 @@ fn areali(geometry: &Geometry<f64>, out: &mut Vec<MultiPolygon<f64>>) {
 /// L'ingresso con le componenti sotto la griglia `g` sostituite (vedi il
 /// modulo): una linea corta dal suo primo punto, un poligono minuscolo o
 /// sottile dal suo anello esterno.
-fn senza_componenti_sotto_griglia(geometry: &Geometry<f64>, g: f64) -> Geometry<f64> {
+fn senza_componenti_sotto_griglia(
+    geometry: &Geometry<f64>,
+    g: f64,
+    work: &mut crate::noding::Work<'_>,
+) -> Result<Geometry<f64>, ErroreBuffer> {
     let corta = |coordinate: &[Coord<f64>]| {
         griglia::rettangolo_coordinate(coordinate.iter().copied())
             .is_some_and(|rect| rect.width().max(rect.height()) <= 2.0 * g)
@@ -281,13 +286,30 @@ fn senza_componenti_sotto_griglia(geometry: &Geometry<f64>, g: f64) -> Geometry<
             _ => Geometry::LineString(line.clone()),
         }
     };
-    let sottile = |polygon: &Polygon<f64>| {
-        polygon.unsigned_area() <= 4.0 * g * g
+    let mut sottile = |polygon: &Polygon<f64>| -> Result<bool, ErroreBuffer> {
+        use crate::noding::P;
+        let compute=|work:&mut crate::noding::Work<'_>| -> Result<bool,crate::predicates::PredicateError> {
+            let mut total=work.integer(0)?;
+            for (i,ring) in std::iter::once(polygon.exterior()).chain(polygon.interiors()).enumerate() {
+                let mut area=work.integer(0)?;
+                for pair in ring.0.windows(2) {
+                    work.step()?;
+                    area=area.try_add(&P::of_in(pair[0],work)?.try_cross(&P::of_in(pair[1],work)?)?)?;
+                }
+                if area.sign().is_lt() {area=work.integer(0)?.try_sub(&area)?;}
+                total=if i==0 {area} else {total.try_sub(&area)?};
+            }
+            let area=total.try_div(&work.integer(2)?)?;
+            let grid=P::of_in((g,0.).into(),work)?.x;
+            let threshold=grid.try_mul(&grid)?.try_mul(&work.integer(4)?)?;
+            Ok(crate::segment_index::DistanceKey::squared(area)?.compare(&crate::segment_index::DistanceKey::squared(threshold)?)?.is_le())
+        };
+        Ok(compute(work).map_err(ErroreBuffer::Exact)?
             || polygon
                 .bounding_rect()
-                .is_some_and(|rect| rect.width().min(rect.height()) <= 2.0 * g)
+                .is_some_and(|rect| rect.width().min(rect.height()) <= 2.0 * g))
     };
-    match geometry {
+    Ok(match geometry {
         Geometry::Line(line) => da_linea(&LineString::new(vec![line.start, line.end])),
         Geometry::LineString(line) => da_linea(line),
         Geometry::MultiLineString(lines) => {
@@ -298,16 +320,19 @@ fn senza_componenti_sotto_griglia(geometry: &Geometry<f64>, g: f64) -> Geometry<
                 Geometry::GeometryCollection(parti.into())
             }
         }
-        Geometry::Polygon(polygon) if sottile(polygon) => da_linea(polygon.exterior()),
-        Geometry::MultiPolygon(polygons) if polygons.iter().any(sottile) => {
+        Geometry::Polygon(polygon) if sottile(polygon)? => da_linea(polygon.exterior()),
+        Geometry::MultiPolygon(polygons) => {
             let mut parti: Vec<Geometry<f64>> = Vec::new();
             let mut pieni = Vec::new();
             for polygon in polygons {
-                if sottile(polygon) {
+                if sottile(polygon)? {
                     parti.push(da_linea(polygon.exterior()));
                 } else {
                     pieni.push(polygon.clone());
                 }
+            }
+            if parti.is_empty() {
+                return Ok(geometry.clone());
             }
             if !pieni.is_empty() {
                 parti.push(Geometry::MultiPolygon(MultiPolygon::new(pieni)));
@@ -317,12 +342,12 @@ fn senza_componenti_sotto_griglia(geometry: &Geometry<f64>, g: f64) -> Geometry<
         Geometry::GeometryCollection(collection) => Geometry::GeometryCollection(
             collection
                 .iter()
-                .map(|child| senza_componenti_sotto_griglia(child, g))
-                .collect::<Vec<_>>()
+                .map(|child| senza_componenti_sotto_griglia(child, g, work))
+                .collect::<Result<Vec<_>, _>>()?
                 .into(),
         ),
         other => other.clone(),
-    }
+    })
 }
 
 /// Il buffer e' vuoto per definizione, senza calcolo: distanza negativa
@@ -492,7 +517,9 @@ fn buffer_con_freccia_e_margine(
         limite,
     )?;
     let passo = griglia::passo_griglia(ingombro).ok_or(ErroreBuffer::PrecisioneInsufficiente)?;
-    let lavoro = senza_componenti_sotto_griglia(geometry, passo);
+    let mut metric_work =
+        crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    let lavoro = senza_componenti_sotto_griglia(geometry, passo, &mut metric_work)?;
     let angolo = angolo_degli_archi(distance, freccia_corde);
     let estremita_geo = match estremita {
         Estremita::Tonde => LineCap::Round(angolo),

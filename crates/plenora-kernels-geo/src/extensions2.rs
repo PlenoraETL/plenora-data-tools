@@ -664,16 +664,40 @@ fn snap_with_tree(
         Geometry::Triangle(triangle) => Geometry::Polygon(triangle.to_polygon()),
         other => other.clone(),
     };
-    let snapped = protetto(|| {
-        working.map_coords(|coordinate| {
-            match tree.nearest_neighbor(&[coordinate.x, coordinate.y]) {
-                Some(&[x, y]) if (coordinate.x - x).hypot(coordinate.y - y) <= tolerance => {
-                    Coord { x, y }
+    let context = std::cell::RefCell::new(crate::noding::Work::new(
+        crate::predicates::RelateLimits::default(),
+        None,
+    ));
+    let snapped = working
+        .try_map_coords(|coordinate| {
+            use crate::segment_index::{metric_window, DistanceKey};
+            let mut work = context
+                .try_borrow_mut()
+                .map_err(|_| crate::predicates::PredicateError::AccuracyUnproven)?;
+            let mut best: Option<(DistanceKey, Coord<f64>)> = None;
+            for &[x, y] in tree.locate_in_envelope_intersecting(&metric_window(
+                [coordinate.x, coordinate.y],
+                tolerance,
+            )) {
+                let candidate = Coord { x, y };
+                let key = DistanceKey::coordinates(coordinate, candidate, candidate, &mut work)?;
+                if key.within(tolerance, &work)? {
+                    let replace = match &best {
+                        None => true,
+                        Some((old, point)) => key
+                            .compare(old)?
+                            .then(x.total_cmp(&point.x))
+                            .then(y.total_cmp(&point.y))
+                            .is_lt(),
+                    };
+                    if replace {
+                        best = Some((key, candidate));
+                    }
                 }
-                _ => coordinate,
             }
+            Ok::<_, crate::predicates::PredicateError>(best.map_or(coordinate, |(_, point)| point))
         })
-    })?;
+        .map_err(ExtensionError::Exact)?;
     validate_output(snapped)
 }
 
@@ -1257,6 +1281,29 @@ mod tests {
     }
 
     #[test]
+    fn snap_exact_extremes_and_order_independent_ties() {
+        for scale in [f64::from_bits(1), 1e-300, 1.0, 1e300] {
+            let input = Geometry::Point(Point::new(0.0, 0.0));
+            let mut points = vec![
+                Point::new(4.0 * scale, 0.0),
+                Point::new(scale, 0.0),
+                Point::new(-scale, 0.0),
+            ];
+            for _ in 0..2 {
+                let reference = Geometry::MultiPoint(MultiPoint(points.clone()));
+                assert_eq!(
+                    snap(&input, &reference, scale).unwrap(),
+                    Geometry::Point(Point::new(-scale, 0.0))
+                );
+                points.reverse();
+            }
+        }
+        let input = Geometry::Point(Point::new(1.0, 2.0_f64.powi(-27)));
+        let reference = Geometry::Point(Point::new(0.0, 0.0));
+        assert_eq!(snap(&input, &reference, 1.0).unwrap(), input);
+    }
+
+    #[test]
     fn snap_moves_vertices_within_tolerance_and_keeps_the_others() {
         let input = Geometry::LineString(line_string![
             (x: 0.1, y: 0.3),   // distanza ~0.316 dal vertice (0,0): snappato
@@ -1274,9 +1321,9 @@ mod tests {
     #[test]
     fn snap_includes_the_tolerance_boundary_and_zero_means_exact_only() {
         // Distanza esattamente uguale alla tolleranza: snappato (<=).
-        let input = Geometry::Point(Point::new(0.3, 0.4));
+        let input = Geometry::Point(Point::new(3.0, 4.0));
         let reference = Geometry::Point(Point::new(0.0, 0.0));
-        let snapped = snap(&input, &reference, 0.5).expect("snap");
+        let snapped = snap(&input, &reference, 5.0).expect("snap");
         assert_eq!(coords(&snapped), vec![(0.0, 0.0)]);
 
         // Tolleranza zero: solo coincidenze esatte.

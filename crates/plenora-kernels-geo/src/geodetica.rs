@@ -224,18 +224,17 @@ fn scarto_del_lato(
         return Err(LATO_TROPPO_LUNGO);
     }
     let corda = (a.x - da.x).to_radians().hypot((a.y - da.y).to_radians());
-    let scarto = corda * corda / 8.0 * curvatura / rotazione.cos().powi(3);
-    let scarto = scarto.to_degrees() * (1.0 + 1e-6);
+    let square = (corda.next_up() * corda.next_up()).next_up();
+    let numerator = ((square / 8.0).next_up() * curvatura).next_up();
+    let cosine = rotazione.cos().next_down();
+    let denominator = ((cosine * cosine).next_down() * cosine).next_down();
+    let scarto = (numerator / denominator).next_up();
+    let scarto = (scarto.to_degrees().next_up() * (1.0 + 1e-6)).next_up();
     if scarto.is_finite() {
         Ok(scarto)
     } else {
         Err(LATO_TROPPO_LUNGO)
     }
-}
-
-/// `distanza > soglia`, falso anche per un NaN.
-fn oltre(distanza: f64, soglia: f64) -> bool {
-    distanza.partial_cmp(&soglia) == Some(std::cmp::Ordering::Greater)
 }
 
 /// Verifica che gli anelli, letti come geodetiche, abbiano la topologia che
@@ -269,13 +268,16 @@ fn oltre(distanza: f64, soglia: f64) -> bool {
 pub(crate) fn verifica_topologia_geodetica(
     anelli: &[&LineString<f64>],
     ellissoide: &EllissoideGeodetico,
-) -> Result<(), &'static str> {
-    use geo::algorithm::line_measures::{Distance, Euclidean};
+) -> Result<(), crate::extended_algorithms::ExtendedAlgorithmError> {
+    use crate::extended_algorithms::ExtendedAlgorithmError;
+    use crate::noding::{Edge, Work, P};
+    use crate::segment_index::DistanceKey;
     use rstar::{primitives::GeomWithData, primitives::Rectangle, RTree, AABB};
     const VICINI: &str = "due lati del poligono sono piu' vicini dello scarto fra le loro \
          geodetiche e le corde nel piano lon/lat: la topologia delle geodetiche non e' \
          garantita";
 
+    let mut work = Work::new(crate::predicates::RelateLimits::default(), None);
     let mut lati: Vec<LatoGeodetico> = Vec::new();
     for anello in anelli {
         for lato in anello.lines() {
@@ -285,7 +287,8 @@ pub(crate) fn verifica_topologia_geodetica(
             lati.push(LatoGeodetico {
                 da: lato.start,
                 a: lato.end,
-                scarto: scarto_del_lato(ellissoide, lato.start, lato.end)?,
+                scarto: scarto_del_lato(ellissoide, lato.start, lato.end)
+                    .map_err(|reason| ExtendedAlgorithmError::InvalidInput(reason.to_owned()))?,
             });
         }
     }
@@ -311,7 +314,14 @@ pub(crate) fn verifica_topologia_geodetica(
             })
             .collect(),
     );
-    let segmento = |lato: &LatoGeodetico| geo::Line::new(lato.da, lato.a);
+    let segmento = |lato: &LatoGeodetico,
+                    work: &Work<'_>|
+     -> Result<Edge, crate::predicates::PredicateError> {
+        Ok(Edge {
+            a: P::of_in(lato.da, work)?,
+            b: P::of_in(lato.a, work)?,
+        })
+    };
     for (i, lato) in lati.iter().enumerate() {
         for vicino in albero.locate_in_envelope_intersecting(&riquadro(lato)) {
             let j = vicino.data;
@@ -332,22 +342,26 @@ pub(crate) fn verifica_topologia_geodetica(
                 .collect();
             match condivisi.as_slice() {
                 [] => {
-                    let distanza = Euclidean.distance(&segmento(lato), &segmento(altro));
-                    if !oltre(distanza, lato.scarto + altro.scarto + MARGINE_GRADI) {
-                        return Err(VICINI);
+                    let distanza = DistanceKey::segments(
+                        &segmento(lato, &work)?,
+                        &segmento(altro, &work)?,
+                        &mut work,
+                    )?;
+                    if distanza.within(lato.scarto + altro.scarto + MARGINE_GRADI, &work)? {
+                        return Err(ExtendedAlgorithmError::InvalidInput(VICINI.to_owned()));
                     }
                 }
                 [(mio, suo)] => {
                     let mio_dall_altro =
-                        Euclidean.distance(&geo::Point::from(*mio), &segmento(altro));
-                    let suo_dal_mio = Euclidean.distance(&geo::Point::from(*suo), &segmento(lato));
-                    if !(oltre(mio_dall_altro, altro.scarto + MARGINE_GRADI)
-                        && oltre(suo_dal_mio, lato.scarto + MARGINE_GRADI))
+                        DistanceKey::coordinates(*mio, altro.da, altro.a, &mut work)?;
+                    let suo_dal_mio = DistanceKey::coordinates(*suo, lato.da, lato.a, &mut work)?;
+                    if mio_dall_altro.within(altro.scarto + MARGINE_GRADI, &work)?
+                        || suo_dal_mio.within(lato.scarto + MARGINE_GRADI, &work)?
                     {
-                        return Err(VICINI);
+                        return Err(ExtendedAlgorithmError::InvalidInput(VICINI.to_owned()));
                     }
                 }
-                _ => return Err(VICINI),
+                _ => return Err(ExtendedAlgorithmError::InvalidInput(VICINI.to_owned())),
             }
         }
     }

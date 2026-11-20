@@ -71,6 +71,9 @@ impl SplitLimits {
 /// Errori dello split poligonale.
 #[derive(Debug, Error)]
 pub enum SplitError {
+    /// Errore del confronto razionale condiviso, senza perdita della categoria.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// La sorgente non e' `Polygon` o `MultiPolygon`. Il tipo della cella
     /// resta nel valore, non nel messaggio («errori senza dati»).
     #[error("tipo sorgente non supportato: atteso Polygon o MultiPolygon")]
@@ -262,16 +265,13 @@ impl SegmentKey {
 
 /// Distanza euclidea del punto dal segmento, in `f64` (l'errore del
 /// calcolo e' molto sotto la precisione dichiarata).
-fn segment_distance(point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> f64 {
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let length_squared = dx * dx + dy * dy;
-    let t = if length_squared > 0.0 {
-        (((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    (point.x - (start.x + t * dx)).hypot(point.y - (start.y + t * dy))
+fn segment_within(
+    point: Coord<f64>,
+    start: Coord<f64>,
+    end: Coord<f64>,
+    precision: f64,
+) -> Result<bool, SplitError> {
+    super::precision::punto_entro_segmento(point, start, end, precision).map_err(SplitError::Exact)
 }
 
 /// Test pari-dispari del laboratorio con il lato del punto deciso da
@@ -397,15 +397,14 @@ fn output_segment_counts(output: &[Polygon<f64>]) -> Result<OutputSegments, Spli
 }
 
 /// Il parametro della proiezione di `point` sul segmento, in `[0, 1]`.
-fn projection_parameter(point: Coord<f64>, start: Coord<f64>, end: Coord<f64>) -> f64 {
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let length_squared = dx * dx + dy * dy;
-    if length_squared > 0.0 {
-        (((point.x - start.x) * dx + (point.y - start.y) * dy) / length_squared).clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
+fn projection_parameter(
+    point: Coord<f64>,
+    start: Coord<f64>,
+    end: Coord<f64>,
+) -> Result<f64, SplitError> {
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    crate::segment_index::projection_parameter(point, start, end, &mut work)
+        .map_err(SplitError::Exact)
 }
 
 /// La lunghezza, come frazione di `[0, 1]`, dell'unione degli intervalli.
@@ -479,12 +478,12 @@ fn checked_boundary_coverage(
             let (segments, intervals) = &mut rings[ring_index];
             let segment = segments[segment_index];
             let covered = &mut intervals[segment_index];
-            let distance = segment_distance(start, segment.start, segment.end)
-                .max(segment_distance(end, segment.start, segment.end));
-            if distance <= precision {
+            if segment_within(start, segment.start, segment.end, precision)?
+                && segment_within(end, segment.start, segment.end, precision)?
+            {
                 matched = true;
-                let first = projection_parameter(start, segment.start, segment.end);
-                let second = projection_parameter(end, segment.start, segment.end);
+                let first = projection_parameter(start, segment.start, segment.end)?;
+                let second = projection_parameter(end, segment.start, segment.end)?;
                 covered
                     .try_reserve(1)
                     .map_err(|_| SplitError::AllocationFailed("copertura del bordo"))?;
@@ -525,20 +524,12 @@ type CoverageRings = Vec<(Vec<geo::Line<f64>>, Vec<Vec<(f64, f64)>>)>;
 /// piu' `16 ulp(M)`, per provare la distanza solo sui lati che possono
 /// passarla.
 ///
-/// **Perche' non cambia nulla.** Il test e' `segment_distance <= p` per i
-/// due estremi del lato delle parti. `segment_distance` calcola la distanza
-/// da un punto del segmento arrotondato (al piu' qualche `ulp(M)` dal
-/// segmento, `M` il modulo massimo delle coordinate) con `hypot` corretta
-/// a un ulp: una distanza calcolata entro `p` e' vera entro `p + 4 ulp(M)`,
-/// quindi entrambi gli estremi, e il rettangolo del lato, stanno nel
-/// rettangolo del lato sorgente allargato di `p + 4 ulp(M)`, e a maggior
-/// ragione di `2 p + 16 ulp(M)` arrotondato (gli arrotondamenti
-/// dell'allargamento sono di un ulp). Un lato sorgente fuori da quel
-/// rettangolo non passa il test: escluderlo non cambia `matched` ne' gli
-/// intervalli, che si sommano dopo un ordinamento per valore
-/// (`union_fraction`), indipendente dall'ordine d'inserimento. I candidati
-/// si provano comunque nell'ordine del doppio ciclo (anello, lato).
-/// Coordinate non finite: niente indice, il doppio ciclo.
+/// Il test finale e' la distanza razionale <= p per entrambi gli estremi.
+/// La finestra 2 p + 16 ulp(M) include la finestra esatta di raggio p e
+/// assorbe gli arrotondamenti della costruzione del rettangolo. I candidati
+/// sono visitati nell'ordine (anello, lato) del doppio ciclo; gli intervalli
+/// sono ordinati prima di `union_fraction`. Coordinate non finite: nessun
+/// filtro, con rifiuto esplicito nel calcolo esatto successivo.
 struct CoverageIndex {
     tree: rstar::RTree<IndexedSourceSegment>,
 }

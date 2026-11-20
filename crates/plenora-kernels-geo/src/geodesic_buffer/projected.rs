@@ -1002,11 +1002,7 @@ fn rectangle(
     work.step()?;
     let dx = b.x - a.x;
     let dy = b.y - a.y;
-    let squared_length = dx.mul_add(dx, dy * dy);
-    if !squared_length.is_normal() {
-        return Err(BufferFailure::AccuracyUnproven.into());
-    }
-    let length = squared_length.sqrt();
+    let length = crate::segment_index::DistanceKey::coordinates(a, b, b, work)?.rounded(work)?;
     if !length.is_normal() {
         return Err(BufferFailure::AccuracyUnproven.into());
     }

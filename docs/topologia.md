@@ -104,6 +104,25 @@ di split_line e polygonize sono identici al tag locale `v6.0.0`.
 I reticoli, pettini, strisce e il caso sparso da 20.002 segmenti provano
 il noder comune; non sostituiscono prove sui nuovi ingressi mancanti.
 
+### Indice dei segmenti (6.2.0 non rilasciata)
+
+Il noder e la classificazione dei campioni condividono `segment_index.rs`:
+una gerarchia bilanciata di inviluppi razionali inclusivi, costruita in
+O(n log n) con memoria O(n). I nodi riferiscono gli estremi gia' posseduti
+dall'indice, senza copiarne i razionali. Contenitori, cloni e temporanei
+aritmetici usano il bilancio del medesimo `Work`; nessun nuovo contesto o
+limite illimitato viene introdotto.
+
+Le query puntuali e dei raggi orizzontali non arrotondano i campioni e
+includono le uguaglianze, anche per le perturbazioni infinitesime. I
+candidati sono ordinati per ID. Il noder conserva l'ordine precedente delle
+coppie `(min_x, id)`; i test esatti restano addebitati prima del calcolo.
+Una query costa O(visite + k log k), per k candidati: con tutti gli
+inviluppi sovrapposti la selezione delle coppie puo' costare O(n? log n).
+Non viene promessa una complessita' logaritmica per ogni distribuzione.
+Le distanze planari, `nearest_matches` e `spatial_join` conservano ancora
+i backend precedenti: questa modifica non completa la voce di memoria 16.
+
 ### API diretta DE-9IM
 
 `plenora_kernels_geo::predicates` espone la matrice generale esatta:

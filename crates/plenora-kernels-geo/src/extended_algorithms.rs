@@ -32,6 +32,9 @@ use thiserror::Error;
 /// o valori delle righe.
 #[derive(Debug, Error)]
 pub enum ExtendedAlgorithmError {
+    /// Errore del confronto metrico razionale condiviso.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// Un parametro fuori dal suo dominio: `name` lo nomina, `reason` dice
     /// quale vincolo viola.
     #[error("parametro {name} non valido: {reason}")]
@@ -811,8 +814,7 @@ pub fn geodesic_area_m2(
         .iter()
         .flat_map(|polygon| std::iter::once(polygon.exterior()).chain(polygon.interiors()))
         .collect();
-    protetto(|| crate::geodetica::verifica_topologia_geodetica(&anelli, ellissoide))?
-        .map_err(|motivo| ExtendedAlgorithmError::InvalidInput(motivo.to_owned()))?;
+    protetto(|| crate::geodetica::verifica_topologia_geodetica(&anelli, ellissoide))??;
     let area = match geometry {
         Geometry::Polygon(polygon) => {
             protetto(|| area_poligono(&polygon.orient(Direction::Default), ellissoide))?
@@ -1279,50 +1281,28 @@ fn point_ratio_on_segment(
     point: Point<f64>,
     tolerance: f64,
     total_length: f64,
-) -> Option<f64> {
-    let dx = segment.line.end.x - segment.line.start.x;
-    let dy = segment.line.end.y - segment.line.start.y;
-    // Niente mul_add/FMA: la fusione cambia l'arrotondamento IEEE e
-    // renderebbe il risultato diverso da piattaforma a piattaforma; la forma
-    // non fusa e' il contratto numerico.
-    #[allow(clippy::suboptimal_flops)]
-    let length_squared = dx * dx + dy * dy;
-    if length_squared == 0.0 {
-        return None;
+) -> Result<Option<f64>, ExtendedAlgorithmError> {
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    let key = crate::segment_index::DistanceKey::coordinates(
+        point.0,
+        segment.line.start,
+        segment.line.end,
+        &mut work,
+    )?;
+    if !key.within(tolerance, &work)? {
+        return Ok(None);
     }
-    // Stessa forma non fusa, per lo stesso motivo.
-    #[allow(clippy::suboptimal_flops)]
-    let parameter = (((point.x() - segment.line.start.x) * dx
-        + (point.y() - segment.line.start.y) * dy)
-        / length_squared)
-        .clamp(0.0, 1.0);
-    let projected = Coord {
-        x: segment.line.start.x + parameter * dx,
-        y: segment.line.start.y + parameter * dy,
-    };
-    let distance = (point.x() - projected.x).hypot(point.y() - projected.y);
-    let ratio = (segment.distance_before + parameter * segment.length) / total_length;
-    // La proiezione puo' spostare di qualche ULP un punto decimale
-    // esattamente collineare (per esempio x=14 su un segmento 0..100): una
-    // tolleranza zero deve voler dire coincidenza topologica, non
-    // uguaglianza dei bit.
-    let coordinate_scale = segment
-        .line
-        .start
-        .x
-        .abs()
-        .max(segment.line.start.y.abs())
-        .max(segment.line.end.x.abs())
-        .max(segment.line.end.y.abs())
-        .max(point.x().abs())
-        .max(point.y().abs())
-        .max(1.0);
-    let numeric_slack = coordinate_scale * f64::EPSILON * 16.0;
-    if distance <= tolerance + numeric_slack {
-        Some(ratio)
-    } else {
-        None
+    let parameter = crate::segment_index::projection_parameter(
+        point.0,
+        segment.line.start,
+        segment.line.end,
+        &mut work,
+    )?;
+    let ratio = parameter.mul_add(segment.length, segment.distance_before) / total_length;
+    if !ratio.is_finite() {
+        return Err(crate::predicates::PredicateError::AccuracyUnproven.into());
     }
+    Ok(Some(ratio))
 }
 
 fn expanded_point_envelope(point: Point<f64>, tolerance: f64) -> AABB<[f64; 2]> {
@@ -1470,11 +1450,11 @@ pub fn split_line(
                 .locate_in_envelope_intersecting(&envelope)
                 .collect()
         })?;
-        ratios.extend(
-            vicini.into_iter().filter_map(|segment| {
-                point_ratio_on_segment(segment, point, tolerance, total_length)
-            }),
-        );
+        for segment in vicini {
+            if let Some(ratio) = point_ratio_on_segment(segment, point, tolerance, total_length)? {
+                ratios.push(ratio);
+            }
+        }
     }
     let splitter_indexed: Vec<IndexedSegment> = splitter_segments
         .iter()

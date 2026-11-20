@@ -1284,7 +1284,9 @@
       "confronti_casuali_di_punti_su_griglie_grandi",
       "l_indice_scarta_davvero_e_tiene_i_pari",
       "tolleranza_di_geo_fuori_dal_rettangolo_d_ingombro",
-      "il_calcolo_non_concluso_vince_sul_limite_dei_risultati"
+      "underflow_del_vendor_ora_ha_distanza_certificata",
+      "il_limite_dei_risultati_dopo_la_correzione_underflow",
+      "seed_nonrepresentable_cannot_hide_exact_zero"
     ],
     "crates/plenora-kernels-geo/src/analyze/config.rs": [
       "nessun_campo_geo_legge_null_come_assente",
@@ -1383,6 +1385,7 @@
       "contract_keys_reject_divergent_legacy_metadata"
     ],
     "crates/plenora-kernels-geo/src/cluster.rs": [
+      "exact_neighborhood_extreme_scales",
       "two_separated_clouds_and_an_outlier_make_two_clusters_plus_noise",
       "density_connected_chain_is_one_cluster",
       "min_points_boundaries_core_border_noise",
@@ -1521,6 +1524,7 @@
       "collect_keeps_single_geometry_and_skips_nulls",
       "collect_promotes_homogeneous_groups_to_multi_geometries",
       "collect_mixed_groups_become_geometry_collections_without_union",
+      "line_locate_point_uses_exact_selection_at_extreme_scales",
       "line_locate_point_projects_known_points",
       "line_locate_point_clamps_far_points_and_handles_closed_lines",
       "line_locate_point_returns_none_for_non_lines_and_empty_lines"
@@ -1541,6 +1545,7 @@
       "subdivide_chunks_multipoints_and_explodes_multi_lines_and_collections",
       "subdivide_rejects_too_low_max_vertices_and_fails_closed_on_degenerates",
       "subdivide_wkb_roundtrips_decodable_parts",
+      "snap_exact_extremes_and_order_independent_ties",
       "snap_moves_vertices_within_tolerance_and_keeps_the_others",
       "snap_includes_the_tolerance_boundary_and_zero_means_exact_only",
       "snap_beyond_tolerance_leaves_the_geometry_unchanged",
@@ -1594,7 +1599,8 @@
       "global_surface_is_rejected_before_generation"
     ],
     "crates/plenora-kernels-geo/src/geodesic_buffer/projected/erosion.rs": [
-      "interval_signed_distance_against_square_and_subnormal_rejection",
+      "indexed_signed_distance_against_exhaustive_and_square",
+      "indexed_signed_distance_preserves_tiny_positive_clearance",
       "acute_sector_has_a_continuous_common_witness"
     ],
     "crates/plenora-kernels-geo/src/geodesic_buffer/projected/tests.rs": [
@@ -1827,7 +1833,7 @@
     ],
     "crates/plenora-kernels-geo/src/operations.rs": [
       "l_area_si_scala_con_il_quadrato",
-      "un_area_che_si_annulla_nella_scala_si_rifiuta",
+      "un_area_minima_resta_confrontabile_senza_scalare",
       "indici_simplify_rifiutati_prima_del_cast_upstream",
       "point_on_surface_survives_negative_zero_coordinates",
       "signed_zero_normalization_touches_only_negative_zero",
@@ -1835,7 +1841,7 @@
       "distance_and_interior_point_are_exact_for_simple_fixture",
       "buffer_rejects_non_finite_distance_and_produces_valid_polygon",
       "simplify_fails_if_result_would_be_invalid",
-      "simplify_normalizes_extreme_coordinates_without_panicking",
+      "simplify_handles_extreme_coordinates_without_scaling",
       "explode_preserves_component_order",
       "boundary_handles_open_and_closed_lines",
       "measurements_simplify_explode_and_boundary_cover_all_geometry_families",
@@ -1853,6 +1859,11 @@
       "buffer_su_geometrycollection_con_componente_vuoto_non_panica",
       "buffer_su_poligono_ordinario_senza_vuoti_riesce_alle_stesse_distanze",
       "rectangle_measurements_hold_for_generated_inputs"
+    ],
+    "crates/plenora-kernels-geo/src/operations/rdp.rs": [
+      "vw_mixed_scales_do_not_flatten_vertices",
+      "area_heap_matches_sorted_integer_oracle",
+      "exact_thresholds_at_extreme_scales_keep_original_vertices"
     ],
     "crates/plenora-kernels-geo/src/predicates.rs": [
       "published_predicates_match_600_on_the_analytic_corpus",
@@ -1878,7 +1889,10 @@
       "oracle_deadline_precedence_at_entry_and_during_work"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed.rs": [
+      "point_polygon_fast_matrix_matches_exhaustive",
+      "point_polygon_rejects_hole_outside_shell",
       "sparse_work_and_exact_public_threshold",
+      "sparse_vertical_relate_growth",
       "unreleased_limits_may_change_without_changing_the_matrix",
       "rational_intersection_and_full_finite_exponent_range",
       "actual_work_and_reservation_thresholds",
@@ -1887,7 +1901,14 @@
       "empty_members_cannot_bypass_the_work_limit",
       "invalid_polygon_topology_is_not_silently_classified",
       "every_named_predicate_on_the_cartesian_corpus",
-      "nested_members_and_permutations_preserve_cells"
+      "nested_members_and_permutations_preserve_cells",
+      "metric_polygons_holes_and_boundaries_match_exhaustive",
+      "metric_underflow_regression_and_vertex_reversal",
+      "metric_extreme_scales_and_degenerate_segments",
+      "metric_index_matches_exhaustive",
+      "metric_positive_below_minimum_subnormal_is_explicit",
+      "metric_exact_limits_and_interruption",
+      "metric_sparse_growth"
     ],
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean/tests.rs": [
       "every_dimension_pair_and_filter",
@@ -2153,6 +2174,7 @@
       "published_polygonize_matches_literal_600_on_sourced_corpus"
     ],
     "crates/plenora-kernels-geo/src/rust_backend/precision.rs": [
+      "metric_window_filter_matches_exact_threshold_oracle",
       "un_centimetro_nelle_unita_del_crs",
       "spaziatura_delle_coordinate_rispetto_alla_precisione",
       "senza_unita_lineare_o_non_positiva_e_un_errore"
@@ -2173,7 +2195,17 @@
       "il_poligono_vuoto_ha_zero_anelli_e_torna_identico",
       "line_rect_e_triangle_come_l_encoder_canonico"
     ],
+    "crates/plenora-kernels-geo/src/segment_index.rs": [
+      "point_query_distance_matches_generic_segment_path",
+      "metric_rounding_certification_and_nonrepresentable_values",
+      "metric_thresholds_compare_before_rounding",
+      "metric_fast_rounding_matches_binary_search",
+      "candidates_match_exhaustive",
+      "collinear_overlapping_extreme_and_subnormal",
+      "sparse_vertical_queries_scale_and_limits"
+    ],
     "crates/plenora-kernels-geo/src/spatial_join.rs": [
+      "join_extreme_scales_matches_exhaustive_arrangement",
       "join_is_exact_and_deterministically_ordered",
       "contains_and_within_have_explicit_direction",
       "de9im_predicates_cover_full_manipola_sjoin_contract",
@@ -2449,7 +2481,7 @@
       "simplify_segmento_subnormale_con_coordinate_finite",
       "simplify_poligoni_a_scale_diverse_con_coordinate_finite",
       "simplify_wkt_finito_attraversa_parser_e_validazione",
-      "simplify_collezione_non_restituisce_componenti_parziali",
+      "simplify_collezione_conserva_tutte_le_componenti",
       "simplify_tolleranza_zero_non_calcola_distanze",
       "simplify_componente_minuscola_normalizzata_resta_ammessa",
       "simplify_ordinario_conserva_oracolo_geo_e_spareggi"

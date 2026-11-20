@@ -12,6 +12,7 @@ use super::interval_index::{BoxIndex, IntervalIndex};
 use super::{De9imMatrix, PredicateError};
 pub(super) use crate::noding::Work;
 use crate::noding::{between, sorted, CountedVec, Edge, P, Q};
+use crate::segment_index::SegmentIndex;
 use geo::{Coord, CoordsIter, Geometry, LineString, Polygon};
 use std::cmp::Ordering;
 
@@ -25,10 +26,10 @@ fn invalid(side: &'static str) -> PredicateError {
 #[derive(Default)]
 struct Shape {
     polygon_index: BoxIndex,
-    line_index: IntervalIndex,
-    end_index: IntervalIndex,
-    point_index: IntervalIndex,
-    ring_indices: CountedVec<CountedVec<IntervalIndex>>,
+    line_index: SegmentIndex,
+    end_index: SegmentIndex,
+    point_index: SegmentIndex,
+    ring_indices: CountedVec<CountedVec<SegmentIndex>>,
     points: CountedVec<P>,
     lines: CountedVec<Edge>,
     ends: CountedVec<P>,
@@ -67,9 +68,9 @@ fn ring(line: &[Coord<f64>], work: &mut Work<'_>) -> Result<CountedVec<Edge>, Pr
 }
 impl Shape {
     fn build_indices(&mut self, work: &mut Work<'_>) -> Result<(), PredicateError> {
-        self.line_index = IntervalIndex::new(self.lines.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
-        self.end_index = IntervalIndex::new(self.ends.iter().map(|p| (&p.x, &p.x)), work)?;
-        self.point_index = IntervalIndex::new(self.points.iter().map(|p| (&p.x, &p.x)), work)?;
+        self.line_index = SegmentIndex::edges(self.lines.iter(), work)?;
+        self.end_index = SegmentIndex::points(self.ends.iter(), work)?;
+        self.point_index = SegmentIndex::points(self.points.iter(), work)?;
         let mut bounds = CountedVec::new();
         for rings in &self.polygons {
             let mut bb = [
@@ -100,7 +101,7 @@ impl Shape {
         for rings in &self.polygons {
             let mut indices = CountedVec::new();
             for ring in rings {
-                let index = IntervalIndex::new(ring.iter().map(|e| (&e.a.y, &e.b.y)), work)?;
+                let index = SegmentIndex::edges(ring.iter(), work)?;
                 work.push(&mut indices, index)?;
             }
             work.push(&mut self.ring_indices, indices)?;
@@ -118,7 +119,7 @@ impl Shape {
             let (rings, indices) = (&self.polygons[id], &self.ring_indices[id]);
             for (ring, index) in rings.iter().zip(indices) {
                 work.step()?;
-                for id in index.candidates(&p.y, work)? {
+                for id in index.point_candidates(p, work)? {
                     work.push(&mut edges, &ring[id])?;
                 }
             }
@@ -168,7 +169,7 @@ impl Shape {
             let mut statuses = CountedVec::new();
             for (ring, index) in rings.iter().zip(&self.ring_indices[polygon_index]) {
                 let mut boundary = false;
-                for id in index.candidates(&p.y, work)? {
+                for id in index.point_candidates(p, work)? {
                     work.step()?;
                     if ring[id].contains(p)? {
                         boundary = true;
@@ -457,12 +458,12 @@ impl Shape {
         if self.area_contains(p, None, work)? {
             return Ok(0);
         }
-        for id in self.line_index.candidates(&p.x, work)? {
+        for id in self.line_index.point_candidates(p, work)? {
             let e = &self.lines[id];
             work.step()?;
             if e.contains(p)? {
                 let mut odd = false;
-                for id in self.end_index.candidates(&p.x, work)? {
+                for id in self.end_index.point_candidates(p, work)? {
                     let q = &self.ends[id];
                     work.step()?;
                     if q == p {
@@ -472,7 +473,7 @@ impl Shape {
                 return Ok(usize::from(odd));
             }
         }
-        for id in self.point_index.candidates(&p.x, work)? {
+        for id in self.point_index.point_candidates(p, work)? {
             let q = &self.points[id];
             work.step()?;
             if q == p {
@@ -504,7 +505,7 @@ fn perturbed_sign(value: &Q, delta: &Q) -> Ordering {
 }
 fn ring_contains(
     ring: &[Edge],
-    index: &IntervalIndex,
+    index: &SegmentIndex,
     p: &P,
     direction: Option<&P>,
     work: &mut Work<'_>,
@@ -516,7 +517,7 @@ fn ring_contains(
     };
     let d = direction.unwrap_or(&zero);
     let mut inside = false;
-    for id in index.candidates(&p.y, work)? {
+    for id in index.ray_candidates(p, work)? {
         let e = &ring[id];
         work.step()?;
         let above = |y: &Q| -> Result<bool, PredicateError> {
@@ -694,14 +695,59 @@ pub fn relate(
     relate_impl(left, right, work, true)
 }
 
-#[cfg(test)]
-#[deny(clippy::disallowed_methods)]
-pub(super) fn relate_validated(
+pub fn relate_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     work: &mut Work<'_>,
 ) -> Result<De9imMatrix, PredicateError> {
     relate_impl(left, right, work, false)
+}
+
+fn matrix_from_cells(cells: &[u8; 9], work: &mut Work<'_>) -> Result<De9imMatrix, PredicateError> {
+    work.step()?;
+    let text = std::str::from_utf8(cells)
+        .map_err(|_| PredicateError::CalcoloNonConcluso("celle DE-9IM"))?;
+    text.parse()
+        .map(De9imMatrix)
+        .map_err(|_| PredicateError::CalcoloNonConcluso("celle DE-9IM"))
+}
+
+// Un punto ha interno di dimensione zero e frontiera vuota. Togliere un
+// punto da interno/frontiera di un poligono non vuoto non cambia 2/1.
+fn point_polygon_matrix(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    a: &Shape,
+    b: &Shape,
+    work: &mut Work<'_>,
+) -> Result<Option<De9imMatrix>, PredicateError> {
+    let (points, area, transpose) = match (left, right) {
+        (Geometry::Point(_), Geometry::Polygon(_)) => (&a.points, b, false),
+        (Geometry::Polygon(_), Geometry::Point(_)) => (&b.points, a, true),
+        _ => return Ok(None),
+    };
+    let Some(point) = points.first() else {
+        return Ok(None);
+    };
+    if area
+        .polygons
+        .first()
+        .and_then(|rings| rings.first())
+        .is_none_or(|ring| ring.is_empty())
+    {
+        return Ok(None);
+    }
+    let mut cells = [b'F'; 9];
+    cells[area.position(point, work)?] = b'0';
+    cells[6] = b'2';
+    cells[7] = b'1';
+    cells[8] = b'2';
+    if transpose {
+        cells.swap(1, 3);
+        cells.swap(2, 6);
+        cells.swap(5, 7);
+    }
+    matrix_from_cells(&cells, work).map(Some)
 }
 
 fn relate_impl(
@@ -723,6 +769,12 @@ fn relate_impl(
     if check_input {
         a.validate_rings("left", work)?;
         b.validate_rings("right", work)?;
+    }
+    // This shortcut requires complete topology validation by the caller.
+    if !check_input {
+        if let Some(matrix) = point_polygon_matrix(left, right, &a, &b, work)? {
+            return Ok(matrix);
+        }
     }
     let mut a_connected = std::mem::take(&mut a.connected);
     let mut b_connected = std::mem::take(&mut b.connected);
@@ -791,12 +843,7 @@ fn relate_impl(
             }
         }
     }
-    work.step()?;
-    let text = std::str::from_utf8(&cells)
-        .map_err(|_| PredicateError::CalcoloNonConcluso("celle DE-9IM"))?;
-    text.parse()
-        .map(De9imMatrix)
-        .map_err(|_| PredicateError::CalcoloNonConcluso("celle DE-9IM"))
+    matrix_from_cells(&cells, work)
 }
 
 #[deny(clippy::disallowed_methods)]
@@ -818,6 +865,59 @@ mod tests {
                 })
                 .collect(),
         ))
+    }
+
+    #[test]
+    fn point_polygon_fast_matrix_matches_exhaustive() {
+        for scale in [f64::from_bits(1), 1e-300, 1., 1e300] {
+            let ring = |low: f64, high: f64| {
+                geo::LineString::from(vec![
+                    (low * scale, low * scale),
+                    (high * scale, low * scale),
+                    (high * scale, high * scale),
+                    (low * scale, high * scale),
+                    (low * scale, low * scale),
+                ])
+            };
+            for holes in [vec![], vec![ring(2., 6.)]] {
+                let area = Geometry::Polygon(geo::Polygon::new(ring(0., 8.), holes));
+                for (x, y) in [
+                    (-1., 3.),
+                    (0., 0.),
+                    (0., 4.),
+                    (1., 1.),
+                    (2., 4.),
+                    (4., 4.),
+                    (6., 4.),
+                    (8., 8.),
+                    (9., 4.),
+                ] {
+                    let point = Geometry::Point(geo::Point::new(x * scale, y * scale));
+                    for (a, b) in [(&point, &area), (&area, &point)] {
+                        let mut indexed = Work::new(RelateLimits::default(), None);
+                        let actual = relate_validated(a, b, &mut indexed).unwrap();
+                        let mut brute = Work::new(RelateLimits::default(), None);
+                        let expected =
+                            crate::predicates::arrangement_exhaustive::relate(a, b, &mut brute)
+                                .unwrap();
+                        assert_eq!(actual.to_string(), expected.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn point_polygon_rejects_hole_outside_shell() {
+        let point = geometry("POINT(1 1)");
+        let area = geometry("POLYGON((0 0,4 0,4 4,0 4,0 0),(10 10,12 10,12 12,10 12,10 10))");
+        for (a, b) in [(&point, &area), (&area, &point)] {
+            let mut work = Work::new(RelateLimits::default(), None);
+            assert!(matches!(
+                relate(a, b, &mut work),
+                Err(PredicateError::InvalidGeometry { .. })
+            ));
+        }
     }
 
     #[test]
@@ -871,6 +971,34 @@ mod tests {
                     RelateLimits::default().max_steps
                 );
             }
+        }
+    }
+
+    #[test]
+    fn sparse_vertical_relate_growth() {
+        let left = geometry("LINESTRING(0 -4,1 -3)");
+        let mut previous = None;
+        for count in [1024, 2048, 4096] {
+            let right = Geometry::MultiLineString(geo::MultiLineString(
+                (0..count)
+                    .map(|i| {
+                        let y = f64::from(i) * 4.;
+                        line_string![(x:0., y:y), (x:1., y:y+1.)]
+                    })
+                    .collect(),
+            ));
+            let mut work = Work::new(RelateLimits::default(), None);
+            let matrix = relate(&left, &right, &mut work).expect("limiti predefiniti");
+            assert_eq!(matrix.to_string(), "FF1FF0102");
+            println!(
+                "relate verticale n={count} steps={} peak={}",
+                work.steps,
+                work.peak_bytes()
+            );
+            if let Some(before) = previous {
+                assert!(work.steps < before * 5 / 2);
+            }
+            previous = Some(work.steps);
         }
     }
 
@@ -1266,3 +1394,371 @@ pub mod line_boolean;
 pub mod polygon_boolean;
 /// Completamento planare delle facce con provenienza dei lati.
 pub mod polygon_completion;
+
+/// Distanza planare: contenimento areale e primitive metriche condividono
+/// lo stesso bilancio razionale e gli indici dei segmenti.
+pub fn distance(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    work: &mut Work<'_>,
+) -> Result<f64, PredicateError> {
+    distance_impl(left, right, work, true)
+}
+
+fn distance_impl(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    work: &mut Work<'_>,
+    indexed: bool,
+) -> Result<f64, PredicateError> {
+    distance_key(left, right, work, indexed)?.rounded(work)
+}
+
+// Oracolo metrico senza filtri di anello, poligono o segmento.
+fn area_contains_exhaustive(
+    shape: &Shape,
+    point: &P,
+    work: &mut Work<'_>,
+) -> Result<bool, PredicateError> {
+    fn ring_contains_all(
+        ring: &[Edge],
+        point: &P,
+        work: &mut Work<'_>,
+    ) -> Result<bool, PredicateError> {
+        let mut inside = false;
+        for edge in ring {
+            work.step()?;
+            let above_a = edge.a.y.try_cmp(&point.y)?.is_gt();
+            let above_b = edge.b.y.try_cmp(&point.y)?.is_gt();
+            if above_a != above_b {
+                let x = edge.a.x.try_add(
+                    &point
+                        .y
+                        .try_sub(&edge.a.y)?
+                        .try_mul(&edge.b.x.try_sub(&edge.a.x)?)?
+                        .try_div(&edge.b.y.try_sub(&edge.a.y)?)?,
+                )?;
+                if x.try_cmp(&point.x)?.is_gt() {
+                    inside = !inside;
+                }
+            }
+        }
+        Ok(inside)
+    }
+    for rings in &shape.polygons {
+        work.step()?;
+        if let Some(exterior) = rings.first() {
+            if ring_contains_all(exterior, point, work)? {
+                let mut hole = false;
+                for ring in rings.iter().skip(1) {
+                    if ring_contains_all(ring, point, work)? {
+                        hole = true;
+                        break;
+                    }
+                }
+                if !hole {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+pub fn distance_key(
+    left: &Geometry<f64>,
+    right: &Geometry<f64>,
+    work: &mut Work<'_>,
+    indexed: bool,
+) -> Result<crate::segment_index::DistanceKey, PredicateError> {
+    use crate::segment_index::DistanceKey;
+    if let (Geometry::Point(a), Geometry::Point(b)) = (left, right) {
+        return DistanceKey::coordinates(a.0, b.0, b.0, work);
+    }
+
+    let mut a = Shape::default();
+    let mut b = Shape::default();
+    a.geometry(left, work)?;
+    b.geometry(right, work)?;
+    if indexed {
+        a.build_indices(work)?;
+        b.build_indices(work)?;
+    }
+    for (source, target) in [(&a, &b), (&b, &a)] {
+        if !target.polygons.is_empty() {
+            for p in source
+                .points
+                .iter()
+                .chain(source.ends.iter())
+                .chain(source.edges().map(|e| &e.a))
+            {
+                work.step()?;
+                let contained = if indexed {
+                    target.area_contains(p, None, work)?
+                } else {
+                    area_contains_exhaustive(target, p, work)?
+                };
+                if contained {
+                    return DistanceKey::zero(work);
+                }
+            }
+        }
+    }
+    let collect =
+        |shape: &Shape, work: &mut Work<'_>| -> Result<CountedVec<Edge>, PredicateError> {
+            let mut edges = CountedVec::new();
+            for edge in shape.edges() {
+                work.step()?;
+                work.push(
+                    &mut edges,
+                    Edge {
+                        a: edge.a.try_clone()?,
+                        b: edge.b.try_clone()?,
+                    },
+                )?;
+            }
+            for p in shape.points.iter().chain(shape.ends.iter()) {
+                work.step()?;
+                work.push(
+                    &mut edges,
+                    Edge {
+                        a: p.try_clone()?,
+                        b: p.try_clone()?,
+                    },
+                )?;
+            }
+            Ok(edges)
+        };
+    let aa = collect(&a, work)?;
+    let bb = collect(&b, work)?;
+    let mut best = None;
+    if indexed {
+        let index = SegmentIndex::edges(bb.iter(), work)?;
+        for edge in &aa {
+            index.nearest(edge, &bb, &mut best, work)?;
+        }
+    } else {
+        for edge in &aa {
+            for other in &bb {
+                let candidate = DistanceKey::segments(edge, other, work)?;
+                if let Some(current) = &mut best {
+                    current.select(candidate)?;
+                } else {
+                    best = Some(candidate);
+                }
+            }
+        }
+    }
+    best.ok_or(PredicateError::AccuracyUnproven)
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod metric_tests {
+    use super::*;
+    use crate::predicates::RelateLimits;
+    use geo::line_string;
+    use proptest::prelude::*;
+
+    fn run(a: &Geometry<f64>, b: &Geometry<f64>, indexed: bool) -> f64 {
+        distance_impl(a, b, &mut Work::new(RelateLimits::default(), None), indexed).unwrap()
+    }
+
+    #[test]
+    fn metric_polygons_holes_and_boundaries_match_exhaustive() {
+        for scale in [f64::from_bits(1), 1e-300, 1., 1e300] {
+            let ring = |low: f64, high: f64| {
+                geo::LineString::from(vec![
+                    (low * scale, low * scale),
+                    (high * scale, low * scale),
+                    (high * scale, high * scale),
+                    (low * scale, high * scale),
+                    (low * scale, low * scale),
+                ])
+            };
+            let area = Geometry::Polygon(geo::Polygon::new(ring(0., 8.), vec![ring(2., 6.)]));
+            for (x, y) in [(1., 1.), (4., 4.), (9., 4.), (0., 4.), (2., 4.)] {
+                let point = Geometry::Point(geo::Point::new(x * scale, y * scale));
+                assert_eq!(
+                    run(&area, &point, true).to_bits(),
+                    run(&area, &point, false).to_bits()
+                );
+                assert_eq!(
+                    run(&point, &area, true).to_bits(),
+                    run(&point, &area, false).to_bits()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn metric_underflow_regression_and_vertex_reversal() {
+        let mut a = geo::line_string![(x:0.,y:1e-300),(x:1.,y:1e-300),(x:1.,y:0.),(x:0.,y:0.)];
+        let b = Geometry::LineString(geo::line_string![(x:0.25,y:2.5e-301),(x:0.75,y:2.5e-301)]);
+        for _ in 0..2 {
+            let g = Geometry::LineString(a.clone());
+            for indexed in [false, true] {
+                assert_eq!(run(&g, &b, indexed).to_bits(), 2.5e-301_f64.to_bits());
+            }
+            let minimum =
+                crate::analysis::minimum_distances(&[Some(g.clone())], &[Some(b.clone())], 100)
+                    .unwrap();
+            assert_eq!(minimum[0].unwrap().to_bits(), 2.5e-301_f64.to_bits());
+            let nearest =
+                crate::analysis::nearest_matches(&[Some(g)], &[Some(b.clone())], None, 100, 100)
+                    .unwrap();
+            assert_eq!(nearest[0].distance.to_bits(), 2.5e-301_f64.to_bits());
+            a.0.reverse();
+        }
+    }
+
+    #[test]
+    fn metric_extreme_scales_and_degenerate_segments() {
+        for s in [f64::from_bits(1), 1e-300, 1.0, 1e300] {
+            let a = Geometry::Line(geo::Line::new((0., 0.), (4. * s, 0.)));
+            for b in [
+                geo::Line::new((s, s), (3. * s, s)),
+                geo::Line::new((s, 0.), (3. * s, 0.)),
+                geo::Line::new((s, s), (s, s)),
+                geo::Line::new((s, -s), (s, s)),
+            ] {
+                let b = Geometry::Line(b);
+                assert_eq!(run(&a, &b, true).to_bits(), run(&a, &b, false).to_bits());
+                assert_eq!(run(&b, &a, true).to_bits(), run(&a, &b, false).to_bits());
+            }
+            assert_eq!(
+                run(&a, &Geometry::Point(geo::Point::new(s, s)), true).to_bits(),
+                s.to_bits()
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+        #[test]
+        fn metric_index_matches_exhaustive(a in prop::collection::vec((-10i16..10,-10i16..10),2..9), b in prop::collection::vec((-10i16..10,-10i16..10),2..9), scale in 0usize..4) {
+            let s = [f64::from_bits(1),1e-300,1.0,1e300][scale];
+            let make = |v: &[(i16,i16)]| Geometry::LineString(geo::LineString::from(v.iter().map(|&(x,y)| (f64::from(x)*s,f64::from(y)*s)).collect::<Vec<_>>()));
+            let aa=make(&a); let bb=make(&b);
+            let reversed=make(&a.iter().rev().copied().collect::<Vec<_>>());
+            let mut work = Work::new(RelateLimits::default(), None);
+            let indexed = distance_key(&aa, &bb, &mut work, true).unwrap();
+            let exhaustive = distance_key(&aa, &bb, &mut work, false).unwrap();
+            let backwards = distance_key(&reversed, &bb, &mut work, true).unwrap();
+            prop_assert_eq!(indexed.compare(&exhaustive).unwrap(), std::cmp::Ordering::Equal);
+            prop_assert_eq!(indexed.compare(&backwards).unwrap(), std::cmp::Ordering::Equal);
+            let actual = indexed.rounded(&mut work).map(f64::to_bits);
+            prop_assert!(matches!(actual, Ok(_) | Err(PredicateError::AccuracyUnproven)));
+            prop_assert_eq!(&actual, &exhaustive.rounded(&mut work).map(f64::to_bits));
+            prop_assert_eq!(actual, backwards.rounded(&mut work).map(f64::to_bits));
+        }
+    }
+
+    #[test]
+    fn metric_positive_below_minimum_subnormal_is_explicit() {
+        let scale = f64::from_bits(1);
+        let a = Geometry::LineString(geo::LineString::from(vec![
+            (5. * scale, -4. * scale),
+            (0., 0.),
+        ]));
+        let b = Geometry::LineString(geo::LineString::from(vec![
+            (0., 2. * scale),
+            (6. * scale, -5. * scale),
+        ]));
+        for indexed in [true, false] {
+            let mut work = Work::new(RelateLimits::default(), None);
+            let key = distance_key(&a, &b, &mut work, indexed).unwrap();
+            assert!(!key.within(0., &work).unwrap());
+            assert_eq!(
+                key.rounded(&mut work),
+                Err(PredicateError::AccuracyUnproven)
+            );
+        }
+    }
+
+    #[test]
+    fn metric_exact_limits_and_interruption() {
+        let a = Geometry::Line(geo::Line::new((0., 0.), (2., 0.)));
+        let b = Geometry::Line(geo::Line::new((0., 1.), (2., 1.)));
+        let mut measured = Work::new(RelateLimits::default(), None);
+        let expected = distance(&a, &b, &mut measured).unwrap();
+        let limits = RelateLimits {
+            max_steps: measured.steps,
+            max_reserved_bytes: measured.peak_bytes(),
+            ..RelateLimits::default()
+        };
+        assert_eq!(
+            distance(&a, &b, &mut Work::new(limits, None))
+                .unwrap()
+                .to_bits(),
+            expected.to_bits()
+        );
+        assert!(matches!(
+            distance(
+                &a,
+                &b,
+                &mut Work::new(
+                    RelateLimits {
+                        max_steps: limits.max_steps - 1,
+                        ..limits
+                    },
+                    None
+                )
+            ),
+            Err(PredicateError::WorkLimit)
+        ));
+        assert!(matches!(
+            distance(
+                &a,
+                &b,
+                &mut Work::new(
+                    RelateLimits {
+                        max_reserved_bytes: limits.max_reserved_bytes - 1,
+                        ..limits
+                    },
+                    None
+                )
+            ),
+            Err(PredicateError::ReservationLimit)
+        ));
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        assert!(matches!(
+            distance(&a, &b, &mut Work::new(limits, Some(&cancelled))),
+            Err(PredicateError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn metric_sparse_growth() {
+        let mut previous = 0;
+        for n in [1024, 2048, 4096] {
+            let make = |offset| {
+                Geometry::MultiLineString(geo::MultiLineString(
+                    (0..n)
+                        .map(|i| {
+                            geo::LineString::from(vec![
+                                (f64::from(i) * 4., offset),
+                                (f64::from(i).mul_add(4., 1.), offset),
+                            ])
+                        })
+                        .collect(),
+                ))
+            };
+            let mut work = Work::new(RelateLimits::default(), None);
+            assert_eq!(
+                distance(&make(0.), &make(1.), &mut work).unwrap().to_bits(),
+                1_f64.to_bits()
+            );
+            eprintln!(
+                "metric n={n} steps={} pairs={} bytes={}",
+                work.steps,
+                work.pairs,
+                work.peak_bytes()
+            );
+            if previous > 0 {
+                assert!(work.steps * 2 < previous * 5);
+            }
+            previous = work.steps;
+        }
+    }
+}

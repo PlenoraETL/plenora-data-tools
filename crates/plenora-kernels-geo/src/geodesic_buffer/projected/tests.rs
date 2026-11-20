@@ -57,38 +57,40 @@ fn boundary_witness(point: Coord, geometry: &Geometry, ellipsoid: &EllissoideGeo
         Geometry::MultiPolygon(p) => p.0.as_slice(),
         _ => panic!("superficie richiesta"),
     };
-    let mut best = f64::INFINITY;
-    let mut witness = point;
+    let mut best: Option<crate::segment_index::DistanceKey> = None;
+    let mut work = Work::new(limits().overlay.work, None);
+    let mut witness = (point, point);
     for polygon in polygons {
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
             for pair in ring.0.windows(2) {
                 let a = pair[0];
                 let b = pair[1];
-                let dx = b.x - a.x;
-                let dy = b.y - a.y;
-                let fraction = ((point.x - a.x).mul_add(dx, (point.y - a.y) * dy)
-                    / dx.mul_add(dx, dy * dy))
-                .clamp(0.0, 1.0);
-                let lon = dx.mul_add(fraction, a.x);
-                let lat = dy.mul_add(fraction, a.y);
-                let delta_lon = lon - point.x;
-                let delta_lat = lat - point.y;
                 // Qualunque punto del lato e' un testimone valido: la scelta
                 // in coordinate non presume che sia il minimo geodetico.
-                let squared = delta_lon.mul_add(delta_lon, delta_lat * delta_lat);
-                if squared < best {
-                    best = squared;
-                    witness = Coord { x: lon, y: lat };
+                let distance =
+                    crate::segment_index::DistanceKey::coordinates(point, a, b, &mut work).unwrap();
+                if best
+                    .as_ref()
+                    .is_none_or(|previous| distance.compare(previous).unwrap().is_lt())
+                {
+                    best = Some(distance);
+                    witness = (a, b);
                 }
             }
         }
     }
-    if best.is_finite() {
+    if best.is_some() {
+        let (a, b) = witness;
+        let fraction = crate::segment_index::projection_parameter(point, a, b, &mut work).unwrap();
+        let witness = Coord {
+            x: (b.x - a.x).mul_add(fraction, a.x),
+            y: (b.y - a.y).mul_add(fraction, a.y),
+        };
         ellipsoid
             .geodetica()
             .inverse(point.y, point.x, witness.y, witness.x)
     } else {
-        best
+        f64::INFINITY
     }
 }
 
@@ -153,6 +155,7 @@ fn equatorial_width_and_dense_boundary() {
         _ => panic!("superficie richiesta"),
     };
     for (longitude, start) in [(9.0, 180.0), (9.00001, 0.0)] {
+        let mut work = Work::new(limits().overlay.work, None);
         for i in 0..=512 {
             let azimuth = start + f64::from(i) * 180.0 / 512.0;
             let (y, x): (f64, f64) = ellipsoid.geodetica().direct(0.0, longitude, azimuth, 100.0);
@@ -163,8 +166,9 @@ fn equatorial_width_and_dense_boundary() {
                     let b = pair[1];
                     let dx = b.x - a.x;
                     let dy = b.y - a.y;
-                    let t = ((x - a.x).mul_add(dx, (y - a.y) * dy) / dx.mul_add(dx, dy * dy))
-                        .clamp(0.0, 1.0);
+                    let t =
+                        crate::segment_index::projection_parameter(Coord { x, y }, a, b, &mut work)
+                            .unwrap();
                     let distance: f64 =
                         ellipsoid
                             .geodetica()
@@ -766,6 +770,11 @@ fn erosion_square_and_hole_karney_width() {
     // copertura continua dell'erosione e distanza delle due frontiere opposte.
     let crs = resolve_crs("EPSG:4326", "crs").unwrap();
     let ellipsoid = EllissoideGeodetico::da_crs(&crs).unwrap();
+    // Questo e' un oracolo geometrico; le soglie di risorsa sono provate
+    // separatamente. Le query metriche esatte restano tutte contabilizzate.
+    let mut budget = limits();
+    budget.overlay.work.max_steps = 16_000_000_000;
+    budget.overlay.work.max_segment_pairs = 100_000_000;
     for latitude in [0.0, 45.0] {
         for hole in [false, true] {
             let source = square_with_hole(latitude);
@@ -781,7 +790,7 @@ fn erosion_square_and_hole_karney_width() {
                 &[-0.1],
                 0.01,
                 false,
-                limits(),
+                budget,
                 None,
             )
             .unwrap()
@@ -952,6 +961,8 @@ fn zero_union_touching_surfaces() {
 fn erosion_difference_thresholds_and_interruptions() {
     // C1: GOP-027/028; soglie e iniezioni nel Work della differenza e della
     // copertura continua, docs/buffer-proiezione.md. Rettangoli analitici.
+    // La fixture di 20 cm mantiene le fasi e le soglie dinamiche, senza
+    // moltiplicare i campioni metrici esatti lungo un bordo di due metri.
     let crs = resolve_crs("EPSG:4326", "crs").unwrap();
     let ring = |low, high| {
         LineString::from(vec![
@@ -962,8 +973,8 @@ fn erosion_difference_thresholds_and_interruptions() {
             (low, low),
         ])
     };
-    let operand = Geometry::Polygon(Polygon::new(ring(0.0, 2.0), vec![]));
-    let corridors = Geometry::Polygon(Polygon::new(ring(-0.1, 2.1), vec![ring(0.1, 1.9)]));
+    let operand = Geometry::Polygon(Polygon::new(ring(0.0, 0.2), vec![]));
+    let corridors = Geometry::Polygon(Polygon::new(ring(-0.01, 0.21), vec![ring(0.01, 0.19)]));
     let mut certificate = empty_certificate(&crs);
     certificate.numerical_m = 0.0002;
     certificate.stability_m = 0.005;
@@ -982,7 +993,7 @@ fn erosion_difference_thresholds_and_interruptions() {
     difference(
         &operand,
         &corridors,
-        0.1,
+        0.01,
         &mut { certificate },
         limits(),
         &mut work,
@@ -996,7 +1007,7 @@ fn erosion_difference_thresholds_and_interruptions() {
         let outcome = difference(
             &operand,
             &corridors,
-            0.1,
+            0.01,
             &mut { certificate },
             bound,
             &mut work,
@@ -1027,7 +1038,7 @@ fn erosion_difference_thresholds_and_interruptions() {
             let outcome = difference(
                 &operand,
                 &corridors,
-                0.1,
+                0.01,
                 &mut { certificate },
                 limits(),
                 &mut work,
@@ -1061,7 +1072,7 @@ fn erosion_difference_thresholds_and_interruptions() {
         let outcome = difference(
             &operand,
             &corridors,
-            0.1,
+            0.01,
             &mut { certificate },
             bound,
             &mut work,
@@ -1087,7 +1098,7 @@ fn erosion_difference_thresholds_and_interruptions() {
         erosion::certify(
             &operand,
             &Geometry::Polygon(Polygon::empty()),
-            0.1,
+            0.01,
             &certificate,
             &mut work
         ),
@@ -1095,7 +1106,7 @@ fn erosion_difference_thresholds_and_interruptions() {
     ));
     let mut work = Work::new(limits().overlay.work, None);
     assert!(matches!(
-        erosion::certify(&operand, &operand, 0.9999, &certificate, &mut work),
+        erosion::certify(&operand, &operand, 0.0999, &certificate, &mut work),
         Err(UnionBufferError::Disk(BufferFailure::AccuracyUnproven))
     ));
 }

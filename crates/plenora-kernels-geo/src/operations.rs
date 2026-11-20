@@ -12,10 +12,10 @@ use crate::rust_backend::buffer::{buffer_controllato_con_margine, ErroreBuffer, 
 use crate::rust_backend::griglia;
 use crate::rust_backend::precision::Precision;
 use crate::ValidazioneProtetta as _;
-use geo::algorithm::line_measures::{Distance, Euclidean, Length};
+use geo::algorithm::line_measures::{Euclidean, Length};
 use geo::{
     Area, BoundingRect, Coord, CoordsIter, Geometry, InteriorPoint, LineString, MapCoords,
-    MultiLineString, MultiPoint, Simplify, SimplifyVwPreserve,
+    MultiLineString, MultiPoint,
 };
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -54,6 +54,9 @@ pub enum SimplifyPolicy {
 /// coordinate o valori delle geometrie.
 #[derive(Debug, Error)]
 pub enum OperationError {
+    /// Errore del percorso razionale: categoria e limiti preservati.
+    #[error(transparent)]
+    Exact(#[from] crate::predicates::PredicateError),
     /// Un parametro fuori dominio (nome e ragione statici).
     #[error("parametro {name} non valido: {reason}")]
     InvalidParameter {
@@ -219,7 +222,10 @@ pub fn distance(
     if left.coords_count() == 0 || right.coords_count() == 0 {
         return Ok(None);
     }
-    protetto(|| Euclidean.distance(left, right)).map(Some)
+    let mut work = crate::noding::Work::new(crate::predicates::RelateLimits::default(), None);
+    crate::predicates::arrangement_indexed::distance(left, right, &mut work)
+        .map(Some)
+        .map_err(OperationError::Exact)
 }
 
 /// Rettangolo d'ingombro come `[min_x, min_y, max_x, max_y]` (kernel di
@@ -438,6 +444,7 @@ pub fn buffer_with_cap_con_margine(
     };
     let result = buffer_controllato_con_margine(geometry, distance, estremita, precision, margine)
         .map_err(|errore| match errore {
+            ErroreBuffer::Exact(error) => OperationError::Exact(error),
             ErroreBuffer::PrecisioneInsufficiente => OperationError::PrecisionInsufficient,
             ErroreBuffer::CalcoloNonConcluso(forma) => OperationError::CalcoloNonConcluso(forma),
             ErroreBuffer::MargineMemoria(superato) => OperationError::MargineMemoria(superato),
@@ -477,22 +484,18 @@ pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64
 /// membro. Con `tolerance` 0 la geometria non cambia. I vertici d'uscita
 /// sono vertici d'ingresso.
 ///
-/// Le coordinate vicine ai limiti di `f64` (modulo oltre `1e150`, o non
-/// nullo e sotto `1e-150`) sono elaborate in uno spazio scalato
-/// uniformemente e riportate alle unita' originali, per evitare overflow e
-/// underflow nei kernel a distanza quadratica. La soglia si scala con le
-/// coordinate: una distanza per il fattore, un'area per il suo quadrato.
+/// Distanze (Douglas-Peucker) e aree (VW) sono confrontate come razionali
+/// esatti sulle coordinate originali. I vertici mantenuti non sono scalati.
+/// La ricerca delle intersezioni VW e' limitata dal bilancio di lavoro.
 ///
 /// # Errors
 ///
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `InvalidParameter`: `tolerance` non e' finita oppure e' negativa, o
-///   (area, coordinate scalate) positiva ma non rappresentabile nello spazio
-///   scalato, oppure il conteggio di coordinate supera `i32::MAX` con `PreserveTopology`;
+///   il conteggio di coordinate supera `i32::MAX` con `PreserveTopology`;
 /// - `InvalidOutput`: la geometria semplificata non supera la validazione
 ///   OGC;
-/// - `Internal`: una distanza del percorso Douglas-Peucker non e'
-///   rappresentabile; nessun risultato parziale viene restituito;
+/// - `Exact`: esaurimento del bilancio razionale o calcolo non certificabile;
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
 ///   calcolo di `geo` vanno in panico dentro la barriera.
 pub fn simplify_with_policy(
@@ -520,85 +523,11 @@ pub fn simplify_with_policy(
         ));
     }
 
-    // I kernel a distanza quadratica possono traboccare (o perdere cifre)
-    // con coordinate finite vicine ai limiti di `f64`: si lavora in uno
-    // spazio scalato uniformemente e si torna alle unita' originali dopo.
-    let scale = geometry.coords_iter().fold(0.0_f64, |maximum, coordinate| {
-        maximum.max(coordinate.x.abs()).max(coordinate.y.abs())
-    });
-    let normalize = scale > 1e150 || (scale > 0.0 && scale < 1e-150);
-    let working = if normalize {
-        geometry.map_coords(|coordinate| Coord {
-            x: coordinate.x / scale,
-            y: coordinate.y / scale,
-        })
-    } else {
-        geometry.clone()
-    };
-    let working_tolerance = if normalize {
-        // Una distanza si scala con il fattore, un'area con il suo quadrato
-        // (in due divisioni: `scale * scale` traboccherebbe).
-        let value = match policy {
-            SimplifyPolicy::DouglasPeucker => tolerance / scale,
-            SimplifyPolicy::PreserveTopology => tolerance / scale / scale,
-        };
-        if value.is_finite() {
-            if tolerance > 0.0 && !value.is_normal() {
-                // Una soglia positiva che nello spazio scalato diventa zero,
-                // o subnormale (cifre perse), cambierebbe in silenzio quali
-                // vertici cadono: meglio dirlo che semplificare diversamente.
-                return Err(OperationError::InvalidParameter {
-                    name: "tolerance",
-                    reason: "non rappresentabile nella scala delle coordinate",
-                });
-            }
-            value
-        } else {
-            f64::MAX
-        }
-    } else {
-        tolerance
-    };
-
     if policy == SimplifyPolicy::DouglasPeucker {
-        protetto(|| rdp::accerta_distanze(&working, working_tolerance))??;
+        return validate_output(rdp::simplify(geometry, tolerance)?);
     }
-    let simplified = protetto(|| match (&working, policy) {
-        (Geometry::LineString(value), SimplifyPolicy::DouglasPeucker) => {
-            Geometry::LineString(value.simplify(working_tolerance))
-        }
-        (Geometry::MultiLineString(value), SimplifyPolicy::DouglasPeucker) => {
-            Geometry::MultiLineString(value.simplify(working_tolerance))
-        }
-        (Geometry::Polygon(value), SimplifyPolicy::DouglasPeucker) => {
-            Geometry::Polygon(value.simplify(working_tolerance))
-        }
-        (Geometry::MultiPolygon(value), SimplifyPolicy::DouglasPeucker) => {
-            Geometry::MultiPolygon(value.simplify(working_tolerance))
-        }
-        (Geometry::LineString(value), SimplifyPolicy::PreserveTopology) => {
-            Geometry::LineString(value.simplify_vw_preserve(working_tolerance))
-        }
-        (Geometry::MultiLineString(value), SimplifyPolicy::PreserveTopology) => {
-            Geometry::MultiLineString(value.simplify_vw_preserve(working_tolerance))
-        }
-        (Geometry::Polygon(value), SimplifyPolicy::PreserveTopology) => {
-            Geometry::Polygon(value.simplify_vw_preserve(working_tolerance))
-        }
-        (Geometry::MultiPolygon(value), SimplifyPolicy::PreserveTopology) => {
-            Geometry::MultiPolygon(value.simplify_vw_preserve(working_tolerance))
-        }
-        (value, _) => value.clone(),
-    })?;
-    let simplified = if normalize {
-        simplified.map_coords(|coordinate| Coord {
-            x: coordinate.x * scale,
-            y: coordinate.y * scale,
-        })
-    } else {
-        simplified
-    };
-    validate_output(simplified)
+
+    validate_output(rdp::preserve_topology(geometry, tolerance)?)
 }
 
 /// Spezza un livello di multi-parte o di collezione, nell'ordine delle parti
@@ -762,19 +691,18 @@ mod prove_della_soglia_scalata {
         assert_eq!(conta(&scalata), conta(&naturale));
     }
 
-    /// Una soglia d'area positiva che nello spazio scalato diventa zero si
-    /// rifiuta, invece di non semplificare.
+    /// La soglia resta esatta anche quando una normalizzazione la annullerebbe.
     #[test]
-    fn un_area_che_si_annulla_nella_scala_si_rifiuta() {
+    fn un_area_minima_resta_confrontabile_senza_scalare() {
         let linea = Geometry::LineString(LineString::from(vec![
             (0.0, 0.0),
             (1e200, 1e199),
             (2e200, 0.0),
         ]));
-        assert!(matches!(
-            simplify_with_policy(&linea, 1e-300, SimplifyPolicy::PreserveTopology),
-            Err(OperationError::InvalidParameter { .. })
-        ));
+        assert_eq!(
+            simplify_with_policy(&linea, 1e-300, SimplifyPolicy::PreserveTopology).unwrap(),
+            linea
+        );
     }
 }
 
@@ -990,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_normalizes_extreme_coordinates_without_panicking() {
+    fn simplify_handles_extreme_coordinates_without_scaling() {
         let line = Geometry::LineString(LineString::from(vec![
             (-5.488_802_840_312_24e303, -6.971_241_357_778_827e182),
             (-5.486_124_068_793_689e303, 7.064_166_183_585_296e-304),
@@ -1001,16 +929,6 @@ mod tests {
                 SimplifyPolicy::DouglasPeucker,
                 SimplifyPolicy::PreserveTopology,
             ] {
-                if tolerance > 0.0 && policy == SimplifyPolicy::PreserveTopology {
-                    // L'area 1 in coordinate di modulo 5e303 si annulla nello
-                    // spazio scalato (il quadrato del fattore): rifiutata,
-                    // invece di non togliere i vertici degeneri.
-                    assert!(matches!(
-                        simplify_with_policy(&line, tolerance, policy),
-                        Err(OperationError::InvalidParameter { .. })
-                    ));
-                    continue;
-                }
                 let output = simplify_with_policy(&line, tolerance, policy).unwrap();
                 assert_successo!(output.validazione_protetta(), ());
                 assert!(output

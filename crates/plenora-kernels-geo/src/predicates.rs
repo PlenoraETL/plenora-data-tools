@@ -16,7 +16,7 @@ use thiserror::Error;
 mod arrangement;
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
-mod arrangement_exhaustive;
+pub(crate) mod arrangement_exhaustive;
 pub(crate) mod arrangement_indexed;
 pub(crate) mod interval_index;
 
@@ -274,7 +274,7 @@ pub enum SpatialPredicate {
 
 /// Errori di [`evaluate`] e [`evaluate_validated`]. `side` e' `"left"` o
 /// `"right"`; nessun messaggio riporta coordinate.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum PredicateError {
     /// Tipo escluso dal profilo richiesto.
     #[error("tipo geometrico non supportato")]
@@ -319,6 +319,36 @@ pub enum PredicateError {
     /// *forma* del payload, mai il contenuto.
     #[error("predicato non concluso: {0} (contenuto non pubblicato)")]
     CalcoloNonConcluso(&'static str),
+}
+
+impl PredicateError {
+    /// Categoria invariata negli adapter dei calcoli razionali condivisi.
+    pub(crate) fn in_core(&self, operation: &str) -> plenora_core::PlenoraError {
+        use plenora_core::PlenoraError;
+        let message = format!("{operation}: {self}");
+        match self {
+            Self::WorkLimit | Self::ReservationLimit | Self::AllocationFailed => {
+                PlenoraError::ResourceLimit(message)
+            }
+            Self::AccuracyUnproven => PlenoraError::Execution {
+                node: String::new(),
+                operation: operation.to_owned(),
+                execution_id: String::new(),
+                reason: message,
+            },
+            Self::Cancelled => PlenoraError::Cancelled(message),
+            Self::DeadlineExceeded => PlenoraError::Timeout(message),
+            Self::UnsupportedGeometry | Self::InvalidRoundedTopology => {
+                PlenoraError::Unsupported(message)
+            }
+            Self::NonFiniteCoordinate { .. } | Self::InvalidGeometry { .. } => {
+                PlenoraError::InvalidPlan(message)
+            }
+            Self::ValidazioneNonConclusa(_) | Self::CalcoloNonConcluso(_) => {
+                PlenoraError::Internal(message)
+            }
+        }
+    }
 }
 
 /// Mappa l'esito della barriera sull'errore proprio di questo modulo,
