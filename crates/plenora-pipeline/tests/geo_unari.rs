@@ -1825,3 +1825,51 @@ fn il_poligono_vuoto_da_wkt_si_rilegge_nel_passo_dopo() {
     }
     assert_eq!(esito.outputs[1].1.num_rows(), 3);
 }
+
+#[test]
+fn policy_riproiezione_conservate_in_catena_e_concat_destra() {
+    // Fonte contratti 1 e 2: provenienza cumulativa, anche quando solo il secondo
+    // ramo della concatenazione ha autorizzato la perdita di accuratezza.
+    use plenora_core::contract::geometry_metadata_policy::{
+        REPROJECTION_CLAMP_KEY, REPROJECTION_EXTRAPOLATION_KEY,
+    };
+    for (source, config, key) in [
+        (
+            "EPSG:4326",
+            json!({"target_crs":"EPSG:3857", "clamp_web_mercator":true}),
+            REPROJECTION_CLAMP_KEY,
+        ),
+        (
+            "EPSG:4258",
+            json!({"target_crs":"EPSG:3857", "trasformazioni":[1149], "estrapola_trasformazioni":true}),
+            REPROJECTION_EXTRAPOLATION_KEY,
+        ),
+    ] {
+        let pipeline = piano(
+            &["plain", "source"],
+            vec![
+                passo("projected", "geo.reproject", &["source"], config),
+                passo(
+                    "changed",
+                    "geo.translate",
+                    &["projected"],
+                    json!({"x_offset":1.0,"y_offset":0.0}),
+                ),
+                passo("merged", "table.concat", &["plain", "changed"], json!({})),
+            ],
+            &["merged"],
+        );
+        let source = tabella(source, &[Some(Geometry::Point(Point::new(120.0, 80.0)))]);
+        let plain = tabella("EPSG:3857", &[Some(Geometry::Point(Point::new(0.0, 0.0)))]);
+        let output = esegui(&pipeline, &[("plain", plain), ("source", source)])
+            .expect("pipeline con policy");
+        let batch = &output.outputs[0].1;
+        assert_eq!(batch.num_rows(), 2);
+        assert!(batch
+            .schema()
+            .field_with_name("geometry")
+            .expect("campo")
+            .metadata()
+            .contains_key(key));
+    }
+}

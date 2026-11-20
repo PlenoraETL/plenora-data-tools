@@ -896,3 +896,49 @@ fn un_header_di_pagina_oltre_la_fine_dei_dati_e_un_errore_immediato() {
         }
     }
 }
+
+#[test]
+fn provenienza_riproiezione_in_ipc_e_parquet() {
+    // Fonte contratti 1 e 2: i trasporti conservano la perdita di garanzia dichiarata;
+    // prova autonoma dalla matrice lunga dei metadati.
+    use plenora_core::arrow::array::BinaryArray;
+    use plenora_core::contract::arrow_metadata::geometry_output_field;
+    use plenora_core::contract::geometry_metadata_policy::{
+        REPROJECTION_CLAMP_KEY, REPROJECTION_EXTRAPOLATION_KEY,
+    };
+    let field = geometry_output_field("geometry", "EPSG:3857").unwrap();
+    let mut metadata = field.metadata().clone();
+    metadata.insert(
+        REPROJECTION_CLAMP_KEY,
+        "latitude_85.06_degrees;original_position_not_guaranteed",
+    );
+    metadata.insert(
+        REPROJECTION_EXTRAPOLATION_KEY,
+        "parametric_only;accuracy_not_guaranteed_outside_area",
+    );
+    metadata.insert("plenora.geometry.axis_order", "easting_northing");
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![field.with_metadata(metadata.clone())],
+        HashMap::from([("plenora.contract.version".to_owned(), "1".to_owned())]),
+    ));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(BinaryArray::from(vec![None::<&[u8]>]))],
+    )
+    .unwrap();
+    let dir = cartella();
+    for (name, format) in [
+        ("policy.arrow", Formato::ArrowIpc),
+        ("policy.parquet", Formato::Parquet),
+    ] {
+        let path = dir.path().join(name);
+        scrivi_tabella(&batch, &path, &OpzioniScrittura::default()).unwrap();
+        let read = leggi_tabella(&path, Some(format), u64::MAX).unwrap();
+        for key in [REPROJECTION_CLAMP_KEY, REPROJECTION_EXTRAPOLATION_KEY] {
+            assert_eq!(
+                read.schema().field(0).metadata().get(key),
+                metadata.get(key)
+            );
+        }
+    }
+}

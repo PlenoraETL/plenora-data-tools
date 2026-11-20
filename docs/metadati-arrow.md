@@ -319,6 +319,8 @@ Le chiavi utente esterne al namespace non cambiano classe implicitamente.
 | `ARROW:extension:name` | C3 |
 | `plenora.geometry.encoding` | C3 |
 | `plenora.geometry.precision` | C3 |
+| `plenora.reprojection.clamp_web_mercator` | C3, provenienza cumulativa |
+| `plenora.reprojection.extrapolation` | C3, provenienza cumulativa |
 | `plenora.geometry.native.geoparquet.primary_column` | C3 |
 | `plenora.geometry.native.geoparquet.version` | C3 |
 | `plenora.geometry.native.geoparquet.compatibilita` | C3 |
@@ -608,3 +610,13 @@ scrittura PostgreSQL o una nuova API pubblica di rapporto delle perdite.
 | `plenora.postgres.native_declaration` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
 | `plenora.postgres.native_type` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
 | `plenora.postgres.type_kind` | Conservata su Unchanged/Rows; invalidata su Values/Types/Crs/Merge |
+
+
+### Provenienza cumulativa delle policy di riproiezione
+
+Le due chiavi `plenora.reprojection.*` sopra sono marker al primo livello
+del campo Arrow: si conservano per tutti gli effetti, anche Values, Types
+e Crs, e si uniscono da entrambi i rami di Merge. Valori discordanti sono
+un errore Schema. Registrano la policy autorizzata, non una misura della
+precisione attuale o un conteggio di punti modificati. Soglie e valori sono
+in [Riproiezione, policy 6.2.0](riproiezione.md#policy-esplicite-620-clamp-ed-estrapolazione).

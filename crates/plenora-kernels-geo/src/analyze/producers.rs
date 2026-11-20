@@ -72,12 +72,7 @@ pub(in crate::analyze) fn analyze_reproject(
     let mut fields = output_fields(input);
     for campo in &mut fields {
         if campo.name() == &geometry.name {
-            *campo = crate::riproiezione::campo_riproiettato(
-                campo,
-                &target,
-                geometry.dimensions,
-                geometry.encoding,
-            )?;
+            *campo = params.campo_riproiettato(campo, geometry.dimensions, geometry.encoding)?;
         }
     }
     let reprojected = GeometryColumnContract {

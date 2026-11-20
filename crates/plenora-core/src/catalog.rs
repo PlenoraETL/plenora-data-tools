@@ -2394,9 +2394,9 @@ pub static CATALOG: &[OperationDescriptor] = &[
         KernelValidated,
         geo_fusion = TransformInPlace,
         semantic_version = 2,
-        config_schema_version = 3,
-        contract_analysis_version = 5,
-        kernel_version = 2
+        config_schema_version = 4,
+        contract_analysis_version = 6,
+        kernel_version = 3
     ),
     // --- Predicati DE-9IM, estensioni geo ------------------------------
     op!(
@@ -4279,7 +4279,8 @@ mod tests {
             ("geo.predicate_overlaps", (1, 1, 2, 1), ANALISI),
             ("geo.predicate_touches", (1, 1, 2, 1), ANALISI),
             ("geo.predicate_within", (1, 1, 2, 1), ANALISI),
-            ("geo.reproject", (2, 2, 2, 2), ANALISI),
+            // contratti 1 e 2: policy esplicite, schema e metadati della garanzia.
+            ("geo.reproject", (2, 2, 2, 2), (0, 1, 3, 1)),
             ("geo.rotate", (2, 1, 1, 1), ANALISI),
             ("geo.scale", (2, 1, 1, 1), ANALISI),
             ("geo.shared_paths", (1, 1, 1, 1), ANALISI),

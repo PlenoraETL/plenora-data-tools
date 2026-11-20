@@ -9522,6 +9522,24 @@
       "classification": "non riceve dati esterni",
       "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
       "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-core/src/crs/riproiezione.rs::nuovo_con_policy": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso Arrow; CRS, policy o coordinate scalari validate dal riproiettore.",
+      "signature": "pub fn nuovo_con_policy( sorgente: &ResolvedCrs, destinazione: &ResolvedCrs, opzioni: &OpzioniRiproiezione, policy: PolicyRiproiezione, ) -> Result<Self, CrsError>"
+    },
+    "crates/plenora-core/src/crs/riproiezione.rs::policy": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso Arrow; CRS, policy o coordinate scalari validate dal riproiettore.",
+      "signature": "pub const fn policy(&self) -> PolicyRiproiezione"
+    },
+    "crates/plenora-core/src/crs/riproiezione.rs::trasforma_esito": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso Arrow; CRS, policy o coordinate scalari validate dal riproiettore.",
+      "signature": "pub fn trasforma_esito( &self, percorso: usize, x: f64, y: f64, ) -> Result<EsitoPuntoRiproiettato, CrsError>"
     }
   },
   "rust_variants": {

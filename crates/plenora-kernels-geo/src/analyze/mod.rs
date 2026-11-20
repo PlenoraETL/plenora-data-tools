@@ -4450,11 +4450,17 @@ mod tests {
                 &[GeometryType::Polygon][..],
                 &[GeometryType::LineString][..],
             ] {
-                for target in ["EPSG:4326", "EPSG:3857", "EPSG:25832"] {
+                for config in [
+                    json!({"target_crs":"EPSG:4326"}),
+                    json!({"target_crs":"EPSG:3857"}),
+                    json!({"target_crs":"EPSG:25832"}),
+                    json!({"target_crs":"EPSG:3857", "clamp_web_mercator":true}),
+                    json!({"target_crs":"EPSG:25832", "trasformazioni":[1149], "estrapola_trasformazioni":true}),
+                ] {
+                    let target = config["target_crs"].as_str().expect("target");
                     let contract = ingresso_con_crs(builtin_crs("EPSG:32632"), tipi, true);
                     // Verso ETRS89 nessuna accuratezza da accettare: WGS 84 ed
                     // ETRS89 sono equivalenti per convenzione.
-                    let config = json!({"target_crs": target});
                     let analizzato = analyze_one(
                         "geo.reproject",
                         std::slice::from_ref(&contract),

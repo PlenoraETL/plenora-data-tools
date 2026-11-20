@@ -10,6 +10,19 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Aggiunte
+
+- Web Mercator: `clamp_web_mercator` esplicito per EPSG:3857 a +/-85.06 gradi;
+  rifiuto tipizzato predefinito conservato, anche ai poli.
+- Area trasformazioni: `estrapola_trasformazioni` esplicito per percorsi imposti interamente
+  parametrici; fuori area accuratezza non garantita, griglie escluse.
+- API additive `PolicyRiproiezione`, `nuovo_con_policy`, `trasforma_esito`:
+  effetti puntuali e accuratezza dichiarati. Analisi e kernel Arrow
+  pubblicano provenienza cumulativa, conservata nelle fusioni e in IPC/Parquet.
+  Oracolo EPSG/PROJ e fixture indipendente Decimal a 80 cifre, casi di bordo.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

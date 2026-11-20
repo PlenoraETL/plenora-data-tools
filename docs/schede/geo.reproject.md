@@ -19,6 +19,8 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 
 | parametro | tipo | default | valori ammessi | significato |
 | --- | --- | --- | --- | --- |
+| `clamp_web_mercator` | booleano | `false` | target EPSG:3857 | clamp esplicito a +/-85.06 gradi, posizione originale non garantita |
+| `estrapola_trasformazioni` | booleano | `false` | percorso `trasformazioni` non vuoto senza griglie | parametri fuori area con accuratezza non garantita |
 | `target_crs` | stringa | obbligatorio | identificatore della tabella integrata (`EPSG:<codice>`, `OGC:CRS84`, forme URN), oppure PROJJSON completo equivalente | CRS d'arrivo |
 | `accuratezza_accettata_m` | numero | nessuna | finito, non negativo, con effetto | accuratezza in metri accettata per un cambio di datum oltre 1 cm |
 | `trasformazioni` | lista di interi | nessuna | codici EPSG che formano un percorso fra i due datum | percorso imposto, nell'ordine, per tutte le geometrie |
@@ -42,7 +44,10 @@ geometria: il CRS del contratto diventa il target, il metadato `geo`
 dichiara il target (dimensioni ed encoding invariati), le chiavi
 canoniche CRS della sorgente (`plenora.geometry.crs_*`,
 `plenora.geometry.srid`, `plenora.geometry.axis_order`) si tolgono, e `axis_order` si riscrive con l'ordine GIS
-normalizzato del target. Gli altri metadati del campo restano.
+normalizzato del target. Gli altri metadati del campo restano. Le policy esplicite dichiarano la
+perdita di garanzia con chiavi di provenienza cumulative anche su uscita
+vuota o tutta null; dettagli e valori in
+[Riproiezione, policy 6.2.0](riproiezione.md#policy-esplicite-620-clamp-ed-estrapolazione).
 
 La successiva scrittura GeoParquet verifica tutte le colonne, anche le
 secondarie passanti, e ricalcola i bbox senza riusare covering o metadati
@@ -55,7 +60,8 @@ derivati del file sorgente ([File](file.md#geoparquet)).
 ogni cella non nulla si decodifica, si riproietta e si ricodifica; una
 cella nulla resta nulla; le altre colonne non cambiano
 ([Runner, «Operazioni geo»](runner.md#operazioni-geo)). Ogni geometria usa un solo percorso fra i datum, il primo
-dell'ordine di preferenza la cui area d'uso contiene tutti i suoi punti.
+dell'ordine di preferenza la cui area d'uso contiene tutti i suoi punti,
+salvo estrapolazione esplicita del percorso parametrico imposto.
 
 ### Ordine
 
