@@ -166,6 +166,7 @@ pub fn geodesic_densify_geometry_with_limits(
                 crate::noding::gop028::cycle(
                     "geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits:1",
                 );
+                work.checkpoint()?;
                 work.charge(0, size_of::<LineString>() as u64)?;
                 count_line(line, &ellipsoid, maximum_m, &mut work)?;
             }
@@ -217,6 +218,7 @@ pub fn geodesic_densify_geometry_with_limits(
                 crate::noding::gop028::cycle(
                     "geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits:4",
                 );
+                work.checkpoint()?;
                 output.push(emit_polygon(polygon, &ellipsoid, maximum_m, &work)?);
             }
             Geometry::MultiPolygon(MultiPolygon(output))

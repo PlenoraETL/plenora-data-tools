@@ -101,6 +101,118 @@ fn literal_range_bound(expression: &syn::Expr) -> Option<u128> {
     }
 }
 
+// Lotti chiusi: ogni ciclo deve avere una prova locale, anche rigenerando
+// il censimento. La chiusura locale NON e' il maggiorante composto di un'API.
+const CLOSED_MODULES: &[&str] = &[
+    "coordinate_mgrs.rs",
+    "geodesic_buffer/point/union.rs",
+    "geodesic_densify.rs",
+    "geodesic_densify/geometry.rs",
+    "geodesic_surface.rs",
+    "geodesic_surface/metric.rs",
+    "noding/storage.rs",
+    "offset/enclosure.rs",
+    "preserve_shape_measure/certificate.rs",
+    "preserve_shape_measure/certificate/azimuthal.rs",
+    "preserve_shape_measure/certificate/lambert.rs",
+    "preserve_shape_measure/certificate/transverse.rs",
+];
+
+/// Percorsi letti fino a `noding::check_interruption`: `DensifyWork`,
+/// `geodesic_surface::metric::Work` e `noding::Work`. Non basta il nome step
+/// in un modulo arbitrario per considerarlo un checkpoint condiviso.
+fn checkpoint_method(file: &str) -> Option<&'static str> {
+    let relative = file.strip_prefix("crates/plenora-kernels-geo/src/")?;
+    match relative {
+        "geodesic_densify.rs" | "geodesic_densify/geometry.rs" => Some("checkpoint"),
+        "geodesic_surface.rs" | "geodesic_surface/metric.rs" => Some("metric"),
+        "geodesic_buffer/point/union.rs" | "noding/storage.rs" | "offset/enclosure.rs" => {
+            Some("step")
+        }
+        _ => None,
+    }
+}
+
+fn entry_checkpoint(file: &str, body: &syn::Block) -> Option<String> {
+    let method = checkpoint_method(file)?;
+    let offset = usize::from(counter(body).is_some());
+    let syn::Stmt::Expr(syn::Expr::Try(attempt), Some(_)) = body.stmts.get(offset)? else {
+        return None;
+    };
+    let syn::Expr::MethodCall(call) = attempt.expr.as_ref() else {
+        return None;
+    };
+    let syn::Expr::Path(receiver) = call.receiver.as_ref() else {
+        return None;
+    };
+    let allowed = call.method == method
+        || (method == "metric" && (call.method == "step" || call.method == "checkpoint"));
+    (allowed
+        && receiver.path.is_ident("work")
+        && receiver.attrs.is_empty()
+        && call.attrs.is_empty()
+        && attempt.attrs.is_empty()
+        && call.args.is_empty()
+        && call.turbofish.is_none())
+    .then(|| format!("work.{}()?", call.method))
+}
+
+fn array_bound(expression: &syn::Expr) -> Option<usize> {
+    let syn::Expr::Array(array) = expression else {
+        return None;
+    };
+    // Un attributo cfg su un elemento puo' solo ridurre la cardinalita'.
+    // Le espressioni degli elementi sono visitate separatamente dal censimento.
+    Some(array.elems.len())
+}
+
+fn locally_covered(record: &serde_json::Value) -> bool {
+    !record["entry_checkpoint"].is_null()
+        || !record["literal_iteration_bound"].is_null()
+        || !record["array_iteration_bound"].is_null()
+}
+
+fn verify_closed_modules(records: &[serde_json::Value]) {
+    for record in records.iter().filter(|record| !record["body"].is_null()) {
+        let file = record["file"].as_str().unwrap();
+        let relative = file.strip_prefix("crates/plenora-kernels-geo/src/");
+        if relative.is_some_and(|relative| CLOSED_MODULES.contains(&relative)) {
+            assert!(
+                locally_covered(record),
+                "ciclo scoperto nel lotto chiuso: {file}:{}",
+                record["line"]
+            );
+        }
+    }
+}
+
+fn uncovered_cycles(records: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    records
+        .iter()
+        .filter(|record| !record["body"].is_null() && !locally_covered(record))
+        .map(|record| {
+            serde_json::json!({
+                "file": record["file"],
+                "function": record["function"],
+                "source": record["source"],
+            })
+        })
+        .collect()
+}
+
+fn verify_open_cycles(records: &[serde_json::Value], pending: &[serde_json::Value]) {
+    // Multinsieme con sorgente esatto, non un nome/numero di riga o un hash.
+    // Anche duplicare un ciclo aperto richiede una nuova voce esplicita.
+    let key = |record: &serde_json::Value| {
+        serde_json::json!([record["file"], record["function"], record["source"]]).to_string()
+    };
+    let mut actual: Vec<_> = uncovered_cycles(records).iter().map(key).collect();
+    let mut expected: Vec<_> = pending.iter().map(key).collect();
+    actual.sort();
+    expected.sort();
+    assert!(actual == expected, "debito cicli modificato: registrare la prova o aggiornare esplicitamente il debito; PLENORA_RIGENERA_CICLI non lo modifica");
+}
+
 struct Census {
     root: PathBuf,
     file: PathBuf,
@@ -148,6 +260,7 @@ impl Census {
             "line": start.line,
             "column": start.column,
             "counter": counter,
+            "entry_checkpoint": body.and_then(|body| entry_checkpoint(&file, body)),
             // Conserva anche condizioni, iteratore e corpo: togliere uno step
             // senza cambiare le posizioni deve comunque invalidare il registro.
             "source": body.map(|_| span.source_text().expect("sorgente del ciclo AST").replace("\r\n", "\n")),
@@ -285,6 +398,9 @@ impl<'ast> Visit<'ast> for Census {
             literal_range_bound(&node.expr)
                 .map(|bound| bound.to_string())
                 .into();
+        self.records.last_mut().unwrap()["array_iteration_bound"] = array_bound(&node.expr)
+            .map(|bound| bound.to_string())
+            .into();
         visit::visit_expr_for_loop(self, node);
     }
     fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
@@ -394,6 +510,11 @@ fn checkpoint620_census() {
         census.file(&directory.join("lib.rs"), &directory);
     }
     let actual = serde_json::to_string_pretty(&census.records).unwrap() + "\n";
+    verify_closed_modules(&census.records);
+    let pending: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/checkpoint620-open-cycles.json"))
+            .expect("debito esplicito dei cicli, non rigenerato dal censimento");
+    verify_open_cycles(&census.records, &pending);
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/checkpoint620-cycles.json");
     if std::env::var("PLENORA_RIGENERA_CICLI").as_deref() == Ok("1") {
@@ -555,5 +676,79 @@ fn checkpoint620_literal_bounds_are_structural() {
             literal_range_bound(&syn::parse_str(source).unwrap()),
             expected
         );
+    }
+}
+
+#[test]
+fn checkpoint620_entry_requires_unconditional_shared_call() {
+    let file = "crates/plenora-kernels-geo/src/geodesic_surface.rs";
+    for source in [
+        "{ work.step()?; }",
+        "{ work.checkpoint()?; }",
+        "{ #[cfg(test)] crate::noding::gop028::cycle(\"a\"); work.step()?; }",
+    ] {
+        let body = syn::parse_str(source).unwrap();
+        assert!(entry_checkpoint(file, &body).is_some());
+        assert!(entry_checkpoint("unknown.rs", &body).is_none());
+    }
+    for source in [
+        "{ if skip { continue; } work.step()?; }",
+        "{ #[cfg(test)] work.step()?; }",
+        "{ #[cfg(feature = \"optional\")] work.step()?; }",
+        "{ if condition { work.step()?; } }",
+        "{ let _ = work.step(); }",
+        "{ work.step(); }",
+        "{ other.step()?; }",
+        "{ work.step(1)?; }",
+        "{ work.step::<Other>()?; }",
+        "{ loop {} work.step()?; }",
+    ] {
+        assert!(entry_checkpoint(file, &syn::parse_str(source).unwrap()).is_none());
+    }
+}
+
+#[test]
+fn checkpoint620_new_cycles_cannot_hide_in_regeneration() {
+    let pending = serde_json::json!({"file": "open.rs", "function": "f", "source": "loop {}"});
+    let record = serde_json::json!({"file": "open.rs", "function": "f", "source": "loop {}", "body": [1, 1]});
+    verify_open_cycles(
+        std::slice::from_ref(&record),
+        std::slice::from_ref(&pending),
+    );
+    // Copia identica, ciclo nuovo e corpo modificato: tutti debiti nuovi.
+    for records in [
+        vec![record.clone(), record.clone()],
+        vec![{
+            let mut changed = record;
+            changed["source"] = "for x in input {}".into();
+            changed
+        }],
+    ] {
+        let failure = std::panic::catch_unwind(|| {
+            verify_open_cycles(&records, std::slice::from_ref(&pending));
+        })
+        .expect_err("il gate deve rifiutare il nuovo debito");
+        assert_eq!(failure.downcast_ref::<&str>().copied(), Some("debito cicli modificato: registrare la prova o aggiornare esplicitamente il debito; PLENORA_RIGENERA_CICLI non lo modifica"));
+    }
+    let closed = serde_json::json!({
+        "file": "crates/plenora-kernels-geo/src/geodesic_surface.rs",
+        "body": [1, 1], "line": 1,
+    });
+    // Il debito non puo' riaprire un modulo chiuso.
+    let failure = std::panic::catch_unwind(|| verify_closed_modules(&[closed]))
+        .expect_err("il gate deve rifiutare la riapertura");
+    assert_eq!(
+        failure.downcast_ref::<String>().map(String::as_str),
+        Some(
+            "ciclo scoperto nel lotto chiuso: crates/plenora-kernels-geo/src/geodesic_surface.rs:1"
+        )
+    );
+    for (expression, expected) in [
+        ("[]", Some(0)),
+        ("[a, b, c]", Some(3)),
+        ("[a; n]", None),
+        ("items", None),
+    ] {
+        assert_eq!(array_bound(&syn::parse_str(expression).unwrap()), expected);
     }
 }

@@ -38,6 +38,12 @@ la cui versione non ha qui una voce datata.
   sorgente dei cicli, tratta le `const fn` come eseguibili a runtime e
   registra i limiti locali degli intervalli letterali. La dimostrazione
   composta dei maggioranti per tutte le API resta da completare.
+- Primo lotto di dodici moduli con copertura locale di tutti i cicli
+  espliciti, verificata dal censimento indipendentemente dalla rigenerazione.
+  Aggiunti sedici controlli condivisi nelle scansioni della densificazione
+  e delle superfici geodetiche, senza cambiare gli addebiti di budget.
+  Registrati anche i limiti degli array letterali e separato il debito dei
+  cicli ancora aperti: rigenerare la fixture non aggiorna questo debito.
 
 ## [6.1.0] - 2026-11-19
 

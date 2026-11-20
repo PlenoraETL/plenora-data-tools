@@ -58,7 +58,18 @@ omonimo puo' essere nostro o scalare; il suo nome non prova il costo.
 dei cicli: una rimozione di checkpoint a parita' di posizione invalida la
 fixture. Per gli intervalli letterali registra un limite delle entrate nel
 corpo (`literal_iteration_bound`), che non include i cicli annidati o le
-funzioni chiamate. Questi controlli non costituiscono ancora la prova
+funzioni chiamate. Gli array scritti nel `for` hanno un analogo limite
+locale (`array_iteration_bound`); le espressioni degli elementi sono
+visitate separatamente. `entry_checkpoint` registra un controllo condiviso
+incondizionato come prima istruzione di produzione nei moduli verificati.
+I moduli chiusi sono elencati in `CLOSED_MODULES` nel test: ogni loro ciclo
+deve superare una di queste verifiche, anche rigenerando la fixture.
+Il [debito esplicito](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json)
+conserva gli altri cicli con sorgente esatto e molteplicita'; non e' una
+prova e non viene aggiornato da `PLENORA_RIGENERA_CICLI`. Un ciclo nuovo,
+duplicato o modificato senza prova fa fallire il gate anche nei moduli
+aperti. Per chiudere un lotto si rimuovono dal debito solo le voci per cui
+il censimento riconosce la prova locale. Questi controlli non costituiscono ancora la prova
 composta richiesta per tutti i cicli e tutte le API. Il limite sul lavoro
 esterno cade solo sostituendo le chiamate opache con percorsi cooperativi
 qualificati o provandone il costo al pin adottato, inclusi i rilasci.

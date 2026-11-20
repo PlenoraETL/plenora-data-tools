@@ -319,6 +319,7 @@ impl GeometryIndex {
         for pair in line.0.windows(2) {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_surface/metric.rs::line:2");
+            work.checkpoint()?;
             let ball = edge(pair[0], pair[1], work)?;
             if ring {
                 surface::append_short_pieces(ball, &mut self.nodes, work, 0)?;
@@ -338,6 +339,7 @@ impl GeometryIndex {
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_surface/metric.rs::polygon:1");
+            work.checkpoint()?;
             let begin = self.nodes.len();
             self.line(ring, true, work)?;
             if self.nodes.len() - begin < 3 {
@@ -387,6 +389,7 @@ impl GeometryIndex {
                 for line in lines {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("geodesic_surface/metric.rs::new:2");
+                    work.checkpoint()?;
                     index.line(line, false, work)?;
                 }
             }
@@ -395,6 +398,7 @@ impl GeometryIndex {
                 for polygon in polygons {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("geodesic_surface/metric.rs::new:3");
+                    work.checkpoint()?;
                     index.polygon(polygon, work)?;
                 }
             }

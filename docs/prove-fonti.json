@@ -2277,7 +2277,9 @@
       "checkpoint620_ast_finds_nested_and_conditional_loops",
       "checkpoint620_ast_keeps_module_macros_and_default_methods",
       "checkpoint620_ast_keeps_runtime_const_functions_and_loop_source",
-      "checkpoint620_literal_bounds_are_structural"
+      "checkpoint620_literal_bounds_are_structural",
+      "checkpoint620_entry_requires_unconditional_shared_call",
+      "checkpoint620_new_cycles_cannot_hide_in_regeneration"
     ],
     "crates/plenora-kernels-geo/tests/concave_scavo.rs": [
       "divergenza_dodici_punti",
