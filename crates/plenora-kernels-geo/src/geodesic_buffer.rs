@@ -174,6 +174,7 @@ impl<'a> BufferWork<'a> {
             count: 0,
         }
     }
+    #[cfg_attr(test, track_caller)]
     fn checkpoint(&self) -> Result<(), DegenerateBufferError> {
         crate::noding::check_interruption(
             self.limits.deadline,
@@ -183,6 +184,7 @@ impl<'a> BufferWork<'a> {
         )
     }
 
+    #[cfg_attr(test, track_caller)]
     fn step(&mut self) -> Result<(), DegenerateBufferError> {
         self.checkpoint()?;
         self.count = self

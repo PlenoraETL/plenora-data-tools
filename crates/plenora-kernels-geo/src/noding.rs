@@ -1229,6 +1229,101 @@ pub mod gop028 {
             max_vertices: 100_000,
         }
     }
+    fn buffer_profiles() -> Vec<Case> {
+        vec![
+            Case {
+                source: "geodesic_buffer/projected.rs",
+                name: "geodesic_line_buffer_with_limits/surface_zero",
+                max_instrumented_units: 256,
+                run: |f, d, t, interrupted| surface_case(f, d, t, interrupted, 0.0),
+            },
+            Case {
+                source: "geodesic_buffer/projected.rs",
+                name: "geodesic_line_buffer_with_limits/surface_positive",
+                max_instrumented_units: 256,
+                run: |f, d, t, interrupted| surface_case(f, d, t, interrupted, 0.1),
+            },
+            Case {
+                source: "geodesic_buffer/projected.rs",
+                name: "geodesic_line_buffer_with_limits/surface_erosion",
+                max_instrumented_units: 256,
+                run: |f, d, t, interrupted| surface_case(f, d, t, interrupted, -0.1),
+            },
+        ]
+    }
+    // Superfici ed erosione condividono l'API delle linee, ma attraversano
+    // fasi diverse. L'oracolo qui verifica identita' a zero e certificato;
+    // le geometrie complete restano coperte dagli oracoli del buffer.
+    fn surface_case(
+        fixture: &Fixture,
+        deadline: Option<Instant>,
+        flag: &AtomicBool,
+        interrupted: bool,
+        radius: f64,
+    ) {
+        let input: Geometry = Polygon::new(
+            LineString::from(vec![
+                (0., 0.),
+                (0.00002, 0.),
+                (0.00002, 0.00002),
+                (0., 0.00002),
+                (0., 0.),
+            ]),
+            vec![],
+        )
+        .into();
+        let result = crate::geodesic_buffer::projected::geodesic_line_buffer_with_limits(
+            std::slice::from_ref(&input),
+            &fixture.crs,
+            &[radius],
+            0.01,
+            false,
+            buffer_union_limits(deadline),
+            Some(flag),
+        );
+        if interrupted {
+            if CANCEL_ONLY.with(Cell::get) {
+                assert!(
+                    matches!(
+                        result,
+                        Err(
+                            crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                                polygon_boolean::PolygonBooleanError::Predicate(
+                                    PredicateError::Cancelled
+                                )
+                            )
+                        )
+                    ),
+                    "{result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(
+                            crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                                polygon_boolean::PolygonBooleanError::Predicate(
+                                    PredicateError::DeadlineExceeded
+                                )
+                            )
+                        )
+                    ),
+                    "{result:?}"
+                );
+            }
+        } else {
+            let output = result.unwrap();
+            assert_eq!(output.surfaces.len(), 1);
+            let surface = &output.surfaces[0];
+            assert!(surface.certificate.absolute_m <= 0.01);
+            assert!(
+                matches!(&surface.geometry, Geometry::Polygon(p) if !p.exterior().0.is_empty())
+            );
+            if radius == 0.0 {
+                assert_eq!(surface.geometry, input);
+            }
+        }
+    }
     #[allow(
         clippy::too_many_lines,
         reason = "Registro unico eseguibile delle API GOP-028"
@@ -1731,7 +1826,7 @@ pub mod gop028 {
     /// Fonte GOP-028: stesso esito pubblico all'ingresso e dopo lavoro reale.
     #[test]
     fn all_public_limits_deadline_precedence() {
-        for case in cases() {
+        for case in cases().into_iter().chain(buffer_profiles()) {
             for reverse in [false, true] {
                 let fixture = Fixture::new(reverse);
                 let flag = AtomicBool::new(false);
@@ -1758,7 +1853,7 @@ pub mod gop028 {
     /// osservato non viene presentato come limite universale di latenza.
     #[test]
     fn checkpoint620_measurements() {
-        for case in cases() {
+        for case in cases().into_iter().chain(buffer_profiles()) {
             let fixture = Fixture::new(false);
             let flag = AtomicBool::new(false);
             let probe = Probe::start(None);

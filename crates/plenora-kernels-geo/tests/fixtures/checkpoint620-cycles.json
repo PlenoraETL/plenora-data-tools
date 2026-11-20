@@ -11677,7 +11677,7 @@
   {
     "array_iteration_bound": null,
     "body": [
-      217,
+      219,
       31
     ],
     "column": 8,
@@ -11687,14 +11687,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "line",
     "kind": "for",
-    "line": 217,
+    "line": 219,
     "literal_iteration_bound": null,
     "source": "for &point in &line.0 {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::line:1\");\n            self.checkpoint()?;\n            self.coordinate(point)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      223,
+      225,
       39
     ],
     "column": 8,
@@ -11704,7 +11704,7 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "line",
     "kind": "for",
-    "line": 223,
+    "line": 225,
     "literal_iteration_bound": null,
     "source": "for edge in line.0.windows(2) {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::line:2\");\n            self.step()?;\n            let a = edge[0];\n            let b = edge[1];\n            let (length, azimuth, final_azimuth, _): (f64, f64, f64, f64) =\n                ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);\n            if !(length.is_finite() && azimuth.is_finite() && final_azimuth.is_finite()) {\n                return Err(DegenerateBufferError::AccuracyUnproven);\n            }\n            // G2: latitudini opposte e azimut distinti sull'ellissoide oblato.\n            if length > 0.0 && a.y == -b.y && (a.y.abs() == 90.0 || azimuth != final_azimuth) {\n                return Err(DegenerateBufferError::AmbiguousGeodesic);\n            }\n            let delta = (a.x - b.x).abs();\n            if delta.min(360.0 - delta) > 178.0\n                && a.y != -b.y\n                && (a.y + b.y).abs() < 1e-12\n                && azimuth != final_azimuth\n            {\n                return Err(DegenerateBufferError::AccuracyUnproven);\n            }\n        }"
   },
@@ -11717,13 +11717,13 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "line",
     "kind": "method:inverse",
-    "line": 230,
+    "line": 232,
     "source": null
   },
   {
     "array_iteration_bound": null,
     "body": [
-      271,
+      273,
       44
     ],
     "column": 16,
@@ -11733,14 +11733,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geometry",
     "kind": "for",
-    "line": 271,
+    "line": 273,
     "literal_iteration_bound": null,
     "source": "for polygon in &polygons.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:1\");\n                    self.checkpoint()?;\n                    self.empty_surface(polygon)?;\n                }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      284,
+      286,
       40
     ],
     "column": 16,
@@ -11750,14 +11750,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geometry",
     "kind": "for",
-    "line": 284,
+    "line": 286,
     "literal_iteration_bound": null,
     "source": "for point in &points.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:2\");\n                    self.checkpoint()?;\n                    self.coordinate(point.0)?;\n                }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      298,
+      300,
       38
     ],
     "column": 16,
@@ -11767,14 +11767,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geometry",
     "kind": "for",
-    "line": 298,
+    "line": 300,
     "literal_iteration_bound": null,
     "source": "for line in &lines.0 {\n                    #[cfg(test)]\n                    crate::noding::gop028::cycle(\"geodesic_buffer.rs::geometry:3\");\n                    self.checkpoint()?;\n                    self.line(line, ellipsoid)?;\n                    empty &= line.0.is_empty();\n                }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      366,
+      368,
       28
     ],
     "column": 4,
@@ -11784,14 +11784,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geodesic_empty_buffer_with_limits",
     "kind": "for",
-    "line": 366,
+    "line": 368,
     "literal_iteration_bound": null,
     "source": "for &radius in radii_m {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:1\");\n        work.step()?;\n        if !radius.is_finite() {\n            return Err(DegenerateBufferError::InvalidRadius);\n        }\n        for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2\");\n            work.checkpoint()?;\n            work.geometry(input, radius, &ellipsoid)?;\n        }\n        let count = if union_results {\n            1\n        } else {\n            u64::try_from(inputs.len()).map_err(|_| DegenerateBufferError::OutputLimit)?\n        };\n        items = items\n            .checked_add(count)\n            .ok_or(DegenerateBufferError::OutputLimit)?;\n        if items > limits.max_output_items {\n            return Err(DegenerateBufferError::OutputLimit);\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      373,
+      375,
       29
     ],
     "column": 8,
@@ -11801,14 +11801,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geodesic_empty_buffer_with_limits",
     "kind": "for",
-    "line": 373,
+    "line": 375,
     "literal_iteration_bound": null,
     "source": "for input in inputs {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2\");\n            work.checkpoint()?;\n            work.geometry(input, radius, &ellipsoid)?;\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      393,
+      395,
       23
     ],
     "column": 4,
@@ -11818,14 +11818,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "geodesic_empty_buffer_with_limits",
     "kind": "for",
-    "line": 393,
+    "line": 395,
     "literal_iteration_bound": null,
     "source": "for _ in 0..count {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::geodesic_empty_buffer_with_limits:3\");\n        work.step()?;\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      429,
+      431,
       29
     ],
     "column": 4,
@@ -11835,14 +11835,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "verify_surface",
     "kind": "for",
-    "line": 429,
+    "line": 431,
     "literal_iteration_bound": null,
     "source": "for polygon in polygons {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::verify_surface:1\");\n        work.step()?;\n        for (index, ring) in std::iter::once(polygon.exterior())\n            .chain(polygon.interiors())\n            .enumerate()\n        {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::verify_surface:2\");\n            work.step()?;\n            if ring.0.is_empty() {\n                continue;\n            }\n            let expected = if index == 0 {\n                std::cmp::Ordering::Greater\n            } else {\n                std::cmp::Ordering::Less\n            };\n            if ring_orientation(ring, work)? != expected {\n                return Err(DegenerateBufferError::InvalidTopology.into());\n            }\n        }\n    }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      436,
+      438,
       9
     ],
     "column": 8,
@@ -11852,14 +11852,14 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "verify_surface",
     "kind": "for",
-    "line": 433,
+    "line": 435,
     "literal_iteration_bound": null,
     "source": "for (index, ring) in std::iter::once(polygon.exterior())\n            .chain(polygon.interiors())\n            .enumerate()\n        {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"geodesic_buffer.rs::verify_surface:2\");\n            work.step()?;\n            if ring.0.is_empty() {\n                continue;\n            }\n            let expected = if index == 0 {\n                std::cmp::Ordering::Greater\n            } else {\n                std::cmp::Ordering::Less\n            };\n            if ring_orientation(ring, work)? != expected {\n                return Err(DegenerateBufferError::InvalidTopology.into());\n            }\n        }"
   },
   {
     "array_iteration_bound": null,
     "body": [
-      462,
+      464,
       35
     ],
     "column": 4,
@@ -11869,7 +11869,7 @@
     "file": "crates/plenora-kernels-geo/src/geodesic_buffer.rs",
     "function": "ring_orientation",
     "kind": "for",
-    "line": 462,
+    "line": 464,
     "literal_iteration_bound": null,
     "source": "for edge in ring.0.windows(2) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"geodesic_buffer.rs::ring_orientation:1\");\n        work.step()?;\n        let a = P::of_in(edge[0], work)?;\n        let b = P::of_in(edge[1], work)?;\n        area = area.try_add(&a.try_cross(&b)?)?;\n    }"
   },

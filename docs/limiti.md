@@ -74,6 +74,13 @@ Il controllo `noding::Work::checkpoint` osserva deadline e cancellazione
 con la stessa precedenza di `step`, senza aumentare gli addebiti di lavoro.
 Nel buffer puntuale il callback `checkpoint` di pianificazione, costruzione
 e verifica del ventaglio delega al controllo condiviso del chiamante.
+Anche multipunto, linee, superfici a raggio zero o positivo ed erosione
+passano dal medesimo controllo, tramite `BufferWork` o `noding::Work`.
+La tabella GOP-028 esercita separatamente i tre profili di superficie
+esposti dall'API delle linee, con scadenza prevalente e annullamento
+al primo checkpoint interno, a meta' lavoro e prima della pubblicazione.
+I cicli dei moduli del buffer sono chiusi nel censimento: checkpoint
+all'ingresso o limite locale registrato, senza nuovo debito.
 Nel runner i nove cicli di `run_interrompibile` osservano l'interruzione
 all'ingresso di ogni iterazione, anche durante preparazione e raccolta
 degli output. Anche i tre helper di esecuzione ricevono la stessa interruzione; `run`
