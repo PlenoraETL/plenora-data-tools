@@ -895,3 +895,22 @@ mod tests {
         );
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{De9imMatrix, Geometry, PredicateError, RelateLimits, SpatialPredicate};
+
+    crate::crs::checked_kernel!(relate_matrix_with_limits, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>) -> (De9imMatrix, PredicateError),
+        |context| {  super::relate_matrix_with_limits(left, right, limits, cancelled) });
+    crate::crs::checked_kernel!(relate_matrix, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>) -> (De9imMatrix, PredicateError),
+        |context| {  super::relate_matrix(left, right) });
+    crate::crs::checked_kernel!(evaluate, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate) -> (bool, PredicateError),
+        |context| {  super::evaluate(left, right, predicate) });
+    crate::crs::checked_kernel!(evaluate_validated, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate) -> (bool, PredicateError),
+        |context| {  super::evaluate_validated(left, right, predicate) });
+}

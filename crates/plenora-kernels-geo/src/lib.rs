@@ -2527,3 +2527,15 @@ mod tests {
         }
     }
 }
+
+/// Trasformazioni dirette con requisito CRS verificato dal catalogo.
+pub mod with_crs {
+    use super::{Geometry, Operation, PlenoraError};
+    pub use crate::polygon_completion::with_crs::polygon_completion_with_limits;
+    crate::crs::checked_kernel!(transform_geometry, "geo.centroid", 1,
+        (operation: Operation, geometry: &Geometry<f64>) -> (Geometry<f64>, PlenoraError),
+        |context| { super::transform_geometry(operation, geometry) });
+    crate::crs::checked_kernel!(transform_wkb, "geo.centroid", 1,
+        (operation: Operation, payload: &[u8]) -> (Vec<u8>, PlenoraError),
+        |context| { super::transform_wkb(operation, payload) });
+}

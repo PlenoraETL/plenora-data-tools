@@ -2795,3 +2795,18 @@ mod compatibility_600;
 
 #[cfg(test)]
 use super::precision;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Coord, Geometry, PolygonizeError, PolygonizeOptions, PolygonizeResult};
+
+    crate::crs::checked_kernel!(polygonize_linework_rust, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, options: PolygonizeOptions) -> (PolygonizeResult, PolygonizeError),
+        |context| { let options = PolygonizeOptions { precision: context.precision()?.value(), ..options }; super::polygonize_linework_rust(linework, options) });
+    crate::crs::checked_kernel!(polygonize_linework_rust_with_rounded, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, options: PolygonizeOptions) -> ((PolygonizeResult, Vec<Coord<f64>>), PolygonizeError),
+        |context| { let options = PolygonizeOptions { precision: context.precision()?.value(), ..options }; super::polygonize_linework_rust_with_rounded(linework, options) });
+    crate::crs::checked_kernel!(polygonize_linework_rust_bounded, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, options: PolygonizeOptions) -> (PolygonizeResult, PolygonizeError),
+        |context| { let options = PolygonizeOptions { precision: context.precision()?.value(), ..options }; super::polygonize_linework_rust_bounded(linework, options) });
+}

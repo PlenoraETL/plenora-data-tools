@@ -663,3 +663,12 @@ fn execute(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{AtomicBool, Geometry, Polygon, PolygonCompletionError, RelateLimits};
+
+    crate::crs::checked_kernel!(polygon_completion_with_limits, "geo.split", 2,
+        (polygons: &[Polygon<f64>], linework: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Vec<Polygon<f64>>, PolygonCompletionError),
+        |context| {  super::polygon_completion_with_limits(polygons, linework, limits, cancelled) });
+}

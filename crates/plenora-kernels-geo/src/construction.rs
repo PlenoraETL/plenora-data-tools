@@ -435,3 +435,21 @@ mod tests {
         }
     }
 }
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{ConstructionError, Geometry};
+
+    crate::crs::checked_kernel!(point_from_lon_lat, "geo.from_coords", 1,
+        (lon: f64, lat: f64) -> (Geometry<f64>, ConstructionError),
+        |context| {  super::point_from_lon_lat(lon, lat) });
+    crate::crs::checked_kernel!(geometry_from_wkt, "geo.from_wkt", 1,
+        (value: &str) -> (Geometry<f64>, ConstructionError),
+        |context| {  super::geometry_from_wkt(value) });
+    crate::crs::checked_kernel!(line_from_ordered_points, "geo.line_builder", 1,
+        (geometries: &[Option<Geometry<f64>>]) -> (Option<Geometry<f64>>, ConstructionError),
+        |context| {  super::line_from_ordered_points(geometries) });
+    crate::crs::checked_kernel!(polygon_from_ordered_points, "geo.polygon_builder", 1,
+        (geometries: &[Option<Geometry<f64>>]) -> (Option<Geometry<f64>>, ConstructionError),
+        |context| {  super::polygon_from_ordered_points(geometries) });
+}

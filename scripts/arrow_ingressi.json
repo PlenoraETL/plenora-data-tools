@@ -9522,6 +9522,24 @@
       "classification": "non riceve dati esterni",
       "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
       "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-core/src/crs.rs::validate_requirement_with_mode": {
+      "signature": "pub fn validate_requirement_with_mode( requirement: CrsRequirement, inputs: &[&ResolvedCrs], mode: CrsMode, ) -> Result<(), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo CRS risolti e scelta esplicita del modello; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/crs.rs::new": {
+      "signature": "pub const fn new(inputs: &'a [&'a ResolvedCrs]) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo CRS risolti e scelta esplicita del modello; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/crs.rs::planar_coordinates": {
+      "signature": "pub const fn planar_coordinates(inputs: &'a [&'a ResolvedCrs]) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo CRS risolti e scelta esplicita del modello; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
     }
   },
   "rust_variants": {

@@ -2259,3 +2259,18 @@ mod tests {
         Ok(())
     }
 }
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Geometry, MakeValidError, MakeValidLimits, RepairMethod};
+
+    crate::crs::checked_kernel!(make_valid_geometry_rust, "geo.make_valid", 1,
+        (geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool) -> (Geometry<f64>, MakeValidError),
+        |context| { let precision = context.precision()?.value(); super::make_valid_geometry_rust(geometry, method, keep_collapsed, precision) });
+    crate::crs::checked_kernel!(make_valid_geometry_rust_with_limits, "geo.make_valid", 1,
+        (geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits) -> (Geometry<f64>, MakeValidError),
+        |context| { let precision = context.precision()?.value(); super::make_valid_geometry_rust_with_limits(geometry, method, keep_collapsed, limits, precision) });
+    crate::crs::checked_kernel!(make_valid_geometry_rust_bounded, "geo.make_valid", 1,
+        (geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits) -> (Geometry<f64>, MakeValidError),
+        |context| { let precision = context.precision()?.value(); super::make_valid_geometry_rust_bounded(geometry, method, keep_collapsed, limits, precision) });
+}

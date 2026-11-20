@@ -1592,3 +1592,45 @@ mod tests {
         }
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{
+        BooleanOperation, Geometry, MargineMemoria, OverlayMode, OverlayPiece, TopologyError,
+    };
+
+    crate::crs::checked_kernel!(boolean_operation, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, operation: BooleanOperation) -> (Geometry<f64>, TopologyError),
+        |context| { let precision = context.precision()?; super::boolean_operation(left, right, operation, precision) });
+    crate::crs::checked_kernel!(boolean_operation_validated, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, operation: BooleanOperation) -> (Geometry<f64>, TopologyError),
+        |context| { let precision = context.precision()?; super::boolean_operation_validated(left, right, operation, precision) });
+    crate::crs::checked_kernel!(dissolve, "geo.dissolve", 1,
+        (geometries: &[Geometry<f64>]) -> (Geometry<f64>, TopologyError),
+        |context| { let precision = context.precision()?; super::dissolve(geometries, precision) });
+    crate::crs::checked_kernel!(dissolve_validated, "geo.dissolve", 1,
+        (geometries: &[Geometry<f64>]) -> (Geometry<f64>, TopologyError),
+        |context| { let precision = context.precision()?; super::dissolve_validated(geometries, precision) });
+    crate::crs::checked_kernel!(clip_to_mask, "geo.clip", 2,
+        (geometries: &[Geometry<f64>], masks: &[Geometry<f64>]) -> (Vec<Option<Geometry<f64>>>, TopologyError),
+        |context| { let precision = context.precision()?; super::clip_to_mask(geometries, masks, precision) });
+    crate::crs::checked_kernel!(clip_to_mask_validated, "geo.clip", 2,
+        (geometries: &[Geometry<f64>], masks: &[Geometry<f64>]) -> (Vec<Option<Geometry<f64>>>, TopologyError),
+        |context| { let precision = context.precision()?; super::clip_to_mask_validated(geometries, masks, precision) });
+    crate::crs::checked_kernel!(polygon_overlay, "geo.overlay", 2,
+        (left: &[Geometry<f64>], right: &[Geometry<f64>], mode: OverlayMode, max_candidate_pairs: u64, max_results: u64) -> (Vec<OverlayPiece>, TopologyError),
+        |context| { let precision = context.precision()?; super::polygon_overlay(left, right, mode, max_candidate_pairs, max_results, precision) });
+    crate::crs::checked_kernel!(polygon_overlay_validated, "geo.overlay", 2,
+        (left: &[Geometry<f64>], right: &[Geometry<f64>], mode: OverlayMode, max_candidate_pairs: u64, max_results: u64) -> (Vec<OverlayPiece>, TopologyError),
+        |context| { let precision = context.precision()?; super::polygon_overlay_validated(left, right, mode, max_candidate_pairs, max_results, precision) });
+    crate::crs::checked_kernel!(polygon_overlay_validated_con_margine, "geo.overlay", 2,
+        (left: &[Geometry<f64>], right: &[Geometry<f64>], mode: OverlayMode, limits_pair: (u64, u64), margine: MargineMemoria) -> (Vec<OverlayPiece>, TopologyError),
+        |context| { let precision = context.precision()?; super::polygon_overlay_validated_con_margine(left, right, mode, limits_pair, precision, margine) });
+    crate::crs::checked_kernel!(clean_valid_polygon_topology, "geo.clean_topology", 1,
+        (geometries: &[Geometry<f64>], snap_tolerance: f64, remove_overlaps: bool, fill_gaps: bool, max_geometries: u64, max_vertices: u64) -> (Vec<Option<Geometry<f64>>>, TopologyError),
+        |context| { let precision = context.precision()?; super::clean_valid_polygon_topology(geometries, snap_tolerance, remove_overlaps, fill_gaps, max_geometries, max_vertices, precision) });
+    crate::crs::checked_kernel!(clean_valid_polygon_topology_validated, "geo.clean_topology", 1,
+        (geometries: &[Geometry<f64>], snap_tolerance: f64, remove_overlaps: bool, fill_gaps: bool, max_geometries: u64, max_vertices: u64) -> (Vec<Option<Geometry<f64>>>, TopologyError),
+        |context| { let precision = context.precision()?; super::clean_valid_polygon_topology_validated(geometries, snap_tolerance, remove_overlaps, fill_gaps, max_geometries, max_vertices, precision) });
+}

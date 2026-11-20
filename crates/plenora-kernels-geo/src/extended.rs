@@ -810,3 +810,55 @@ mod tests {
         }
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{ExtendedError, Geometry, Point};
+
+    crate::crs::checked_kernel!(affine_transform, "geo.affine_transform", 1,
+        (geometry: &Geometry<f64>, coefficients: [f64; 6]) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::affine_transform(geometry, coefficients) });
+    crate::crs::checked_kernel!(affine_transform_validated, "geo.affine_transform", 1,
+        (geometry: &Geometry<f64>, coefficients: [f64; 6]) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::affine_transform_validated(geometry, coefficients) });
+    crate::crs::checked_kernel!(translate, "geo.translate", 1,
+        (geometry: &Geometry<f64>, x_offset: f64, y_offset: f64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::translate(geometry, x_offset, y_offset) });
+    crate::crs::checked_kernel!(translate_validated, "geo.translate", 1,
+        (geometry: &Geometry<f64>, x_offset: f64, y_offset: f64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::translate_validated(geometry, x_offset, y_offset) });
+    crate::crs::checked_kernel!(scale_about, "geo.scale", 1,
+        (geometry: &Geometry<f64>, x_factor: f64, y_factor: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::scale_about(geometry, x_factor, y_factor, origin) });
+    crate::crs::checked_kernel!(scale_about_validated, "geo.scale", 1,
+        (geometry: &Geometry<f64>, x_factor: f64, y_factor: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::scale_about_validated(geometry, x_factor, y_factor, origin) });
+    crate::crs::checked_kernel!(rotate_about, "geo.rotate", 1,
+        (geometry: &Geometry<f64>, degrees: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::rotate_about(geometry, degrees, origin) });
+    crate::crs::checked_kernel!(rotate_about_validated, "geo.rotate", 1,
+        (geometry: &Geometry<f64>, degrees: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::rotate_about_validated(geometry, degrees, origin) });
+    crate::crs::checked_kernel!(concave_hull, "geo.concave_hull", 1,
+        (geometry: &Geometry<f64>, concavity: f64, length_threshold: f64, max_coordinates: u64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::concave_hull(geometry, concavity, length_threshold, max_coordinates) });
+    crate::crs::checked_kernel!(concave_hull_validated, "geo.concave_hull", 1,
+        (geometry: &Geometry<f64>, concavity: f64, length_threshold: f64, max_coordinates: u64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::concave_hull_validated(geometry, concavity, length_threshold, max_coordinates) });
+    crate::crs::checked_kernel!(hausdorff_distance, "geo.hausdorff_distance", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, max_coordinate_pairs: u64) -> (Option<f64>, ExtendedError),
+        |context| {  super::hausdorff_distance(left, right, max_coordinate_pairs) });
+    crate::crs::checked_kernel!(hausdorff_distance_validated, "geo.hausdorff_distance", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, max_coordinate_pairs: u64) -> (Option<f64>, ExtendedError),
+        |context| {  super::hausdorff_distance_validated(left, right, max_coordinate_pairs) });
+    crate::crs::checked_kernel!(haversine_distance_m, "geo.haversine_distance", 2,
+        (left: Point<f64>, right: Point<f64>) -> (f64, ExtendedError),
+        |context| { let ellissoide = context.ellipsoid()?; super::haversine_distance_m(left, right, &ellissoide) });
+    crate::crs::checked_kernel!(geodesic_distance_m, "geo.geodesic_distance", 2,
+        (left: Point<f64>, right: Point<f64>) -> (f64, ExtendedError),
+        |context| { let ellissoide = context.ellipsoid()?; super::geodesic_distance_m(left, right, &ellissoide) });
+    crate::crs::checked_kernel!(geodesic_line_length_m, "geo.geodesic_line_length", 1,
+        (line: &geo::LineString<f64>) -> (f64, ExtendedError),
+        |context| { let ellissoide = context.ellipsoid()?; super::geodesic_line_length_m(line, &ellissoide) });
+}

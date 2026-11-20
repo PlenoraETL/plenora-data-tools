@@ -870,3 +870,19 @@ mod tests {
         );
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{BinaryArray, ClusterError, Geometry, PlenoraError, Point};
+
+    crate::crs::checked_kernel!(dbscan_nullable, "geo.cluster_dbscan", 1,
+        (geometries: &[Option<Geometry<f64>>], eps: f64, min_points: usize) -> (Vec<Option<u64>>, ClusterError),
+        |context| {  super::dbscan_nullable(geometries, eps, min_points) });
+    crate::crs::checked_kernel!(dbscan, "geo.cluster_dbscan", 1,
+        (points: &[Point<f64>], eps: f64, min_points: usize) -> (Vec<Option<u64>>, ClusterError),
+        |context| {  super::dbscan(points, eps, min_points) });
+    crate::crs::checked_kernel!(dbscan_column, "geo.cluster_dbscan", 1,
+        (cells: &BinaryArray, eps: f64, min_points: usize) -> (Vec<Option<u64>>, PlenoraError),
+        |context| {  super::dbscan_column(cells, eps, min_points) });
+}

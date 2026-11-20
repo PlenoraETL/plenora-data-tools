@@ -787,3 +787,28 @@ mod tests {
         }
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{Geometry, JoinPair, JoinPredicate, MargineMemoria, SpatialJoinError};
+
+    crate::crs::checked_kernel!(spatial_join, "geo.sjoin", 2,
+        (left: &[Geometry<f64>], right: &[Geometry<f64>], predicate: JoinPredicate, max_pairs: u64) -> (Vec<JoinPair>, SpatialJoinError),
+        |context| {  super::spatial_join(left, right, predicate, max_pairs) });
+    crate::crs::checked_kernel!(spatial_join_validated, "geo.sjoin", 2,
+        (left: &[Geometry<f64>], right: &[Geometry<f64>], predicate: JoinPredicate, max_pairs: u64) -> (Vec<JoinPair>, SpatialJoinError),
+        |context| {  super::spatial_join_validated(left, right, predicate, max_pairs) });
+    crate::crs::checked_kernel!(spatial_join_nullable, "geo.sjoin", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], predicate: JoinPredicate, max_pairs: u64) -> (Vec<JoinPair>, SpatialJoinError),
+        |context| {  super::spatial_join_nullable(left, right, predicate, max_pairs) });
+    crate::crs::checked_kernel!(spatial_join_nullable_validated, "geo.sjoin", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], predicate: JoinPredicate, max_pairs: u64) -> (Vec<JoinPair>, SpatialJoinError),
+        |context| {  super::spatial_join_nullable_validated(left, right, predicate, max_pairs) });
+    crate::crs::checked_kernel!(spatial_join_nullable_validated_con_margine, "geo.sjoin", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], predicate: JoinPredicate, max_pairs: u64, margine: MargineMemoria) -> (Vec<JoinPair>, SpatialJoinError),
+        |context| {  super::spatial_join_nullable_validated_con_margine(left, right, predicate, max_pairs, margine) });
+    crate::crs::checked_kernel!(spatial_join_validated_con_margine, "geo.sjoin", 2,
+        (left: &[Geometry<f64>], right: &[Geometry<f64>], predicate: JoinPredicate, max_pairs: u64, margine: MargineMemoria) -> (Vec<JoinPair>, SpatialJoinError),
+        |context| {  super::spatial_join_validated_con_margine(left, right, predicate, max_pairs, margine) });
+}

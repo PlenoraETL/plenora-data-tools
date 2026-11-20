@@ -277,3 +277,12 @@ fn execute(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{AtomicBool, Geometry, LineString, RelateLimits, ReshapeError};
+
+    crate::crs::checked_kernel!(reshape_with_limits, "geo.split", 2,
+        (target: &Geometry<f64>, reshaper: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (LineString<f64>, ReshapeError),
+        |context| {  super::reshape_with_limits(target, reshaper, limits, cancelled) });
+}

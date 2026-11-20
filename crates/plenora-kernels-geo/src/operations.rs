@@ -1495,3 +1495,55 @@ mod tests {
         }
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{BufferCapStyle, Geometry, MargineMemoria, OperationError, SimplifyPolicy};
+
+    crate::crs::checked_kernel!(area, "geo.area", 1,
+        (geometry: &Geometry<f64>) -> (f64, OperationError),
+        |context| {  super::area(geometry) });
+    crate::crs::checked_kernel!(length, "geo.length", 1,
+        (geometry: &Geometry<f64>) -> (f64, OperationError),
+        |context| {  super::length(geometry) });
+    crate::crs::checked_kernel!(perimeter, "geo.perimeter", 1,
+        (geometry: &Geometry<f64>) -> (f64, OperationError),
+        |context| {  super::perimeter(geometry) });
+    crate::crs::checked_kernel!(distance, "geo.distance", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>) -> (Option<f64>, OperationError),
+        |context| {  super::distance(left, right) });
+    crate::crs::checked_kernel!(bounds, "geo.bounds_extractor", 1,
+        (geometry: &Geometry<f64>) -> (Option<[f64; 4]>, OperationError),
+        |context| {  super::bounds(geometry) });
+    crate::crs::checked_kernel!(vertex_count, "geo.vertex_count", 1,
+        (geometry: &Geometry<f64>) -> (u64, OperationError),
+        |context| {  super::vertex_count(geometry) });
+    crate::crs::checked_kernel!(point_on_surface, "geo.point_on_surface", 1,
+        (geometry: &Geometry<f64>) -> (Option<Geometry<f64>>, OperationError),
+        |context| {  super::point_on_surface(geometry) });
+    crate::crs::checked_kernel!(to_wkt, "geo.to_wkt", 1,
+        (geometry: &Geometry<f64>) -> (String, OperationError),
+        |context| {  super::to_wkt(geometry) });
+    crate::crs::checked_kernel!(buffer, "geo.buffer", 1,
+        (geometry: &Geometry<f64>, distance: f64) -> (Geometry<f64>, OperationError),
+        |context| { let precision = context.precision()?; super::buffer(geometry, distance, precision) });
+    crate::crs::checked_kernel!(buffer_with_cap, "geo.buffer", 1,
+        (geometry: &Geometry<f64>, distance: f64, cap_style: BufferCapStyle) -> (Geometry<f64>, OperationError),
+        |context| { let precision = context.precision()?; super::buffer_with_cap(geometry, distance, cap_style, precision) });
+    crate::crs::checked_kernel!(buffer_with_cap_con_margine, "geo.buffer", 1,
+        (geometry: &Geometry<f64>, distance: f64, cap_style: BufferCapStyle, margine: MargineMemoria) -> (Geometry<f64>, OperationError),
+        |context| { let precision = context.precision()?; super::buffer_with_cap_con_margine(geometry, distance, cap_style, precision, margine) });
+    crate::crs::checked_kernel!(simplify, "geo.simplify", 1,
+        (geometry: &Geometry<f64>, tolerance: f64) -> (Geometry<f64>, OperationError),
+        |context| {  super::simplify(geometry, tolerance) });
+    crate::crs::checked_kernel!(simplify_with_policy, "geo.simplify", 1,
+        (geometry: &Geometry<f64>, tolerance: f64, policy: SimplifyPolicy) -> (Geometry<f64>, OperationError),
+        |context| {  super::simplify_with_policy(geometry, tolerance, policy) });
+    crate::crs::checked_kernel!(explode, "geo.explode", 1,
+        (geometry: &Geometry<f64>) -> (Vec<Geometry<f64>>, OperationError),
+        |context| {  super::explode(geometry) });
+    crate::crs::checked_kernel!(boundary, "geo.boundary", 1,
+        (geometry: &Geometry<f64>) -> (Geometry<f64>, OperationError),
+        |context| {  super::boundary(geometry) });
+}

@@ -911,3 +911,12 @@ fn publish(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{AtomicBool, Geometry, OffsetError, OffsetOptions, OffsetResult, RelateLimits};
+
+    crate::crs::checked_kernel!(offset_with_limits, "geo.buffer", 1,
+        (input: &Geometry<f64>, options: OffsetOptions, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (OffsetResult, OffsetError),
+        |context| {  super::offset_with_limits(input, options, limits, cancelled) });
+}

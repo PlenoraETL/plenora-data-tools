@@ -889,6 +889,17 @@ pub fn builtin_crs_identifiers() -> impl Iterator<Item = String> {
     integrati::identificatori()
 }
 
+/// Modello richiesto esplicitamente dal chiamante, senza trasformare coordinate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CrsMode {
+    /// Requisito dichiarato dall'operazione, senza deroghe.
+    #[default]
+    Required,
+    /// Piano XY nelle unita' dello SR, anche angolari. Non e' geodetica.
+    /// Non autorizza operazioni geodetiche o riproiezioni in modalita' planare.
+    PlanarCoordinates,
+}
+
 /// Verifica il requisito CRS del catalogo sugli input risolti.
 ///
 /// # Errors
@@ -903,15 +914,47 @@ pub fn validate_requirement(
     requirement: CrsRequirement,
     inputs: &[&ResolvedCrs],
 ) -> Result<(), CrsError> {
+    validate_requirement_with_mode(requirement, inputs, CrsMode::Required)
+}
+
+/// Verifica il requisito CRS con consenso esplicito al piano delle coordinate.
+///
+/// Le unita' restano quelle dello SR: distanze angolari e aree angolari al
+/// quadrato non diventano metri. Nessuna riproiezione o scelta di ellissoide.
+/// L'identita' di `SameProjected` resta obbligatoria anche nel piano angolare.
+///
+/// # Errors
+/// Gli errori di [`validate_requirement`]; `InvalidContract` se la modalita'
+/// planare viene richiesta per un'operazione geografica o di riproiezione.
+pub fn validate_requirement_with_mode(
+    requirement: CrsRequirement,
+    inputs: &[&ResolvedCrs],
+    mode: CrsMode,
+) -> Result<(), CrsError> {
     if inputs.is_empty() {
         return Err(CrsError::InvalidContract("nessun CRS di input"));
     }
+    let ensure_planar = |crs: &&ResolvedCrs| {
+        if mode == CrsMode::PlanarCoordinates && crs.kind == CrsKind::Geographic {
+            Ok(())
+        } else {
+            ensure_projected(crs)
+        }
+    };
+    if mode == CrsMode::PlanarCoordinates
+        && matches!(
+            requirement,
+            CrsRequirement::Geographic | CrsRequirement::Reprojection
+        )
+    {
+        return Err(CrsError::InvalidContract("operazione non planare"));
+    }
     match requirement {
         CrsRequirement::Known => Ok(()),
-        CrsRequirement::Projected => inputs.iter().try_for_each(|crs| ensure_projected(crs)),
+        CrsRequirement::Projected => inputs.iter().try_for_each(ensure_planar),
         CrsRequirement::Geographic => inputs.iter().try_for_each(|crs| ensure_geographic(crs)),
         CrsRequirement::SameProjected => {
-            inputs.iter().try_for_each(|crs| ensure_projected(crs))?;
+            inputs.iter().try_for_each(ensure_planar)?;
             if inputs[1..]
                 .iter()
                 .any(|crs| !inputs[0].semantically_equals(crs))

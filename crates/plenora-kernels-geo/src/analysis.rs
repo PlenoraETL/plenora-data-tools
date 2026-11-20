@@ -1095,3 +1095,43 @@ mod tests {
             .is_empty());
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{AnalysisError, Geometry, MargineMemoria, NearestMatch};
+
+    crate::crs::checked_kernel!(minimum_distances, "geo.distance", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_comparisons: u64) -> (Vec<Option<f64>>, AnalysisError),
+        |context| {  super::minimum_distances(left, right, max_comparisons) });
+    crate::crs::checked_kernel!(minimum_distances_validated, "geo.distance", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_comparisons: u64) -> (Vec<Option<f64>>, AnalysisError),
+        |context| {  super::minimum_distances_validated(left, right, max_comparisons) });
+    crate::crs::checked_kernel!(nearest_matches, "geo.nearest", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_distance: Option<f64>, max_comparisons: u64, max_results: u64) -> (Vec<NearestMatch>, AnalysisError),
+        |context| {  super::nearest_matches(left, right, max_distance, max_comparisons, max_results) });
+    crate::crs::checked_kernel!(nearest_matches_validated, "geo.nearest", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_distance: Option<f64>, max_comparisons: u64, max_results: u64) -> (Vec<NearestMatch>, AnalysisError),
+        |context| {  super::nearest_matches_validated(left, right, max_distance, max_comparisons, max_results) });
+    crate::crs::checked_kernel!(nearest_matches_validated_con_margine, "geo.nearest", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_distance: Option<f64>, limits_pair: (u64, u64), margine: MargineMemoria) -> (Vec<NearestMatch>, AnalysisError),
+        |context| {  super::nearest_matches_validated_con_margine(left, right, max_distance, limits_pair, margine) });
+    crate::crs::checked_kernel!(within_indexes, "geo.within", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_pairs: u64) -> (Vec<u64>, AnalysisError),
+        |context| {  super::within_indexes(left, right, max_pairs) });
+    crate::crs::checked_kernel!(within_indexes_validated, "geo.within", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_pairs: u64) -> (Vec<u64>, AnalysisError),
+        |context| {  super::within_indexes_validated(left, right, max_pairs) });
+    crate::crs::checked_kernel!(within_indexes_validated_con_margine, "geo.within", 2,
+        (left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_pairs: u64, margine: MargineMemoria) -> (Vec<u64>, AnalysisError),
+        |context| {  super::within_indexes_validated_con_margine(left, right, max_pairs, margine) });
+    crate::crs::checked_kernel!(count_points_in_polygons, "geo.count_points_in_polygons", 2,
+        (polygons: &[Option<Geometry<f64>>], points: &[Option<Geometry<f64>>], max_pairs: u64) -> (Vec<u64>, AnalysisError),
+        |context| {  super::count_points_in_polygons(polygons, points, max_pairs) });
+    crate::crs::checked_kernel!(count_points_in_polygons_validated, "geo.count_points_in_polygons", 2,
+        (polygons: &[Option<Geometry<f64>>], points: &[Option<Geometry<f64>>], max_pairs: u64) -> (Vec<u64>, AnalysisError),
+        |context| {  super::count_points_in_polygons_validated(polygons, points, max_pairs) });
+    crate::crs::checked_kernel!(count_points_in_polygons_validated_con_margine, "geo.count_points_in_polygons", 2,
+        (polygons: &[Option<Geometry<f64>>], points: &[Option<Geometry<f64>>], max_pairs: u64, margine: MargineMemoria) -> (Vec<u64>, AnalysisError),
+        |context| {  super::count_points_in_polygons_validated_con_margine(polygons, points, max_pairs, margine) });
+}

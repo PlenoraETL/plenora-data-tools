@@ -398,3 +398,12 @@ fn certify_paths(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Geometry, LineString, PredicateError, RelateLimits};
+
+    crate::crs::checked_kernel!(split_line_with_limits, "geo.split", 2,
+        (source: &LineString<f64>, splitter: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>) -> (Vec<LineString<f64>>, PredicateError),
+        |context| {  super::split_line_with_limits(source, splitter, limits, cancelled) });
+}

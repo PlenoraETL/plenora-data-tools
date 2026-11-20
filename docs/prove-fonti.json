@@ -1425,7 +1425,13 @@
     ],
     "crates/plenora-kernels-geo/src/crs.rs": [
       "missing_backend_never_trusts_an_unverified_declaration",
-      "geometry_domain_wrapper_matches_coordinate_level_contract"
+      "geometry_domain_wrapper_matches_coordinate_level_contract",
+      "every_direct_api_has_the_catalogue_gate",
+      "catalogue_and_root_transformations_are_completely_enumerated",
+      "precision_and_ellipsoid_come_from_the_context",
+      "square_units_seam_and_poles_are_explicitly_planar",
+      "mismatch_and_invalid_linear_units_do_not_get_a_planar_exception",
+      "shared_entrypoints_have_identical_catalogue_requirements"
     ],
     "crates/plenora-kernels-geo/src/decoded_size.rs": [
       "constants_are_the_physical_sizeof",

@@ -150,3 +150,23 @@ pub fn difference_with_limits(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{
+        AtomicBool, GeneralBooleanError, GeneralBooleanLimits, GeneralBooleanOp, Geometry,
+    };
+
+    crate::crs::checked_kernel!(boolean_with_limits, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, operation: GeneralBooleanOp, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, GeneralBooleanError),
+        |context| {  super::boolean_with_limits(left, right, operation, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(union_with_limits, "geo.union", 1,
+        (inputs: &[Geometry<f64>], output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, GeneralBooleanError),
+        |context| {  super::union_with_limits(inputs, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(intersection_with_limits, "geo.intersection", 2,
+        (inputs: &[Geometry<f64>], right: &Geometry<f64>, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>) -> (Vec<Geometry<f64>>, GeneralBooleanError),
+        |context| {  super::intersection_with_limits(inputs, right, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(difference_with_limits, "geo.difference", 2,
+        (inputs: &[Geometry<f64>], right: &Geometry<f64>, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>) -> (Vec<Geometry<f64>>, GeneralBooleanError),
+        |context| {  super::difference_with_limits(inputs, right, output_dimension, limits, cancelled) });
+}

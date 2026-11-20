@@ -218,3 +218,12 @@ fn polygonize(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Geometry, Polygon, PredicateError, RelateLimits};
+
+    crate::crs::checked_kernel!(polygonize_with_limits, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>) -> (Vec<Polygon<f64>>, PredicateError),
+        |context| {  super::polygonize_with_limits(linework, limits, cancelled) });
+}

@@ -1214,3 +1214,37 @@ mod tests {
         ));
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{
+        BinaryArray, CoverageIssue, CoverageIssueRow, ExtensionError, Geometry, MargineMemoria,
+        PlenoraError, SharedPath, SharedPathRow,
+    };
+
+    crate::crs::checked_kernel!(coverage_validate, "geo.coverage_validate", 1,
+        (geometries: &[Geometry<f64>], tolerance: f64, max_issues: usize) -> (Vec<CoverageIssue>, ExtensionError),
+        |context| { let precision = context.precision()?; super::coverage_validate(geometries, tolerance, max_issues, precision) });
+    crate::crs::checked_kernel!(coverage_validate_nullable, "geo.coverage_validate", 1,
+        (geometries: &[Option<Geometry<f64>>], tolerance: f64, max_issues: usize) -> (Vec<CoverageIssue>, ExtensionError),
+        |context| { let precision = context.precision()?; super::coverage_validate_nullable(geometries, tolerance, max_issues, precision) });
+    crate::crs::checked_kernel!(coverage_validate_nullable_con_margine, "geo.coverage_validate", 1,
+        (geometries: &[Option<Geometry<f64>>], tolerance: f64, max_issues: usize, margine: MargineMemoria) -> (Vec<CoverageIssue>, ExtensionError),
+        |context| { let precision = context.precision()?; super::coverage_validate_nullable_con_margine(geometries, tolerance, max_issues, precision, margine) });
+    crate::crs::checked_kernel!(coverage_validate_rows, "geo.coverage_validate", 1,
+        (cells: &BinaryArray, tolerance: f64, max_issues: usize) -> (Vec<CoverageIssueRow>, PlenoraError),
+        |context| { let precision = context.precision()?; super::coverage_validate_rows(cells, tolerance, max_issues, precision) });
+    crate::crs::checked_kernel!(coverage_validate_rows_con_margine, "geo.coverage_validate", 1,
+        (cells: &BinaryArray, tolerance: f64, max_issues: usize, margine: MargineMemoria) -> (Vec<CoverageIssueRow>, PlenoraError),
+        |context| { let precision = context.precision()?; super::coverage_validate_rows_con_margine(cells, tolerance, max_issues, precision, margine) });
+    crate::crs::checked_kernel!(shared_paths, "geo.shared_paths", 1,
+        (geometries: &[Geometry<f64>], tolerance: f64, min_length: f64) -> (Vec<SharedPath>, ExtensionError),
+        |context| {  super::shared_paths(geometries, tolerance, min_length) });
+    crate::crs::checked_kernel!(shared_paths_nullable, "geo.shared_paths", 1,
+        (geometries: &[Option<Geometry<f64>>], tolerance: f64, min_length: f64) -> (Vec<SharedPath>, ExtensionError),
+        |context| {  super::shared_paths_nullable(geometries, tolerance, min_length) });
+    crate::crs::checked_kernel!(shared_paths_rows, "geo.shared_paths", 1,
+        (cells: &BinaryArray, tolerance: f64, min_length: f64) -> (Vec<SharedPathRow>, PlenoraError),
+        |context| {  super::shared_paths_rows(cells, tolerance, min_length) });
+}

@@ -5,7 +5,7 @@ use crate::geodetica::EllissoideGeodetico;
 use geo::kernels::{Kernel, Orientation, RobustKernel};
 use geo::{Coord, Geometry, LineString, Polygon};
 use geographiclib_rs::DirectGeodesic;
-use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::crs::ResolvedCrs;
 use std::sync::atomic::AtomicBool;
 
 /// Budget cumulativi del batch atomico.
@@ -264,7 +264,12 @@ pub fn geodesic_point_buffer_with_limits<'a>(
 ) -> Result<PointBufferResult<'a>, DegenerateBufferError> {
     let mut work = BufferWork::new(limits.batch, cancelled);
     work.checkpoint()?;
-    if crs.kind() != CrsKind::Geographic {
+    if plenora_core::crs::validate_requirement(
+        plenora_core::catalog::CrsRequirement::Geographic,
+        &[crs],
+    )
+    .is_err()
+    {
         return Err(DegenerateBufferError::GeographicRequired);
     }
     if !tolerance_m.is_finite() || tolerance_m <= 0.0 {

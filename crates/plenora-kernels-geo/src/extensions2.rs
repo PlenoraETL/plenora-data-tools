@@ -1394,3 +1394,34 @@ mod tests {
         );
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{
+        BinaryArray, ExtensionError, Geometry, GridCell, GridExtent, GridRow, GridShape,
+        PlenoraError,
+    };
+
+    crate::crs::checked_kernel!(grid_cell_count, "geo.generate_grid", 1,
+        (extent: &GridExtent, cell_size: f64, shape: GridShape) -> (u64, ExtensionError),
+        |context| {  super::grid_cell_count(extent, cell_size, shape) });
+    crate::crs::checked_kernel!(generate_grid, "geo.generate_grid", 1,
+        (extent: &GridExtent, cell_size: f64, shape: GridShape) -> (Vec<GridCell>, ExtensionError),
+        |context| {  super::generate_grid(extent, cell_size, shape) });
+    crate::crs::checked_kernel!(generate_grid_rows, "geo.generate_grid", 1,
+        (extent: &GridExtent, cell_size: f64, shape: GridShape) -> (Vec<GridRow>, PlenoraError),
+        |context| {  super::generate_grid_rows(extent, cell_size, shape) });
+    crate::crs::checked_kernel!(subdivide, "geo.subdivide", 1,
+        (geometry: &Geometry<f64>, max_vertices: usize) -> (Vec<Geometry<f64>>, ExtensionError),
+        |context| { let precision = context.precision()?; super::subdivide(geometry, max_vertices, precision) });
+    crate::crs::checked_kernel!(subdivide_wkb, "geo.subdivide", 1,
+        (payload: &[u8], max_vertices: usize) -> (Vec<Vec<u8>>, PlenoraError),
+        |context| { let precision = context.precision()?; super::subdivide_wkb(payload, max_vertices, precision) });
+    crate::crs::checked_kernel!(snap, "geo.snap", 2,
+        (geometry: &Geometry<f64>, reference: &Geometry<f64>, tolerance: f64) -> (Geometry<f64>, ExtensionError),
+        |context| {  super::snap(geometry, reference, tolerance) });
+    crate::crs::checked_kernel!(snap_column, "geo.snap", 2,
+        (cells: &BinaryArray, reference: &Geometry<f64>, tolerance: f64) -> (Vec<Option<Vec<u8>>>, PlenoraError),
+        |context| {  super::snap_column(cells, reference, tolerance) });
+}

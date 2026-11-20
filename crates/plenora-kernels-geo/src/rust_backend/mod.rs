@@ -1416,3 +1416,26 @@ mod baseline_600;
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod compatibility_600;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{
+        Geometry, MakeValidLimits, Polygon, PolygonizeResult, RepairMethod, RustBackendError,
+    };
+
+    crate::crs::checked_kernel!(make_valid_wkb, "geo.make_valid", 1,
+        (payload: &[u8], method: RepairMethod, keep_collapsed: bool) -> (Vec<u8>, RustBackendError),
+        |context| { let precision = context.precision()?; super::make_valid_wkb(payload, method, keep_collapsed, precision) });
+    crate::crs::checked_kernel!(make_valid_wkb_with_limits, "geo.make_valid", 1,
+        (payload: &[u8], method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits) -> (Vec<u8>, RustBackendError),
+        |context| { let precision = context.precision()?; super::make_valid_wkb_with_limits(payload, method, keep_collapsed, limits, precision) });
+    crate::crs::checked_kernel!(make_valid_geometry, "geo.make_valid", 1,
+        (geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool) -> (Geometry<f64>, RustBackendError),
+        |context| { let precision = context.precision()?; super::make_valid_geometry(geometry, method, keep_collapsed, precision) });
+    crate::crs::checked_kernel!(polygonize_linework, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, node_input: bool, require_complete: bool, max_input_coordinates: u64, max_noding_work: u64, max_output_geometries: u64, max_output_coordinates: u64) -> (PolygonizeResult, RustBackendError),
+        |context| { let precision = context.precision()?; super::polygonize_linework(linework, node_input, require_complete, max_input_coordinates, max_noding_work, max_output_geometries, max_output_coordinates, precision) });
+    crate::crs::checked_kernel!(split_polygon_by_linework, "geo.split", 2,
+        (source: &Geometry<f64>, splitter: &Geometry<f64>, max_input_coordinates: u64, max_noding_work: u64, max_output_parts: u64, max_output_coordinates: u64) -> (Vec<Polygon<f64>>, RustBackendError),
+        |context| { let precision = context.precision()?; super::split_polygon_by_linework(source, splitter, max_input_coordinates, max_noding_work, max_output_parts, max_output_coordinates, precision) });
+}

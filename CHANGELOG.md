@@ -10,6 +10,21 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Aggiunte
+
+- Contratto 5, ingressi Rust `with_crs`: `CrsContext` applica il requisito
+  del catalogo prima della chiamata diretta; `planar_coordinates` autorizza
+  esplicitamente il piano XY nelle unita' dello SR geografico, senza
+  riproiezione o geodetica implicita. `SameProjected` conserva il controllo
+  di identita' dello SR anche in modalita' planare. Errori CRS e del kernel
+  restano distinti e tipizzati; precisione ed ellissoide derivano dal CRS.
+- Censimento dei wrapper e del catalogo, oracoli analitici XY su seam e poli,
+  ed estensione della tabella GOP-028 ai nuovi ingressi con limiti.
+  Le API storiche senza SR conservano firme e dominio: il loro chiamante
+  resta responsabile del CRS, come documentato in [Limiti](docs/limiti.md#chiamate-dirette-con-crs).
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

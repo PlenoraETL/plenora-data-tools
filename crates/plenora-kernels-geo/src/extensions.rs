@@ -867,3 +867,27 @@ mod tests {
         );
     }
 }
+
+/// Ingressi additivi con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{
+        ExtensionError, Geometry, GeometryAccessors, OnWktError, PlenoraError, Point, StringArray,
+    };
+
+    crate::crs::checked_kernel!(from_wkt_column, "geo.from_wkt", 1,
+        (values: &StringArray, on_error: OnWktError) -> (Vec<Option<Vec<u8>>>, PlenoraError),
+        |context| {  super::from_wkt_column(values, on_error) });
+    crate::crs::checked_kernel!(from_wkt_column_named, "geo.from_wkt", 1,
+        (values: &StringArray, _on_error: OnWktError, column: Option<&str>) -> (Vec<Option<Vec<u8>>>, PlenoraError),
+        |context| {  super::from_wkt_column_named(values, _on_error, column) });
+    crate::crs::checked_kernel!(geometry_accessors, "geo.geometry_accessors", 1,
+        (geometry: &Geometry<f64>) -> (GeometryAccessors, ExtensionError),
+        |context| {  super::geometry_accessors(geometry) });
+    crate::crs::checked_kernel!(collect_geometries, "geo.collect", 1,
+        (geometries: &[Option<Geometry<f64>>]) -> (Option<Geometry<f64>>, ExtensionError),
+        |context| {  super::collect_geometries(geometries) });
+    crate::crs::checked_kernel!(line_locate_point, "geo.line_locate_point", 2,
+        (geometry: &Geometry<f64>, point: &Point<f64>) -> (Option<f64>, ExtensionError),
+        |context| {  super::line_locate_point(geometry, point) });
+}

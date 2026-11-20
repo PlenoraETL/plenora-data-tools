@@ -1157,3 +1157,21 @@ pub fn difference_with_limits(
         cancelled,
     )
 }
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{AtomicBool, Geometry, LineBooleanError, LineBooleanOp, RelateLimits};
+
+    crate::crs::checked_kernel!(boolean_with_limits, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, operation: LineBooleanOp, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, LineBooleanError),
+        |context| {  super::boolean_with_limits(left, right, operation, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(union_with_limits, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, LineBooleanError),
+        |context| {  super::union_with_limits(left, right, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(intersection_with_limits, "geo.intersection", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, LineBooleanError),
+        |context| {  super::intersection_with_limits(left, right, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(difference_with_limits, "geo.difference", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, LineBooleanError),
+        |context| {  super::difference_with_limits(left, right, output_dimension, limits, cancelled) });
+}

@@ -1091,6 +1091,340 @@ mod gop028 {
     fn cases() -> Vec<Case> {
         vec![
             case!(
+                "predicates.rs::with_crs",
+                relate_matrix_with_limits,
+                |f, d, t| crate::predicates::with_crs::relate_matrix_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line_geometry,
+                    &f.point,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs::with_crs",
+                boolean_with_limits,
+                |f, d, t| point_boolean::with_crs::boolean_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.point,
+                    &f.point,
+                    point_boolean::PointBooleanOp::Union,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(point_boolean::PointBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs::with_crs",
+                union_with_limits,
+                |f, d, t| point_boolean::with_crs::union_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.point,
+                    &f.point,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(point_boolean::PointBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs::with_crs",
+                intersection_with_limits,
+                |f, d, t| point_boolean::with_crs::intersection_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.point,
+                    &f.point,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(point_boolean::PointBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/point_boolean.rs::with_crs",
+                difference_with_limits,
+                |f, d, t| point_boolean::with_crs::difference_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.point,
+                    &f.point,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(point_boolean::PointBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs::with_crs",
+                boolean_with_limits,
+                |f, d, t| line_boolean::with_crs::boolean_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    line_boolean::LineBooleanOp::Union,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(line_boolean::LineBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs::with_crs",
+                union_with_limits,
+                |f, d, t| line_boolean::with_crs::union_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(line_boolean::LineBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs::with_crs",
+                intersection_with_limits,
+                |f, d, t| line_boolean::with_crs::intersection_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(line_boolean::LineBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/line_boolean.rs::with_crs",
+                difference_with_limits,
+                |f, d, t| line_boolean::with_crs::difference_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line_geometry,
+                    &f.line_geometry,
+                    None,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(line_boolean::LineBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs::with_crs",
+                boolean_with_limits,
+                |f, d, t| polygon_boolean::with_crs::boolean_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygon_boolean::PolygonBooleanOp::Union,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(polygon_boolean::PolygonBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs::with_crs",
+                union_with_limits,
+                |f, d, t| polygon_boolean::with_crs::union_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(polygon_boolean::PolygonBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs::with_crs",
+                intersection_with_limits,
+                |f, d, t| polygon_boolean::with_crs::intersection_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(polygon_boolean::PolygonBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_boolean.rs::with_crs",
+                difference_with_limits,
+                |f, d, t| polygon_boolean::with_crs::difference_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(polygon_boolean::PolygonBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs::with_crs",
+                boolean_with_limits,
+                |f, d, t| general_boolean::with_crs::boolean_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.polygon_geometry,
+                    &f.polygon_geometry,
+                    general_boolean::GeneralBooleanOp::Union,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(general_boolean::GeneralBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs::with_crs",
+                union_with_limits,
+                |f, d, t| general_boolean::with_crs::union_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs]),
+                    std::slice::from_ref(&f.polygon_geometry),
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(general_boolean::GeneralBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs::with_crs",
+                intersection_with_limits,
+                |f, d, t| general_boolean::with_crs::intersection_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    std::slice::from_ref(&f.polygon_geometry),
+                    &f.polygon_geometry,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(general_boolean::GeneralBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/general_boolean.rs::with_crs",
+                difference_with_limits,
+                |f, d, t| general_boolean::with_crs::difference_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    std::slice::from_ref(&f.polygon_geometry),
+                    &f.polygon_geometry,
+                    None,
+                    polygons(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(general_boolean::GeneralBooleanError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "predicates/arrangement_indexed/polygon_completion.rs::with_crs",
+                polygon_completion_with_limits,
+                |f, d, t| crate::with_crs::polygon_completion_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    std::slice::from_ref(&f.polygon),
+                    &LineString::from(vec![(1., 0.), (2., 0.), (2., 1.), (1., 1.)]).into(),
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(
+                    crate::polygon_completion::PolygonCompletionError::Predicate(
+                        PredicateError::DeadlineExceeded
+                    )
+                )
+            ),
+            case!(
+                "extended_algorithms/split_limited.rs::with_crs",
+                split_line_with_limits,
+                |f, d, t| crate::extended_algorithms::with_crs::split_line_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line,
+                    &f.point,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "extended_algorithms/polygonize_limited.rs::with_crs",
+                polygonize_with_limits,
+                |f, d, t| crate::extended_algorithms::with_crs::polygonize_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs]),
+                    &f.line_geometry,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(PredicateError::DeadlineExceeded)
+            ),
+            case!(
+                "offset.rs::with_crs",
+                offset_with_limits,
+                |f, d, t| crate::offset::with_crs::offset_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs]),
+                    &f.line_geometry,
+                    crate::offset::OffsetOptions::new(1., 0.01),
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(crate::offset::OffsetError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "trim_extend.rs::with_crs",
+                trim_extend_with_limits,
+                |f, d, t| crate::trim_extend::with_crs::trim_extend_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line_geometry,
+                    &f.guide,
+                    crate::trim_extend::TrimExtendOptions::default(),
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(crate::trim_extend::TrimExtendError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
+                "reshape.rs::with_crs",
+                reshape_with_limits,
+                |f, d, t| crate::reshape::with_crs::reshape_with_limits(
+                    crate::crs::CrsContext::planar_coordinates(&[&f.crs, &f.crs]),
+                    &f.line_geometry,
+                    &f.reshaper,
+                    limits(d),
+                    Some(t)
+                ),
+                crate::crs::DirectError::Kernel(crate::reshape::ReshapeError::Predicate(
+                    PredicateError::DeadlineExceeded
+                ))
+            ),
+            case!(
                 "geodesic_buffer.rs",
                 geodesic_empty_buffer_with_limits,
                 |f, d, t| crate::geodesic_buffer::geodesic_empty_buffer_with_limits(
@@ -1565,6 +1899,14 @@ mod gop028 {
     }
     // Anche API prive di token/deadline devono essere censite esplicitamente.
     const BUDGET_ONLY: &[(&str, &str)] = &[
+        (
+            "rust_backend/mod.rs::with_crs",
+            "make_valid_wkb_with_limits",
+        ),
+        (
+            "rust_backend/make_valid.rs::with_crs",
+            "make_valid_geometry_rust_with_limits",
+        ),
         ("rust_backend/mod.rs", "make_valid_wkb_with_limits"),
         (
             "rust_backend/make_valid.rs",
@@ -1578,6 +1920,22 @@ mod gop028 {
                 discover(&path, root, found);
             } else if path.extension().is_some_and(|ext| ext == "rs") {
                 let source = std::fs::read_to_string(&path).unwrap();
+                for entry in source.split("crate::crs::checked_kernel!(").skip(1) {
+                    let name = entry.split(',').next().unwrap().trim();
+                    if name.ends_with("_with_limits") {
+                        assert!(found.insert((
+                            format!(
+                                "{}::with_crs",
+                                path.strip_prefix(root)
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap()
+                                    .replace('\\', "/")
+                            ),
+                            name.to_owned(),
+                        )));
+                    }
+                }
                 // Tokenizzazione minima: whitespace e punteggiatura, firme multilinea incluse.
                 let tokens: Vec<_> = source
                     .split(|c: char| !(c.is_alphanumeric() || c == '_'))
