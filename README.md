@@ -310,8 +310,9 @@ python scripts/verifica_parita_superfici.py target/parita
 
 ### Catena delle dipendenze
 
-La politica comune approvata e il checker sono copiati senza modifiche in
-`.ci/plenora-dependencies/`. Il job Linux `dipendenze` di `ci.yml` verifica
+La politica comune approvata e il checker sono in
+`.ci/plenora-dependencies/`; il checker resta quello dello snapshot comune.
+Il job Linux `dipendenze` di `ci.yml` verifica
 il digest dello snapshot e tutti i lock, inclusi fuzz e Parquet vendorizzato:
 
 ```sh
@@ -324,6 +325,14 @@ un repository non censito con `input_schema_o_digest_non_valido`.
 
 Le eccezioni sono solo quelle dello snapshot: nuovi archi o versioni dei
 genitori richiedono revisione della politica comune, non una deroga locale.
+
+La migrazione qualificata a heapless 0.9.4 tramite il fork di famiglia
+`plenora-rstar` si riconcilia con `python .ci/aggiorna_dependency_policy.py`.
+Lo script verifica le identita approvate nei lock, elimina solo eccezioni
+orfane di questo repository e aggiorna manifesto, digest, snapshot e pin
+del workflow. Rifiuta nuove deviazioni; non viene eseguito automaticamente
+in CI. Il fork si ritira quando rstar pubblica una versione con heapless
+corretta.
 
 
 `deny.toml` è la policy di cargo-deny: advisory rifiutate senza eccezioni,

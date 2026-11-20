@@ -163,7 +163,13 @@
     ],
     "scripts/strict_json.py": [],
     "scripts/test_allineamento_dipendenze.py": [
+      "test_aggiunge_qualifiche_mancanti",
       "test_minimo_arrow_del_fork",
+      "test_qualifica_idempotente_e_senza_nuove_eccezioni",
+      "test_rifiuta_devizioni_attive_altri_repo_e_chiavi_assenti",
+      "test_rifiuta_heapless_non_qualificata",
+      "test_rimozione_conservativa",
+      "test_snapshot_corrotto_non_scrive",
       "test_versioni_comuni_nei_tre_lock"
     ],
     "scripts/test_arrow_ingressi.py": [

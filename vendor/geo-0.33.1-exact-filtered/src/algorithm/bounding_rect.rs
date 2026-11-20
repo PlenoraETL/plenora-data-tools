@@ -2,7 +2,7 @@ use crate::utils::{partial_max, partial_min};
 use crate::{
     CoordNum, GeoNum, GeometryCow, MonotoneChains, coord, geometry::*, monotone_chain::geometry::*,
 };
-use geo_types::private_utils::{get_bounding_rect, line_string_bounding_rect};
+use rstar::private_utils::{get_bounding_rect, line_string_bounding_rect};
 
 /// Calculation of the bounding rectangle of a geometry.
 pub trait BoundingRect<T: CoordNum> {

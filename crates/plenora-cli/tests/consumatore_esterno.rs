@@ -29,7 +29,8 @@ use std::process::Command;
 use serde_json::Value;
 
 /// I fork: nome del pacchetto e cartella sotto `vendor/`.
-const FORK: [(&str, &str); 3] = [
+const FORK: [(&str, &str); 4] = [
+    ("plenora-rstar", "rstar-0.12.2-heapless"),
     ("plenora-geo", "geo-0.33.1-exact-filtered"),
     ("plenora-wkt", "wkt-0.14.0-v2"),
     ("plenora-parquet", "parquet-60.0.0-eof"),
@@ -103,7 +104,7 @@ fn verifica_grafo(metadati: &Value, contesto: &str) {
             .push(pacchetto);
     }
 
-    for nome in ["geo", "parquet"] {
+    for nome in ["geo", "parquet", "rstar"] {
         let sorgenti: Vec<&str> = per_nome
             .get(nome)
             .map_or(&[][..], Vec::as_slice)
@@ -134,6 +135,17 @@ fn verifica_grafo(metadati: &Value, contesto: &str) {
         per_nome.get("geo-types").map_or(0, Vec::len),
         1,
         "{contesto}: `geo-types` deve essere una sola (stessi tipi fra i crate)"
+    );
+
+    assert_eq!(
+        per_nome
+            .get("heapless")
+            .expect("heapless presente")
+            .iter()
+            .map(|p| p["version"].as_str().expect("version"))
+            .collect::<Vec<_>>(),
+        vec!["0.9.4"],
+        "{contesto}: heapless deve essere la versione corretta"
     );
 
     // Chi dipende dal `wkt` di crates.io: solo `geozero`.
