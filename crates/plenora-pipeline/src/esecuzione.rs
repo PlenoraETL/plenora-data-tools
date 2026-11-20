@@ -158,7 +158,11 @@ fn righe(batch: &RecordBatch) -> Result<u64> {
 
 /// Limiti del piano su un batch (porting di `validate_batch`): righe,
 /// colonne, nomi di colonna ripetuti.
-fn validate_batch(batch: &RecordBatch, limits: &plenora_kernels_table::Limits) -> Result<()> {
+fn validate_batch(
+    batch: &RecordBatch,
+    limits: &plenora_kernels_table::Limits,
+    interruzione: &Interruzione,
+) -> Result<()> {
     if batch.num_rows() > limits.max_rows {
         return Err(PlenoraError::ResourceLimit(format!(
             "batch con {} righe oltre il limite {}",
@@ -175,6 +179,7 @@ fn validate_batch(batch: &RecordBatch, limits: &plenora_kernels_table::Limits) -
     }
     let mut names = HashSet::new();
     for field in batch.schema().fields() {
+        interruzione.verifica("esecuzione pipeline")?;
         if !names.insert(field.name()) {
             return Err(PlenoraError::Schema(format!(
                 "nome colonna duplicato: {}",
@@ -189,13 +194,14 @@ fn validate_batch(batch: &RecordBatch, limits: &plenora_kernels_table::Limits) -
 /// `LargeBinary` in `Binary`, voce `pandas` tolta dai metadati di schema
 /// (porting di `normalize_large_utf8`). Stessa trasformazione di
 /// [`crate::validazione::normalizza_schema`] sugli schemi.
-fn normalize_large_utf8(batch: RecordBatch) -> Result<RecordBatch> {
+fn normalize_large_utf8(batch: RecordBatch, interruzione: &Interruzione) -> Result<RecordBatch> {
     let schema = crate::validazione::normalizza_schema(&batch.schema());
     if schema == batch.schema() {
         return Ok(batch);
     }
     let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
     for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
+        interruzione.verifica("esecuzione pipeline")?;
         if field.data_type() == &DataType::LargeUtf8 {
             let strings = column
                 .as_any()
@@ -359,6 +365,7 @@ fn esegui_kernel(
     ingressi: &[&RecordBatch],
     limiti: &plenora_kernels_table::Limits,
     contratto: &DataContract,
+    interruzione: &Interruzione,
 ) -> Result<(RecordBatch, EffettiKernel)> {
     #[cfg(test)]
     CHIAMATE_KERNEL.with(|chiamate| chiamate.set(chiamate.get() + 1));
@@ -366,10 +373,16 @@ fn esegui_kernel(
     let chiamata = || match (&passo.kernel, ingressi) {
         (KernelPasso::Geo(geo), _) => {
             for tabella in ingressi {
+                interruzione.verifica("esecuzione pipeline")?;
                 plenora_kernels_geo::valori_arrow::verifica_tabella(tabella)?;
             }
-            geo.esegui(ingressi, contratto, limiti.max_governed_memory_bytes)
-                .map(nessuno)
+            geo.esegui(
+                ingressi,
+                contratto,
+                limiti.max_governed_memory_bytes,
+                interruzione,
+            )
+            .map(nessuno)
         }
         (KernelPasso::Tabellare(preparato), [unico]) => {
             preparato.esegui_unario_con_effetti(unico, limiti)
@@ -520,10 +533,12 @@ impl PipelineValidata {
     /// - gli errori dei kernel, con il nome del passo dove la variante porta
     ///   un messaggio.
     pub fn run(self, tables: Vec<(String, RecordBatch)>) -> Result<Esito> {
+        let interruzione = Interruzione::default();
         for (_, batch_arrow) in &tables {
+            interruzione.verifica("esecuzione pipeline")?;
             plenora_core::valida_arrow::batch(batch_arrow)?;
         }
-        self.run_interrompibile(tables, &Interruzione::default())
+        self.run_interrompibile(tables, &interruzione)
     }
 
     /// [`Self::run`] con scadenza e annullamento cooperativi
@@ -543,19 +558,30 @@ impl PipelineValidata {
         tables: Vec<(String, RecordBatch)>,
         interruzione: &Interruzione,
     ) -> Result<Esito> {
+        // Conserva contesto e fase per un'interruzione gia presente all'ingresso.
+        if let Some(passo) = self.passi.first() {
+            let op = passo.descrittore.id;
+            interruzione.verifica(&format!("prima del passo `{}` ({op})", passo.out))?;
+        } else {
+            interruzione
+                .verifica("prima di consegnare gli output")
+                .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;
+        }
         for (_, batch_arrow) in &tables {
+            interruzione.verifica("esecuzione pipeline")?;
             plenora_core::valida_arrow::batch(batch_arrow)?;
         }
         let budget = self.limiti.max_governed_memory_bytes;
         // Input: esattamente quelli dichiarati, con lo schema validato.
         let mut vivi: BTreeMap<String, RecordBatch> = BTreeMap::new();
         for (nome, tabella) in tables {
+            interruzione.verifica("esecuzione pipeline")?;
             let Some(atteso) = self.schemi_input.get(&nome) else {
                 return Err(PlenoraError::InvalidPlan(format!(
                     "tabella `{nome}` non dichiarata tra gli input del piano"
                 )));
             };
-            let tabella = normalize_large_utf8(tabella)
+            let tabella = normalize_large_utf8(tabella, interruzione)
                 .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
             if tabella.schema().as_ref() != atteso.as_ref() {
                 return Err(PlenoraError::Schema(format!(
@@ -575,7 +601,7 @@ impl PipelineValidata {
                 righe_tabella,
             )
             .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
-            validate_batch(&tabella, &self.limiti_kernel)
+            validate_batch(&tabella, &self.limiti_kernel, interruzione)
                 .map_err(|errore| errore.con_contesto(&format!("input `{nome}`")))?;
             let righe_input = righe(&tabella)?;
             if righe_input > self.limiti.rows.max_input_rows {
@@ -601,10 +627,13 @@ impl PipelineValidata {
         // output del piano non muoiono.
         let mut ultimo_uso: BTreeMap<&str, usize> = BTreeMap::new();
         for nome in &self.outputs {
+            interruzione.verifica("esecuzione pipeline")?;
             ultimo_uso.insert(nome, USO_SENZA_FINE);
         }
         for (indice, passo) in self.passi.iter().enumerate().rev() {
+            interruzione.verifica("esecuzione pipeline")?;
             for sorgente in &passo.inputs {
+                interruzione.verifica("esecuzione pipeline")?;
                 ultimo_uso.entry(sorgente).or_insert(indice);
             }
             ultimo_uso.entry(&passo.out).or_insert(indice);
@@ -617,6 +646,7 @@ impl PipelineValidata {
             .cloned()
             .collect();
         for nome in &liberati_all_avvio {
+            interruzione.verifica("esecuzione pipeline")?;
             vivi.remove(nome);
         }
         let byte_vivi_iniziali = byte_vivi(vivi.values())?;
@@ -631,6 +661,7 @@ impl PipelineValidata {
 
         let mut passi = Vec::with_capacity(self.passi.len());
         for (indice, passo) in self.passi.iter().enumerate() {
+            interruzione.verifica("esecuzione pipeline")?;
             let op = passo.descrittore.id;
             #[cfg(feature = "sonde-di-prova")]
             if indice > 0 {
@@ -679,20 +710,21 @@ impl PipelineValidata {
                 ..self.limiti_kernel.clone()
             };
 
-            let (uscita, effetti) = esegui_kernel(passo, &ingressi, &limiti_kernel, contratto)
-                .map_err(|errore| diagnostica_nella_base(errore, passo))
-                .and_then(|(uscita, effetti)| {
-                    validate_batch(&uscita, &self.limiti_kernel)?;
-                    let righe_out = righe(&uscita)?;
-                    // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
-                    // piano ha solo `max_output_rows`, controllato alla fine.
-                    if !self.outputs.contains(&passo.out) {
-                        check_edge_counts(&self.limiti, righe_out)?;
-                    }
-                    check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
-                    conforma(&uscita, contratto).map(|uscita| (uscita, effetti))
-                })
-                .map_err(nel)?;
+            let (uscita, effetti) =
+                esegui_kernel(passo, &ingressi, &limiti_kernel, contratto, interruzione)
+                    .map_err(|errore| diagnostica_nella_base(errore, passo))
+                    .and_then(|(uscita, effetti)| {
+                        validate_batch(&uscita, &self.limiti_kernel, interruzione)?;
+                        let righe_out = righe(&uscita)?;
+                        // Come a `190c493` (`blocking.rs`), l'arco d'uscita del
+                        // piano ha solo `max_output_rows`, controllato alla fine.
+                        if !self.outputs.contains(&passo.out) {
+                            check_edge_counts(&self.limiti, righe_out)?;
+                        }
+                        check_expansion(passo, &self.limiti, &righe_in, righe_out)?;
+                        conforma(&uscita, contratto).map(|uscita| (uscita, effetti))
+                    })
+                    .map_err(nel)?;
             let righe_out = righe(&uscita)?;
 
             let con_uscita = byte_vivi(vivi.values().chain(std::iter::once(&uscita)))?;
@@ -713,6 +745,7 @@ impl PipelineValidata {
                 .map(|(nome, _)| (*nome).to_owned())
                 .collect();
             for nome in &liberati {
+                interruzione.verifica("esecuzione pipeline")?;
                 vivi.remove(nome);
             }
             passi.push(ReportPasso {
@@ -741,6 +774,7 @@ impl PipelineValidata {
         }
         let mut outputs = Vec::with_capacity(self.outputs.len());
         for nome in &self.outputs {
+            interruzione.verifica("esecuzione pipeline")?;
             let tabella = vivi.remove(nome).ok_or_else(|| {
                 PlenoraError::Internal(format!("output `{nome}` non residente a fine piano"))
             })?;
@@ -958,5 +992,63 @@ mod tests {
             );
             assert_eq!(CHIAMATE_KERNEL.with(std::cell::Cell::get), 0);
         }
+    }
+    #[test]
+    fn gli_helper_osservano_la_stessa_interruzione() {
+        use plenora_core::ErrorCategory;
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "testo",
+                DataType::LargeUtf8,
+                false,
+            )])),
+            vec![Arc::new(super::LargeStringArray::from(vec!["a"]))],
+        )
+        .unwrap();
+        for (interruzione, categoria) in [
+            (
+                super::Interruzione {
+                    scadenza: Some(Instant::now()),
+                    annullamento: None,
+                },
+                ErrorCategory::Timeout,
+            ),
+            (
+                super::Interruzione {
+                    scadenza: None,
+                    annullamento: Some(Arc::new(AtomicBool::new(true))),
+                },
+                ErrorCategory::Cancelled,
+            ),
+        ] {
+            assert_eq!(
+                super::validate_batch(
+                    &batch,
+                    &plenora_kernels_table::Limits::default(),
+                    &interruzione
+                )
+                .expect_err("interruzione attesa")
+                .category(),
+                categoria
+            );
+            assert_eq!(
+                super::normalize_large_utf8(batch.clone(), &interruzione)
+                    .expect_err("interruzione attesa")
+                    .category(),
+                categoria
+            );
+        }
+        super::validate_batch(
+            &batch,
+            &plenora_kernels_table::Limits::default(),
+            &super::Interruzione::default(),
+        )
+        .expect("validazione senza interruzione");
+        let normalized =
+            super::normalize_large_utf8(batch, &super::Interruzione::default()).unwrap();
+        assert_eq!(normalized.schema().field(0).data_type(), &DataType::Utf8);
     }
 }

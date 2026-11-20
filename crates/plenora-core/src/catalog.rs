@@ -67,8 +67,12 @@ pub enum ExecutionClass {
 
 /// Dove l'operazione può osservare una richiesta di annullamento.
 ///
-/// Dichiarazione del progetto d'origine: in questo repository non c'è un
-/// meccanismo di cancellazione e nessun codice la consulta.
+/// Dichiarazione del progetto d'origine, non garanzia del runner locale.
+/// `plenora-pipeline` controlla l'interruzione ai confini dei passi e non
+/// propaga il token ai kernel geo. Le API geo `with_limits` documentano
+/// separatamente i propri checkpoint interni; le API storiche senza token
+/// (`polygonize`, `split`, `make_valid` incluse) non diventano interrompibili.
+/// Nessun codice usa questa etichetta per scegliere i checkpoint locali.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CancellationBehavior {
     /// Fra un batch e l'altro (kernel streaming).

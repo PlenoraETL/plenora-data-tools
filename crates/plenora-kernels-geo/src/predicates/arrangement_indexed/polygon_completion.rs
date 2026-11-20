@@ -89,6 +89,11 @@ fn occupied_index(
 ) -> Result<crate::predicates::interval_index::BoxIndex, PredicateError> {
     let mut bounds = CountedVec::new();
     for g in copies {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::occupied_index:1",
+        );
+        work.checkpoint()?;
         let b = crate::predicates::interval_index::geometry_bounds(g, work)?;
         work.push(&mut bounds, b)?;
     }
@@ -102,9 +107,17 @@ fn validate_polygons(
     let empty = Geometry::MultiPoint(MultiPoint::new(Vec::new()));
     let mut copies = CountedVec::new();
     for polygon in polygons {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:1",
+        );
         work.step()?;
         // Polygon::new chiude gli anelli: verificare prima per non riparare input.
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:2",
+            );
             work.step()?;
             if !(polygon.exterior().0.is_empty() && polygon.interiors().is_empty())
                 && (ring.0.len() < 4 || ring.0.first() != ring.0.last())
@@ -112,6 +125,10 @@ fn validate_polygons(
                 return Err(super::invalid("completion polygons").into());
             }
             for coord in &ring.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:3",
+                );
                 work.step()?;
                 if !coord.x.is_finite() || !coord.y.is_finite() {
                     return Err(PredicateError::NonFiniteCoordinate {
@@ -124,6 +141,11 @@ fn validate_polygons(
         let shell = copy_line(polygon.exterior(), work)?;
         let mut holes = CountedVec::new();
         for hole in polygon.interiors() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:4",
+            );
+            work.checkpoint()?;
             let hole = copy_line(hole, work)?;
             work.push(&mut holes, hole)?;
         }
@@ -133,7 +155,17 @@ fn validate_polygons(
     }
     let index = occupied_index(&copies, work)?;
     for (i, geometry) in copies.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:5",
+        );
+        work.checkpoint()?;
         for j in index.candidates(index.at(i), work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:6",
+            );
+            work.step()?;
             if j < i && super::relate(&copies[j], geometry, work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::OverlappingInteriors);
             }
@@ -151,6 +183,11 @@ fn validate_lines(
         Geometry::LineString(line) => work.push(&mut parts, line)?,
         Geometry::MultiLineString(lines) => {
             for line in &lines.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::validate_lines:1",
+                );
+                work.checkpoint()?;
                 work.push(&mut parts, line)?;
             }
         }
@@ -161,8 +198,17 @@ fn validate_lines(
     let mut owners = CountedVec::new();
     let mut lengths = CountedVec::new();
     for (part, line) in parts.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::validate_lines:2",
+        );
+        work.checkpoint()?;
         let mut segment = 0_usize;
         for pair in line.0.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::validate_lines:3",
+            );
             work.step()?;
             if pair[0] == pair[1] {
                 continue;
@@ -175,6 +221,11 @@ fn validate_lines(
     }
     let mut refs = CountedVec::new();
     for edge in &shape.lines {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::validate_lines:4",
+        );
+        work.checkpoint()?;
         work.push(&mut refs, edge)?;
     }
     let mut unsupported = false;
@@ -242,6 +293,10 @@ fn roles(
 ) -> Result<(bool, bool), PredicateError> {
     let (mut new, mut old) = (false, false);
     for &id in &ring.atoms {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::roles:1",
+        );
         work.step()?;
         if roles[graph.atoms[id].sources[0]].is_some() {
             old = true;
@@ -259,15 +314,47 @@ fn select(
     work: &mut Work<'_>,
 ) -> Result<CountedVec<OutputFace>, PolygonCompletionError> {
     for atom in &graph.atoms {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::select:1",
+        );
         work.step()?;
-        if atom.sources.iter().any(|&id| roles_by_source[id].is_none())
-            && atom.sources.iter().any(|&id| roles_by_source[id].is_some())
-        {
+        let mut has_new = false;
+        for &id in &atom.sources {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::select:2",
+            );
+            work.step()?;
+            if roles_by_source[id].is_none() {
+                has_new = true;
+                break;
+            }
+        }
+        let mut has_old = false;
+        if has_new {
+            for &id in &atom.sources {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::select:3",
+                );
+                work.step()?;
+                if roles_by_source[id].is_some() {
+                    has_old = true;
+                    break;
+                }
+            }
+        }
+        if has_old {
             return Err(PolygonCompletionError::AmbiguousProvenance);
         }
     }
     let mut result = CountedVec::new();
     for (id, ring) in graph.rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::select:4",
+        );
         work.step()?;
         if !ring.orientation.is_gt() || occupied(ring, graph, shape, work)? {
             continue;
@@ -275,6 +362,11 @@ fn select(
         let (mut new, mut old) = roles(ring, graph, roles_by_source, work)?;
         let mut holes = CountedVec::new();
         for &h in &graph.holes[id] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::select:5",
+            );
+            work.checkpoint()?;
             let (hn, ho) = roles(&graph.rings[h], graph, roles_by_source, work)?;
             new |= hn;
             old |= ho;
@@ -295,9 +387,22 @@ fn compare_areas(
 ) -> Result<Ordering, PredicateError> {
     let mut terms = CountedVec::new();
     for (rings, subtract) in [(a, false), (b, true)] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::compare_areas:1",
+        );
         for &id in rings {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::compare_areas:2",
+            );
+            work.checkpoint()?;
             let vertices = &graph.rings[id].vertices;
             for i in 0..vertices.len() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::compare_areas:3",
+                );
                 work.step()?;
                 let term = graph.points[vertices[i]]
                     .try_cross(&graph.points[vertices[(i + 1) % vertices.len()]])?;
@@ -326,6 +431,10 @@ fn ring_cmp(
         return Ok(order);
     }
     for (&av, &bv) in a.vertices.iter().zip(&b.vertices) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::ring_cmp:1",
+        );
         work.step()?;
         let order = coord_cmp(coords[av], coords[bv]);
         if !order.is_eq() {
@@ -342,8 +451,17 @@ fn canonicalize(
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
     for ring in graph.rings.iter_mut() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:1",
+        );
+        work.checkpoint()?;
         let mut min = 0;
         for i in 1..ring.vertices.len() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:2",
+            );
             work.step()?;
             if coord_cmp(coords[ring.vertices[i]], coords[ring.vertices[min]]).is_lt() {
                 min = i;
@@ -351,9 +469,17 @@ fn canonicalize(
         }
         // Rotazione tramite scambi contati, senza una primitiva lineare opaca.
         for range in [0..min, min..ring.vertices.len(), 0..ring.vertices.len()] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:3",
+            );
             let mut lo = range.start;
             let mut hi = range.end;
             while lo < hi {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:4",
+                );
                 work.step()?;
                 hi -= 1;
                 ring.vertices.swap(lo, hi);
@@ -363,6 +489,11 @@ fn canonicalize(
         }
     }
     for face in faces.iter_mut() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:5",
+        );
+        work.checkpoint()?;
         crate::noding::sorted_with_work(
             &mut face.holes,
             |a, b, work| ring_cmp(*a, *b, graph, coords, (&[*b], &[*a]), work),
@@ -382,9 +513,19 @@ fn canonicalize(
             let mut aa = CountedVec::new();
             let mut bb = CountedVec::new();
             for &id in std::iter::once(&a.shell).chain(&a.holes) {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:6",
+                );
+                work.checkpoint()?;
                 work.push(&mut aa, id)?;
             }
             for &id in std::iter::once(&b.shell).chain(&b.holes) {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:7",
+                );
+                work.checkpoint()?;
                 work.push(&mut bb, id)?;
             }
             ring_cmp(a.shell, b.shell, graph, coords, (&aa, &bb), work)
@@ -401,6 +542,11 @@ fn output_ring(
 ) -> Result<LineString<f64>, PredicateError> {
     let mut values = CountedVec::new();
     for &id in ring.vertices.iter().chain(ring.vertices.first()) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::output_ring:1",
+        );
+        work.checkpoint()?;
         work.nodes(1)?;
         work.push(&mut values, coords[id])?;
     }
@@ -417,25 +563,58 @@ fn simplify_selected_rings(
 ) -> Result<(), PredicateError> {
     let mut selected = CountedVec::new();
     for face in faces {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:1",
+        );
+        work.checkpoint()?;
         for &id in std::iter::once(&face.shell).chain(&face.holes) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:2",
+            );
+            work.checkpoint()?;
             work.push(&mut selected, id)?;
         }
     }
     let mut degree = CountedVec::new();
     for _ in &graph.points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:3",
+        );
+        work.checkpoint()?;
         work.push(&mut degree, 0_u8)?;
     }
     for &id in &selected {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:4",
+        );
+        work.checkpoint()?;
         for &v in &graph.rings[id].vertices {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:5",
+            );
             work.step()?;
             degree[v] = (degree[v] + 2).min(3);
         }
     }
     for &id in &selected {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:6",
+        );
+        work.checkpoint()?;
         let ring = &graph.rings[id];
         let mut vertices = CountedVec::new();
         let mut atoms = CountedVec::new();
         for (i, &v) in ring.vertices.iter().enumerate() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:7",
+            );
             work.step()?;
             let p = &graph.points[v];
             let prev =
@@ -470,18 +649,38 @@ fn execute(
     let lines = validate_lines(linework, work)?;
     let mut shape = Shape::default();
     for polygon in polygons {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:1",
+        );
+        work.checkpoint()?;
         shape.polygon(polygon, work)?;
     }
     shape.build_indices(work)?;
     let mut sources = CountedVec::new();
     let mut roles = CountedVec::new();
     for (id, rings) in shape.polygons.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:2",
+        );
+        work.checkpoint()?;
         for edge in rings.iter().flatten() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::execute:3",
+            );
+            work.checkpoint()?;
             work.push(&mut sources, edge)?;
             work.push(&mut roles, Some(id))?;
         }
     }
     for edge in &lines.lines {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:4",
+        );
+        work.checkpoint()?;
         work.push(&mut sources, edge)?;
         work.push(&mut roles, None)?;
     }
@@ -494,10 +693,23 @@ fn execute(
     }
     let mut input_coords = CountedVec::new();
     for polygon in polygons {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:5",
+        );
         work.step()?;
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::execute:6",
+            );
             work.step()?;
             for &coord in &ring.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::execute:7",
+                );
+                work.checkpoint()?;
                 work.nodes(1)?;
                 work.push(&mut input_coords, coord)?;
             }
@@ -506,14 +718,28 @@ fn execute(
     match linework {
         Geometry::LineString(line) => {
             for &coord in &line.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::execute:8",
+                );
+                work.checkpoint()?;
                 work.nodes(1)?;
                 work.push(&mut input_coords, coord)?;
             }
         }
         Geometry::MultiLineString(lines) => {
             for line in &lines.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::execute:9",
+                );
                 work.step()?;
                 for &coord in &line.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "predicates/arrangement_indexed/polygon_completion.rs::execute:10",
+                    );
+                    work.checkpoint()?;
                     work.nodes(1)?;
                     work.push(&mut input_coords, coord)?;
                 }
@@ -525,6 +751,11 @@ fn execute(
     simplify_selected_rings(&mut graph, &faces, &originals, work)?;
     let mut coords = CountedVec::new();
     for p in &graph.points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:11",
+        );
+        work.checkpoint()?;
         work.nodes(1)?;
         let c = originals.coordinate(p, work)?;
         work.push(&mut coords, c)?;
@@ -534,14 +765,33 @@ fn execute(
     let mut published_coords = CountedVec::new();
     let mut selected_points = CountedVec::new();
     for _ in &graph.points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:12",
+        );
+        work.checkpoint()?;
         work.push(&mut selected_points, false)?;
     }
     // Una ricevuta orientata per ogni lato serializzato, anche se due facce
     // condividono lo stesso atomo in versi opposti.
     for face in &faces {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:13",
+        );
+        work.checkpoint()?;
         for &ring_id in std::iter::once(&face.shell).chain(&face.holes) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::execute:14",
+            );
+            work.checkpoint()?;
             let ring = &graph.rings[ring_id];
             for (i, &atom_id) in ring.atoms.iter().enumerate() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_completion.rs::execute:15",
+                );
                 work.step()?;
                 let atom = &graph.atoms[atom_id];
                 let from = ring.vertices[i];
@@ -569,17 +819,29 @@ fn execute(
     // I confini occupati sono suddivisi soltanto nei siti dell'output.
     // Un nodo escluso non impone un arrotondamento estraneo al risultato.
     for (source, path) in nodes.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:16",
+        );
         work.step()?;
         if roles[source].is_none() {
             continue;
         }
         let mut previous = &path[0];
         for (position, p) in path.iter().enumerate().skip(1) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::execute:17",
+            );
             work.step()?;
             let mut selected = position + 1 == path.len();
             if !selected {
                 let (mut low, mut high) = (0, graph.points.len());
                 while low < high {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "predicates/arrangement_indexed/polygon_completion.rs::execute:18",
+                    );
                     work.step()?;
                     let mid = low + (high - low) / 2;
                     match super::line_boolean::point_cmp(&graph.points[mid], p)? {
@@ -617,6 +879,11 @@ fn execute(
         .zip(&supports)
         .enumerate()
     {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:19",
+        );
+        work.checkpoint()?;
         let mut published = PublishedEdge::new(edge, coords, work)?;
         published.support = support.map(|id| sources[id]);
         published.surface = id < surface_count;
@@ -626,9 +893,19 @@ fn execute(
     canonicalize(&mut graph, &mut faces, &coords, work)?;
     let mut output = CountedVec::new();
     for face in faces {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:20",
+        );
+        work.checkpoint()?;
         let shell = output_ring(&graph.rings[face.shell], &coords, work)?;
         let mut holes = CountedVec::new();
         for h in face.holes {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::execute:21",
+            );
+            work.checkpoint()?;
             let ring = output_ring(&graph.rings[h], &coords, work)?;
             work.push(&mut holes, ring)?;
         }
@@ -643,10 +920,20 @@ fn execute(
     let mut polygons = CountedVec::new();
     let occupied_index = occupied_index(&copies, work)?;
     for geometry in output.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_completion.rs::execute:22",
+        );
+        work.checkpoint()?;
         // L'area occupata non e' un output modificabile del completamento.
         // GOP-020 richiede disgiunzione anche dopo il rounding dei nodi nuovi.
         let bounds = crate::predicates::interval_index::geometry_bounds(&geometry, work)?;
         for id in occupied_index.candidates(&bounds, work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_completion.rs::execute:23",
+            );
+            work.checkpoint()?;
             if super::relate(&geometry, &copies[id], work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::InvalidRoundedTopology);
             }

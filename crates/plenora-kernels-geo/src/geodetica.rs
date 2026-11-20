@@ -278,7 +278,11 @@ pub(crate) fn verifica_topologia_geodetica(
 
     let mut lati: Vec<LatoGeodetico> = Vec::new();
     for anello in anelli {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodetica.rs::verifica_topologia_geodetica:1");
         for lato in anello.lines() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodetica.rs::verifica_topologia_geodetica:2");
             if lato.start == lato.end {
                 continue;
             }
@@ -313,7 +317,11 @@ pub(crate) fn verifica_topologia_geodetica(
     );
     let segmento = |lato: &LatoGeodetico| geo::Line::new(lato.da, lato.a);
     for (i, lato) in lati.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodetica.rs::verifica_topologia_geodetica:3");
         for vicino in albero.locate_in_envelope_intersecting(&riquadro(lato)) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodetica.rs::verifica_topologia_geodetica:4");
             let j = vicino.data;
             if j <= i {
                 continue;

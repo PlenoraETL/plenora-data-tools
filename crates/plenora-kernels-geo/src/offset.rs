@@ -155,6 +155,9 @@ fn validate(line: &LineString<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>
     }
     let mut points = CountedVec::new();
     for coord in &line.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::validate:1");
+        work.checkpoint()?;
         work.nodes(1)?;
         if !coord.x.is_finite() || !coord.y.is_finite() {
             return Err(OffsetError::InvalidGeometry);
@@ -170,6 +173,9 @@ fn validate(line: &LineString<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>
     }
     let mut edges = CountedVec::new();
     for pair in points.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::validate:2");
+        work.checkpoint()?;
         work.nodes(2)?;
         work.push(
             &mut edges,
@@ -181,6 +187,9 @@ fn validate(line: &LineString<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>
     }
     let mut refs = CountedVec::new();
     for edge in &edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::validate:3");
+        work.checkpoint()?;
         work.push(&mut refs, edge)?;
     }
     let mut invalid = false;
@@ -195,6 +204,8 @@ fn validate(line: &LineString<f64>, work: &mut Work<'_>) -> Result<CountedVec<P>
     }
     let mut reduced = CountedVec::<P>::new();
     for point in points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::validate:4");
         work.step()?;
         if reduced.len() >= 2 {
             let last = reduced.len() - 1;
@@ -230,6 +241,9 @@ fn execute(
     if options.distance.to_bits() << 1 == 0 {
         let mut copy = CountedVec::new();
         for coord in &line.0 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::execute:1");
+            work.checkpoint()?;
             work.nodes(1)?;
             work.push(&mut copy, *coord)?;
         }
@@ -244,6 +258,8 @@ fn execute(
         });
     }
     for precision in [80, 160, 320, 640, 1280, 2560] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::execute:2");
         work.step()?;
         match construct(&points, options, precision, work) {
             Err(OffsetError::AccuracyUnproven) => {}
@@ -268,6 +284,9 @@ fn parallels(
     let distance = Enclosure::exact(rational(distance, work)?)?;
     let mut result = CountedVec::new();
     for pair in points.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::parallels:1");
+        work.checkpoint()?;
         work.nodes(1)?;
         let direction = pair[1].try_sub(&pair[0])?;
         let length = enclosure::length(&direction, precision, work)?;
@@ -368,6 +387,8 @@ fn arc(
         )?
         .is_gt()
     {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::arc:1");
         work.step()?;
         count = count.checked_mul(2).ok_or(PredicateError::WorkLimit)?;
         count_q = count_q.try_mul(&work.integer(2)?)?;
@@ -378,6 +399,8 @@ fn arc(
     let center = EnclosedPoint::exact(center)?;
     let mut index_q = work.integer(1)?;
     for _ in 1..count {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::arc:2");
         work.step()?;
         let fraction = Enclosure::exact(index_q.try_div(&count_q)?)?;
         let t = end.mul(&fraction)?;
@@ -419,6 +442,8 @@ fn construct(
     append(&mut output, start.copy()?, work)?;
     let mut arcs = CountedVec::new();
     for i in 1..points.len() - 1 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::construct:1");
         work.step()?;
         let (a, b) = (&parallel[i - 1], &parallel[i]);
         let turn = a.direction.try_cross(&b.direction)?.sign();
@@ -494,10 +519,15 @@ fn enclosed_bounds(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<[Q; 
         points[0].y.high.try_clone()?,
     ];
     for p in &points[1..] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::enclosed_bounds:1");
+        work.checkpoint()?;
         for (i, q) in [&p.x.low, &p.x.high, &p.y.low, &p.y.high]
             .into_iter()
             .enumerate()
         {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::enclosed_bounds:2");
             work.step()?;
             let order = q.try_cmp(&bounds[i])?;
             if (i % 2 == 0 && order.is_lt()) || (i % 2 == 1 && order.is_gt()) {
@@ -514,6 +544,9 @@ fn enclosed_bounds(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<[Q; 
 fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(), OffsetError> {
     let mut parameters = CountedVec::new();
     for _ in points.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_topology:1");
+        work.checkpoint()?;
         let mut row = CountedVec::new();
         work.push(&mut row, Enclosure::exact(work.integer(0)?)?)?;
         work.push(&mut row, Enclosure::exact(work.integer(1)?)?)?;
@@ -521,20 +554,33 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
     }
     let mut bounds = CountedVec::new();
     for pair in points.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_topology:2");
+        work.checkpoint()?;
         let b = enclosed_bounds(pair, work)?;
         work.push(&mut bounds, b)?;
     }
     let index = crate::predicates::interval_index::BoxIndex::new(bounds, work)?;
     for i in 0..points.len() - 1 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_topology:3");
+        work.checkpoint()?;
         for j in index.candidates(index.at(i), work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::certify_topology:4");
+            work.step()?;
             if j <= i {
                 continue;
             }
             work.pair()?;
             let mut separated = false;
             for axis in [true, false] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("offset.rs::certify_topology:5");
                 let coord = |k: usize| if axis { &points[k].x } else { &points[k].y };
                 for (a, b) in [(i, j), (j, i)] {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("offset.rs::certify_topology:6");
                     if coord(a).high.try_cmp(&coord(b).low)?.is_lt()
                         && coord(a).high.try_cmp(&coord(b + 1).low)?.is_lt()
                         && coord(a + 1).high.try_cmp(&coord(b).low)?.is_lt()
@@ -557,6 +603,8 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
             .into_iter()
             .enumerate()
             {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("offset.rs::certify_topology:7");
                 work.step()?;
                 if a != c && b != c {
                     signs[position] = match points[b]
@@ -599,6 +647,8 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
                     // Gli overlap esatti sono gestiti dal certificato razionale;
                     // con intervalli non puntuali la costruzione e' ambigua.
                     for p in [&points[i], &points[i + 1], &points[j], &points[j + 1]] {
+                        #[cfg(test)]
+                        crate::noding::gop028::cycle("offset.rs::certify_topology:8");
                         if p.x.low != p.x.high || p.y.low != p.y.high {
                             return Err(OffsetError::AccuracyUnproven);
                         }
@@ -606,9 +656,13 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
                     // Inserire i parametri di tutti gli estremi collineari;
                     // anche gli esterni ordinano correttamente i siti in [0,1].
                     for (edge, other) in [(i, j), (j, i)] {
+                        #[cfg(test)]
+                        crate::noding::gop028::cycle("offset.rs::certify_topology:9");
                         let direction = points[edge + 1].sub(&points[edge])?;
                         let axis_x = !direction.x.sign()?.is_eq();
                         for p in [&points[other], &points[other + 1]] {
+                            #[cfg(test)]
+                            crate::noding::gop028::cycle("offset.rs::certify_topology:10");
                             let delta = p.sub(&points[edge])?;
                             let t = if axis_x {
                                 delta.x.div(&direction.x, work)?
@@ -630,8 +684,13 @@ fn certify_topology(points: &[EnclosedPoint], work: &mut Work<'_>) -> Result<(),
         }
     }
     for row in parameters.iter_mut() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_topology:11");
+        work.checkpoint()?;
         crate::noding::sorted(row, |a, b| a.low.try_cmp(&b.low), work)?;
         for pair in row.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::certify_topology:12");
             work.step()?;
             pair[0].sub(&pair[1])?.sign()?;
         }
@@ -686,10 +745,15 @@ fn separated(
     work: &mut Work<'_>,
 ) -> Result<bool, OffsetError> {
     for x in [true, false] {
-        let bounds = |points: &[EnclosedPoint]| -> Result<_, OffsetError> {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::separated:1");
+        let bounds = |points: &[EnclosedPoint], work: &Work<'_>| -> Result<_, OffsetError> {
             let first = if x { &points[0].x } else { &points[0].y };
             let (mut low, mut high) = (first.low.try_clone()?, first.high.try_clone()?);
             for point in &points[1..] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("offset.rs::separated:2");
+                work.checkpoint()?;
                 let value = if x { &point.x } else { &point.y };
                 if value.low.try_cmp(&low)?.is_lt() {
                     low = value.low.try_clone()?;
@@ -701,8 +765,8 @@ fn separated(
             Ok((low, high))
         };
         work.step()?;
-        let (al, ah) = bounds(a)?;
-        let (bl, bh) = bounds(b)?;
+        let (al, ah) = bounds(a, work)?;
+        let (bl, bh) = bounds(b, work)?;
         if ah.try_cmp(&bl)?.is_lt() || bh.try_cmp(&al)?.is_lt() {
             return Ok(true);
         }
@@ -717,11 +781,16 @@ fn separated_by_sides(
     work: &mut Work<'_>,
 ) -> Result<bool, OffsetError> {
     for i in 0..a.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::separated_by_sides:1");
         work.step()?;
         let start = &a[i];
         let end = &a[(i + 1) % a.len()];
         let mut own = None;
         for (j, point) in a.iter().enumerate() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::separated_by_sides:2");
+            work.checkpoint()?;
             if j != i && j != (i + 1) % a.len() {
                 own = strict_side(&side(start, end, point)?);
             }
@@ -729,6 +798,9 @@ fn separated_by_sides(
         let mut other = None;
         let mut same = true;
         for point in b {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::separated_by_sides:3");
+            work.checkpoint()?;
             let sign = strict_side(&side(start, end, point)?);
             if sign.is_none() || (other.is_some() && other != sign) {
                 same = false;
@@ -745,6 +817,8 @@ fn separated_by_sides(
 
 fn outside_triangle(p: &EnclosedPoint, triangle: &[EnclosedPoint; 3]) -> Result<bool, OffsetError> {
     for i in 0..3 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::outside_triangle:1");
         let a = &triangle[i];
         let b = &triangle[(i + 1) % 3];
         let own = strict_side(&side(a, b, &triangle[(i + 2) % 3])?);
@@ -769,10 +843,18 @@ fn certify_arcs(
     let square = Enclosure::exact(radius.try_mul(&radius)?)?;
     let mut lenses = CountedVec::new();
     for _ in points.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_arcs:1");
+        work.checkpoint()?;
         work.push(&mut lenses, None)?;
     }
     for arc in arcs {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_arcs:2");
+        work.checkpoint()?;
         for i in arc.first..arc.last {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::certify_arcs:3");
             work.step()?;
             lenses[i] = Some(lens_triangle(
                 &points[i],
@@ -785,6 +867,9 @@ fn certify_arcs(
     }
     let mut bounds = CountedVec::new();
     for (i, pair) in points.windows(2).enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_arcs:4");
+        work.checkpoint()?;
         let b = enclosed_bounds(
             lenses[i].as_ref().map_or(pair, |triangle| &triangle[..]),
             work,
@@ -793,12 +878,21 @@ fn certify_arcs(
     }
     let index = crate::predicates::interval_index::BoxIndex::new(bounds, work)?;
     for arc in arcs {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::certify_arcs:5");
+        work.checkpoint()?;
         for chord in arc.first..arc.last {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset.rs::certify_arcs:6");
+            work.checkpoint()?;
             let triangle = lenses[chord]
                 .as_ref()
                 .ok_or(OffsetError::AccuracyUnproven)?;
             let mut crossing = false;
             for i in index.candidates(index.at(chord), work)? {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("offset.rs::certify_arcs:7");
+                work.checkpoint()?;
                 let pair = &points[i..i + 2];
                 work.step()?;
                 if i + 1 >= arc.first && i <= arc.last {
@@ -858,6 +952,9 @@ fn publish(
     let mut coords = CountedVec::new();
     let mut error = work.integer(0)?;
     for point in points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::publish:1");
+        work.checkpoint()?;
         work.nodes(2)?;
         let coord = Coord {
             x: point.x.rounded(work)?,
@@ -873,6 +970,9 @@ fn publish(
     }
     let mut edges = CountedVec::new();
     for pair in exact.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::publish:2");
+        work.checkpoint()?;
         work.nodes(2)?;
         work.push(
             &mut edges,
@@ -886,6 +986,9 @@ fn publish(
     let originals = Originals::new(&empty, &empty, work)?;
     let mut certificates = CountedVec::new();
     for (edge, pair) in edges.iter().zip(coords.windows(2)) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset.rs::publish:3");
+        work.checkpoint()?;
         let certificate = PublishedEdge::new(edge, [pair[0], pair[1]], work)?;
         work.push(&mut certificates, certificate)?;
     }

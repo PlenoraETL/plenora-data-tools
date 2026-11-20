@@ -36,6 +36,10 @@ pub(super) fn exponential(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasur
     let mut term = ShapeInterval::exact(1.0);
     let mut sum = term;
     for k in 1..=40 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "preserve_shape_measure/certificate/lambert.rs::exponential:1",
+        );
         term = term
             .mul(x)
             .div_positive(ShapeInterval::exact(f64::from(k)))?;

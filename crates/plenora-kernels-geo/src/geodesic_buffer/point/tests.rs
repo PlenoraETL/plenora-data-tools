@@ -147,9 +147,9 @@ fn model_change_bound_against_dense_karney_arc() {
 fn model_change_controls_planning_and_rejects_invalid_bounds() {
     // C1: il termine quadratico entra nel budget prima della generazione.
     let crs = resolve_crs("EPSG:4326", "crs").unwrap();
-    let (n, certificate) = plan(1.0, 0.01, &crs).unwrap();
+    let (n, certificate) = plan(1.0, 0.01, &crs, || Ok(())).unwrap();
     let old_bound = ((certificate.discretization_m + NUMERIC_M).next_up() + ROUNDING_M).next_up();
-    let (refined, finer) = plan(1.0, old_bound, &crs).unwrap();
+    let (refined, finer) = plan(1.0, old_bound, &crs, || Ok(())).unwrap();
     assert_eq!(refined, n * 2);
     assert!(finer.absolute_m <= old_bound);
     assert!(finer.model_change_m < certificate.model_change_m);

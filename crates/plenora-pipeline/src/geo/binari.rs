@@ -121,6 +121,7 @@ impl KernelBinario {
         tabelle: (&RecordBatch, &RecordBatch),
         righe_massime: u64,
         margine: MargineMemoria,
+        interruzione: &crate::Interruzione,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         let (lato_sx, lato_dx) = lati;
         let (sinistra, destra) = tabelle;
@@ -262,6 +263,7 @@ impl KernelBinario {
                 }
                 let mut celle: Vec<Option<Vec<u8>>> = vec![None; righe_sx];
                 for (riga, ritagliata) in posizioni.into_iter().zip(ritagliate) {
+                    interruzione.verifica("esecuzione pipeline")?;
                     let cella = celle.get_mut(riga).ok_or_else(|| {
                         PlenoraError::Internal(format!("{op}: posizione oltre le righe"))
                     })?;
@@ -304,6 +306,7 @@ impl KernelBinario {
                 let mut indici_sx = Vec::with_capacity(pezzi.len());
                 let mut indici_dx = Vec::with_capacity(pezzi.len());
                 for pezzo in &pezzi {
+                    interruzione.verifica("esecuzione pipeline")?;
                     celle.push(Some(encode_geometry(&pezzo.geometry)?));
                     indici_sx.push(riga_di(&posizioni_sx, pezzo.left)?);
                     indici_dx.push(riga_di(&posizioni_dx, pezzo.right)?);

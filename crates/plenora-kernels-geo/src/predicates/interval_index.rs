@@ -36,6 +36,9 @@ pub fn sort_ids(
         work: &mut Work<'_>,
     ) -> Result<(), PredicateError> {
         while root < ids.len() / 2 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates/interval_index.rs::sift:1");
+            work.checkpoint()?;
             let mut child = root * 2 + 1;
             if child + 1 < ids.len() {
                 work.step()?;
@@ -53,9 +56,14 @@ pub fn sort_ids(
         Ok(())
     }
     for root in (0..ids.len() / 2).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/interval_index.rs::sort_ids:1");
+        work.checkpoint()?;
         sift(ids, root, &cmp, work)?;
     }
     for end in (1..ids.len()).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/interval_index.rs::sort_ids:2");
         work.step()?;
         ids.swap(0, end);
         sift(&mut ids[..end], 0, &cmp, work)?;
@@ -71,6 +79,8 @@ impl IntervalIndex {
         let mut index = Self::default();
         let mut ids = CountedVec::new();
         for (a, b) in bounds {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates/interval_index.rs::new:1");
             work.step()?;
             let (low, high) = if a.try_cmp(b)?.is_le() {
                 (a, b)
@@ -116,6 +126,8 @@ impl IntervalIndex {
         let mut left = CountedVec::new();
         let mut right = CountedVec::new();
         for id in ids {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates/interval_index.rs::build:1");
             work.step()?;
             let interval = &self.intervals[id];
             if interval.high.try_cmp(cut)?.is_lt() {
@@ -166,6 +178,8 @@ impl IntervalIndex {
             work.push(&mut pending, root)?;
         }
         while let Some(id) = pending.pop() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates/interval_index.rs::overlapping:1");
             work.step()?;
             let branch = &self.branches[id];
             let center = &self.intervals[branch.center].low;
@@ -173,6 +187,8 @@ impl IntervalIndex {
             let right = high.try_cmp(center)?.is_ge();
             let entries = if left { &branch.lower } else { &branch.upper };
             for &entry in entries {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("predicates/interval_index.rs::overlapping:2");
                 work.step()?;
                 let span = &self.intervals[entry];
                 if (left && span.low.try_cmp(high)?.is_gt())
@@ -204,6 +220,8 @@ impl IntervalIndex {
         let mut result = CountedVec::new();
         let mut current = self.root;
         while let Some(id) = current {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates/interval_index.rs::candidates:1");
             work.step()?;
             let branch = &self.branches[id];
             let side = value.try_cmp(&self.intervals[branch.center].low)?;
@@ -213,6 +231,8 @@ impl IntervalIndex {
                 &branch.lower
             };
             for &entry in entries {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("predicates/interval_index.rs::candidates:2");
                 work.step()?;
                 let interval = &self.intervals[entry];
                 if (side.is_gt() && interval.high.try_cmp(value)?.is_lt())
@@ -410,6 +430,8 @@ impl BoxIndex {
     ) -> Result<CountedVec<usize>, PredicateError> {
         let mut result = CountedVec::new();
         for id in self.x.overlapping(&bounds[0], &bounds[1], work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates/interval_index.rs::candidates:3");
             work.step()?;
             let b = &self.bounds[id];
             if b[2].try_cmp(&bounds[3])?.is_le() && b[3].try_cmp(&bounds[2])?.is_ge() {
@@ -425,6 +447,8 @@ impl BoxIndex {
     ) -> Result<CountedVec<usize>, PredicateError> {
         let mut result = CountedVec::new();
         for id in self.x.candidates(&p.x, work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates/interval_index.rs::point_candidates:1");
             work.step()?;
             let b = &self.bounds[id];
             if b[2].try_cmp(&p.y)?.is_le() && b[3].try_cmp(&p.y)?.is_ge() {
@@ -445,6 +469,8 @@ pub fn geometry_bounds(
     use geo::CoordsIter;
     let mut bounds = [0.0_f64; 4];
     for (i, c) in geometry.coords_iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/interval_index.rs::geometry_bounds:1");
         work.step()?;
         if i == 0 {
             bounds = [c.x, c.x, c.y, c.y];

@@ -127,6 +127,11 @@ pub(super) fn ordered_ids<T>(
 ) -> Result<CountedVec<usize>, PredicateError> {
     let mut ids = CountedVec::new();
     for id in 0..values.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::ordered_ids:1",
+        );
+        work.checkpoint()?;
         work.push(&mut ids, id)?;
     }
     sort_ids(&mut ids, |a, b| cmp(&values[a], &values[b]), work)?;
@@ -143,7 +148,17 @@ fn select_edges(
 ) -> Result<CountedVec<Edge>, PredicateError> {
     let mut edges = CountedVec::new();
     for path in nodes {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::select_edges:1",
+        );
+        work.checkpoint()?;
         for pair in path.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::select_edges:2",
+            );
+            work.checkpoint()?;
             work.nodes(1)?;
             let mid = P {
                 x: pair[0].x.try_midpoint(&pair[1].x)?,
@@ -174,6 +189,11 @@ fn select_edges(
     let ids = ordered_ids(&edges, edge_cmp, work)?;
     let mut unique = CountedVec::new();
     for id in ids {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::select_edges:3",
+        );
+        work.checkpoint()?;
         work.nodes(2)?;
         work.push(
             &mut unique,
@@ -245,6 +265,9 @@ fn execute(
     b.build_indices(work)?;
     let mut source = CountedVec::new();
     for edge in a.edges().chain(b.edges()) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/line_boolean.rs::execute:1");
+        work.checkpoint()?;
         work.push(&mut source, edge)?;
     }
     let originals = Originals::new(left, right, work)?;
@@ -256,16 +279,26 @@ fn execute(
     let mut candidates = CountedVec::new();
     if op == LineBooleanOp::Intersection {
         for p in nodes.iter().flatten() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::execute:2",
+            );
+            work.checkpoint()?;
             work.push(&mut candidates, p)?;
         }
     }
     for p in a.points.iter().chain(&b.points) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/line_boolean.rs::execute:3");
+        work.checkpoint()?;
         work.push(&mut candidates, p)?;
     }
     let point_ids = ordered_ids(&candidates, |a, b| point_cmp(a, b), work)?;
     let mut points = CountedVec::new();
     let mut published = CountedVec::new();
     for id in point_ids {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/line_boolean.rs::execute:4");
         work.step()?;
         let p = candidates[id];
         if !selected(op, a.position(p, work)? != 2, b.position(p, work)? != 2) {
@@ -273,6 +306,10 @@ fn execute(
         }
         let mut covered = false;
         for id in index.candidates(&p.x, work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::execute:5",
+            );
             work.step()?;
             if edges[id].contains(p)? {
                 covered = true;
@@ -298,9 +335,18 @@ fn execute(
     if filter.is_none_or(|d| d == 1) {
         let mut lines = CountedVec::new();
         for id in edge_ids {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::execute:6",
+            );
+            work.checkpoint()?;
             let edge = &edges[id];
             let mut coords = CountedVec::new();
             for p in [&edge.a, &edge.b] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::execute:7",
+                );
                 let c = originals.coordinate(p, work)?;
                 work.push(&mut coords, c)?;
             }
@@ -360,6 +406,8 @@ pub(crate) fn ordinate(value: &Q, work: &mut Work<'_>) -> Result<f64, LineBoolea
     let mut low = 0_u64;
     let mut high = f64::MAX.to_bits();
     while low <= high {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/line_boolean.rs::ordinate:1");
         work.step()?;
         let middle = low + (high - low) / 2;
         let candidate = f64::from_bits(middle);
@@ -469,6 +517,11 @@ pub(super) fn sort_output<T>(
     let mut ids = CountedVec::new();
     let mut destinations = CountedVec::new();
     for i in 0..values.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::sort_output:1",
+        );
+        work.checkpoint()?;
         work.push(&mut ids, i)?;
         work.push(&mut destinations, 0)?;
     }
@@ -478,12 +531,24 @@ pub(super) fn sort_output<T>(
         work,
     )?;
     for (destination, &source) in ids.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::sort_output:2",
+        );
         work.step()?;
         destinations[source] = destination;
     }
     for i in 0..values.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::sort_output:3",
+        );
         work.step()?;
         while destinations[i] != i {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::sort_output:4",
+            );
             work.step()?;
             let other = destinations[i];
             values.swap(i, other);
@@ -532,23 +597,43 @@ impl Originals {
     ) -> Result<(), PredicateError> {
         let mut pending = CountedVec::new();
         for geometry in geometries {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::collect_geometries:1",
+            );
+            work.checkpoint()?;
             work.push(&mut pending, geometry)?;
             while let Some(geometry) = pending.pop() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::collect_geometries:2",
+                );
                 work.step()?;
                 if let Geometry::GeometryCollection(gs) = geometry {
                     for child in gs.0.iter().rev() {
+                        #[cfg(test)]
+                        crate::noding::gop028::cycle(
+                            "predicates/arrangement_indexed/line_boolean.rs::collect_geometries:3",
+                        );
+                        work.checkpoint()?;
                         work.push(&mut pending, child)?;
                     }
                 } else {
                     match geometry {
                         Geometry::MultiLineString(ls) => {
                             for line in &ls.0 {
+                                #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/line_boolean.rs::collect_geometries:4");
+                                work.checkpoint()?;
                                 Self::collect(line.coords_iter(), values, work)?;
                             }
                         }
                         Geometry::Polygon(p) => Self::collect_polygon(p, values, work)?,
                         Geometry::MultiPolygon(ps) => {
                             for polygon in &ps.0 {
+                                #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/line_boolean.rs::collect_geometries:5");
+                                work.checkpoint()?;
                                 Self::collect_polygon(polygon, values, work)?;
                             }
                         }
@@ -573,6 +658,11 @@ impl Originals {
     ) -> Result<Self, PredicateError> {
         let mut ids = CountedVec::new();
         for id in 0..values.len() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::from_values:1",
+            );
+            work.checkpoint()?;
             work.push(&mut ids, id)?;
         }
         sort_ids(
@@ -590,6 +680,11 @@ impl Originals {
     ) -> Result<(), PredicateError> {
         work.step()?;
         for c in coords {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::collect:1",
+            );
+            work.checkpoint()?;
             work.nodes(1)?;
             work.push(values, (P::of_in(c, work)?, c))?;
         }
@@ -602,6 +697,11 @@ impl Originals {
     ) -> Result<(), PredicateError> {
         work.step()?;
         for ring in std::iter::once(p.exterior()).chain(p.interiors()) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::collect_polygon:1",
+            );
+            work.checkpoint()?;
             Self::collect(ring.coords_iter(), values, work)?;
         }
         Ok(())
@@ -609,6 +709,10 @@ impl Originals {
     pub(super) fn contains(&self, p: &P, work: &mut Work<'_>) -> Result<bool, PredicateError> {
         let (mut low, mut high) = (0, self.ids.len());
         while low < high {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::contains:1",
+            );
             work.step()?;
             let mid = low + (high - low) / 2;
             match point_cmp(&self.values[self.ids[mid]].0, p)? {
@@ -626,6 +730,10 @@ impl Originals {
     ) -> Result<Coord<f64>, LineBooleanError> {
         let (mut low, mut high) = (0, self.ids.len());
         while low < high {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::coordinate:1",
+            );
             work.step()?;
             let mid = low + (high - low) / 2;
             let (original, coord) = &self.values[self.ids[mid]];
@@ -728,11 +836,20 @@ fn surface_polygons<'a>(
     match geometry {
         Geometry::MultiPolygon(ps) => {
             for polygon in &ps.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::surface_polygons:1",
+                );
+                work.checkpoint()?;
                 work.push(&mut polygons, polygon)?;
             }
         }
         Geometry::GeometryCollection(gs) => {
             for geometry in &gs.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::surface_polygons:2",
+                );
                 work.step()?;
                 let Geometry::Polygon(polygon) = geometry else {
                     return Err(LineBooleanError::InvalidRoundedTopology);
@@ -763,13 +880,33 @@ fn verify_surface_edges(
     let mut expected = CountedVec::new();
     let mut actual = CountedVec::new();
     for edge in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_surface_edges:1",
+        );
+        work.step()?;
         if edge.surface {
             work.push(&mut expected, key(edge.coords))?;
         }
     }
     for polygon in polygons {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_surface_edges:2",
+        );
+        work.step()?;
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::verify_surface_edges:3",
+            );
+            work.step()?;
             for pair in ring.0.windows(2) {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::verify_surface_edges:4",
+                );
+                work.checkpoint()?;
                 work.push(&mut actual, key([pair[0], pair[1]]))?;
             }
         }
@@ -780,6 +917,10 @@ fn verify_surface_edges(
         return Err(LineBooleanError::InvalidRoundedTopology);
     }
     for (a, b) in expected.iter().zip(&actual) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_surface_edges:5",
+        );
         work.step()?;
         if a != b {
             return Err(LineBooleanError::InvalidRoundedTopology);
@@ -793,16 +934,29 @@ fn verify_rings(
     work: &mut Work<'_>,
 ) -> Result<(), LineBooleanError> {
     for polygon in polygons {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_rings:1",
+        );
+        work.checkpoint()?;
         for (ring_id, ring) in std::iter::once(polygon.exterior())
             .chain(polygon.interiors())
             .enumerate()
         {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::verify_rings:2",
+            );
             work.step()?;
             if ring.0.len() < 4 || ring.0.first() != ring.0.last() {
                 return Err(LineBooleanError::InvalidRoundedTopology);
             }
             let mut minimum = 0;
             for (i, c) in ring.0[..ring.0.len() - 1].iter().enumerate() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::verify_rings:3",
+                );
                 work.step()?;
                 if coordinate_cmp(*c, ring.0[minimum]).is_lt() {
                     minimum = i;
@@ -851,6 +1005,10 @@ pub(crate) fn verify_publication(
     let mut vertices = CountedVec::new();
     let mut refs = CountedVec::new();
     for edge in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_publication:1",
+        );
         work.step()?;
         if edge.noded != noded || (edge.noded && edge.surface) {
             return Err(LineBooleanError::InvalidRoundedTopology);
@@ -861,6 +1019,11 @@ pub(crate) fn verify_publication(
             .zip([&edge.rounded.a, &edge.rounded.b])
             .enumerate()
         {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::verify_publication:2",
+            );
+            work.checkpoint()?;
             if !edge.noded {
                 let expected = originals.coordinate(exact, work)?;
                 let actual = edge.coords[position];
@@ -882,6 +1045,11 @@ pub(crate) fn verify_publication(
     }
     let mut ids = CountedVec::new();
     for id in 0..vertices.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_publication:3",
+        );
+        work.checkpoint()?;
         work.push(&mut ids, id)?;
     }
     sort_ids(
@@ -890,6 +1058,10 @@ pub(crate) fn verify_publication(
         work,
     )?;
     for pair in ids.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_publication:4",
+        );
         work.step()?;
         let (a, b) = (vertices[pair[0]], vertices[pair[1]]);
         if a.1 == b.1 && a.0 != b.0 {
@@ -903,6 +1075,10 @@ pub(crate) fn verify_publication(
         work,
     )?;
     for pair in ids.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_publication:5",
+        );
         work.step()?;
         let (a, b) = (vertices[pair[0]], vertices[pair[1]]);
         if a.0 == b.0 && a.1 != b.1 {
@@ -921,10 +1097,23 @@ pub(crate) fn verify_publication(
         let scan = crate::noding::visit(&refs, work, |i, j, hits, work| {
             let (a, b) = (&edges[i], &edges[j]);
             for hit in hits.into_iter().flatten() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::verify_publication:6",
+                );
                 work.step()?;
                 let mut shared = false;
                 for (ai, ap) in [&a.rounded.a, &a.rounded.b].into_iter().enumerate() {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "predicates/arrangement_indexed/line_boolean.rs::verify_publication:7",
+                    );
+                    work.checkpoint()?;
                     for (bi, bp) in [&b.rounded.a, &b.rounded.b].into_iter().enumerate() {
+                        #[cfg(test)]
+                        crate::noding::gop028::cycle(
+                            "predicates/arrangement_indexed/line_boolean.rs::verify_publication:8",
+                        );
                         work.step()?;
                         if ap == &hit && bp == &hit && a.exact[ai] == b.exact[bi] {
                             shared = true;
@@ -961,7 +1150,15 @@ pub(crate) fn verify_publication(
         let mut surface = super::Shape::default();
         surface.geometry(polygons, work)?;
         surface.build_indices(work)?;
-        for edge in edges.iter().filter(|edge| !edge.surface && edge.component) {
+        for edge in edges {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::verify_publication:9",
+            );
+            work.step()?;
+            if edge.surface || !edge.component {
+                continue;
+            }
             work.nodes(1)?;
             let middle = P {
                 x: edge.rounded.a.x.try_midpoint(&edge.rounded.b.x)?,
@@ -984,12 +1181,27 @@ pub(crate) fn verify_publication(
             use crate::predicates::interval_index::{geometry_bounds, BoxIndex};
             let mut bounds = CountedVec::new();
             for g in &gs.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::verify_publication:10",
+                );
+                work.checkpoint()?;
                 let b = geometry_bounds(g, work)?;
                 work.push(&mut bounds, b)?;
             }
             let index = BoxIndex::new(bounds, work)?;
             for (i, a) in gs.0.iter().enumerate() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::verify_publication:11",
+                );
+                work.checkpoint()?;
                 for j in index.candidates(index.at(i), work)? {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "predicates/arrangement_indexed/line_boolean.rs::verify_publication:12",
+                    );
+                    work.step()?;
                     if j >= i {
                         continue;
                     }
@@ -1012,6 +1224,11 @@ fn verify_path_pairs(
     let mut exact_edges = CountedVec::new();
     let mut rounded_refs = CountedVec::new();
     for edge in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_path_pairs:1",
+        );
+        work.checkpoint()?;
         work.nodes(2)?;
         work.push(
             &mut exact_edges,
@@ -1024,17 +1241,31 @@ fn verify_path_pairs(
     }
     let mut exact_refs = CountedVec::new();
     for edge in &exact_edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_path_pairs:2",
+        );
+        work.checkpoint()?;
         work.push(&mut exact_refs, edge)?;
     }
     let exact_nodes = crate::noding::node(&exact_refs, work)?;
     let rounded_nodes = crate::noding::node(&rounded_refs, work)?;
     let mut certificates = CountedVec::new();
     for (before, after) in exact_nodes.iter().zip(&rounded_nodes) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::verify_path_pairs:3",
+        );
         work.step()?;
         if before.len() != after.len() {
             return Err(LineBooleanError::InvalidRoundedTopology);
         }
         for (before, after) in before.windows(2).zip(after.windows(2)) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::verify_path_pairs:4",
+            );
+            work.checkpoint()?;
             let certificate =
                 PublishedEdge::noded([&before[0], &before[1]], [&after[0], &after[1]], work)?;
             work.push(&mut certificates, certificate)?;
@@ -1055,14 +1286,32 @@ fn noded_sectors(
 ) -> Result<(), LineBooleanError> {
     let mut start = 0;
     while start < ids.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/line_boolean.rs::noded_sectors:1",
+        );
         work.step()?;
         let mut end = start + 1;
         while end < ids.len() && vertices[ids[start]].0 == vertices[ids[end]].0 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::noded_sectors:2",
+            );
             work.step()?;
             end += 1;
         }
         for i in start..end {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/line_boolean.rs::noded_sectors:3",
+            );
+            work.checkpoint()?;
             for j in i + 1..end {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/line_boolean.rs::noded_sectors:4",
+                );
+                work.checkpoint()?;
                 work.pair()?;
                 let (ai, bi) = (ids[i], ids[j]);
                 let (a, b) = (&edges[ai / 2], &edges[bi / 2]);

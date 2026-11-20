@@ -1,0 +1,365 @@
+[
+  {
+    "file": "crates/plenora-kernels-geo/src/coordinate_api.rs",
+    "reason": "ALL e una slice di quattro varianti generata dalla ripetizione uno-a-uno della macro locale; zip non aumenta la cardinalita, filter_map emette al massimo un elemento per chiave. Il controllo iniziale limita anche options a quattro. Solo entrate nei corpi, non costo transitivo.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn validate(\n    request: CoordinateRequest<'_>,\n    direction: CoordinateDirection,\n) -> Result<Validated, CoordinateErrorKind> {\n    use CoordinateErrorKind::InvalidConfiguration;\n    if request.profile != STANDARD_V1 || request.options.len() > CoordinateOptionKind::ALL.len() {\n        return Err(InvalidConfiguration);\n    }\n    let rule = request.format.rule();\n    let requirements = match direction {\n        CoordinateDirection::Encode => rule.encode,\n        CoordinateDirection::Decode => rule.decode,\n    };\n    for (key, requirement) in CoordinateOptionKind::ALL.iter().zip(requirements) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:1\");\n        let count = request\n            .options\n            .iter()\n            .filter(|option| option.kind() == *key)\n            .count();\n        if count != usize::from(requirement == R) {\n            return Err(InvalidConfiguration);\n        }\n    }\n    let mut result = Validated {\n        format: request.format,\n        datum: CoordinateDatum::Wgs84,\n        precision: None,\n        resolution: None,\n        representative: None,\n    };\n    // Profilo e presenze precedono i valori; valori nell'ordine pubblico ALL.\n    for option in CoordinateOptionKind::ALL\n        .iter()\n        .filter_map(|key| request.options.iter().find(|option| option.kind() == *key))\n    {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:2\");\n        match *option {\n            CoordinateOption::Datum(datum) => {\n                if !rule.datums.contains(&datum) {\n                    return Err(CoordinateErrorKind::Crs);\n                }\n                result.datum = datum;\n            }\n            CoordinateOption::Precision(digits) => {\n                let (min, max) = rule.precision.ok_or(InvalidConfiguration)?;\n                if !(min..=max).contains(&digits) {\n                    return Err(InvalidConfiguration);\n                }\n                result.precision = Some(digits);\n            }\n            CoordinateOption::Resolution(resolution) => {\n                if !rule.resolutions.contains(&resolution) {\n                    return Err(InvalidConfiguration);\n                }\n                result.resolution = Some(resolution);\n            }\n            CoordinateOption::Representative(representative) => {\n                result.representative = Some(representative);\n            }\n        }\n    }\n    Ok(result)\n}"
+      },
+      {
+        "kind": "macro",
+        "source": "\n    ($($name:ident($value:ty) = $label:literal),+ $(,)?) => {\n        /// Opzioni nominate; duplicati e opzioni non applicabili sono errori.\n        #[derive(Debug, Clone, Copy, PartialEq, Eq)]\n        pub enum CoordinateOption { $($name($value)),+ }\n        /// Insieme esaustivo delle chiavi della tabella.\n        #[derive(Debug, Clone, Copy, PartialEq, Eq)]\n        pub enum CoordinateOptionKind { $($name),+ }\n        impl CoordinateOptionKind {\n            /// Tutte le opzioni, nello stesso ordine delle colonne della tabella.\n            pub const ALL: &'static [Self] = &[$(Self::$name),+];\n        }\n        impl std::str::FromStr for CoordinateOptionKind {\n            type Err = CoordinateApiError;\n            fn from_str(value: &str) -> Result<Self, Self::Err> {\n                match value { $($label => Ok(Self::$name),)+ _ => Err(CoordinateErrorKind::InvalidConfiguration.into()) }\n            }\n        }\n        impl CoordinateOption {\n            /// Chiave dell'opzione.\n            #[must_use]\n            pub const fn kind(self) -> CoordinateOptionKind {\n                match self { $(Self::$name(_) => CoordinateOptionKind::$name),+ }\n            }\n        }\n    };\n"
+      },
+      {
+        "kind": "macro",
+        "source": "\n    Precision(u8) = \"precision\",\n    Resolution(CoordinateResolution) = \"resolution\",\n    Representative(CellRepresentative) = \"representative\",\n    Datum(CoordinateDatum) = \"datum\",\n"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": "coordinate_api.rs::validate:1",
+        "source": "for (key, requirement) in CoordinateOptionKind::ALL.iter().zip(requirements) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:1\");\n        let count = request\n            .options\n            .iter()\n            .filter(|option| option.kind() == *key)\n            .count();\n        if count != usize::from(requirement == R) {\n            return Err(InvalidConfiguration);\n        }\n    }",
+        "iterations": 4
+      },
+      {
+        "counter": "coordinate_api.rs::validate:2",
+        "source": "for option in CoordinateOptionKind::ALL\n        .iter()\n        .filter_map(|key| request.options.iter().find(|option| option.kind() == *key))\n    {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_api.rs::validate:2\");\n        match *option {\n            CoordinateOption::Datum(datum) => {\n                if !rule.datums.contains(&datum) {\n                    return Err(CoordinateErrorKind::Crs);\n                }\n                result.datum = datum;\n            }\n            CoordinateOption::Precision(digits) => {\n                let (min, max) = rule.precision.ok_or(InvalidConfiguration)?;\n                if !(min..=max).contains(&digits) {\n                    return Err(InvalidConfiguration);\n                }\n                result.precision = Some(digits);\n            }\n            CoordinateOption::Resolution(resolution) => {\n                if !rule.resolutions.contains(&resolution) {\n                    return Err(InvalidConfiguration);\n                }\n                result.resolution = Some(resolution);\n            }\n            CoordinateOption::Representative(representative) => {\n                result.representative = Some(representative);\n            }\n        }\n    }",
+        "iterations": 4
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/coordinate_utm.rs",
+    "reason": "BANDS ha tipo &[u8;20]; iter, copied e map(char::from) preservano la cardinalita. Al massimo venti entrate; chiamate di proiezione e corpo non sono incluse nel limite locale.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn inverse(value: UtmCoordinate, margin: f64) -> Result<(f64, f64), UtmError> {\n    let UtmCoordinate {\n        zone,\n        hemisphere,\n        easting,\n        northing,\n    } = value;\n    if zone == 0 || zone > 60 {\n        return Err(UtmError::Zone);\n    }\n    if !easting.is_finite() || !northing.is_finite() {\n        return Err(UtmError::Domain);\n    }\n    let is_north = match hemisphere {\n        'N' => true,\n        'S' => false,\n        _ => return Err(UtmError::Hemisphere),\n    };\n    if !(100_000.0..=900_000.0).contains(&easting) || !(0.0..=10_000_000.0).contains(&northing) {\n        return Err(UtmError::Domain);\n    }\n    if !is_north && northing == 10_000_000.0 {\n        return Err(UtmError::Domain);\n    }\n    // Il core ha un dominio maggiore; gli ingressi arbitrari fuori da quello\n    // sono comunque rifiuti di dominio, non errori interni della proiezione.\n    let (mut lon, lat) =\n        project_utm_wgs84(zone, is_north, true, easting, northing).map_err(|_| UtmError::Domain)?;\n    if zone == 1 && lon > 0.0 {\n        lon -= 360.0;\n    }\n    if zone == 60 && lon < 0.0 {\n        lon += 360.0;\n    }\n    // Unione dei rettangoli delle bande dell'emisfero: include le eccezioni\n    // senza dedurre una banda dal punto gia' arrotondato sul bordo.\n    let mut closest = f64::INFINITY;\n    for band in BANDS.iter().copied().map(char::from) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_utm.rs::inverse:1\");\n        if (band >= 'N') != is_north {\n            continue;\n        }\n        if let Ok((west, south, east, north)) = bounds(zone, band) {\n            let (x, y) = project(\n                zone,\n                is_north,\n                false,\n                lon.clamp(west, east),\n                lat.clamp(south, north),\n            )?;\n            closest = closest.min((x - easting).hypot(y - northing));\n        }\n    }\n    if closest > margin {\n        return Err(UtmError::Domain);\n    }\n    // Il collare dell'antimeridiano mantiene longitudini geografiche legali.\n    if lon > 180.0 {\n        lon -= 360.0;\n    }\n    if lon < -180.0 {\n        lon += 360.0;\n    }\n    Ok((lon, lat))\n}"
+      },
+      {
+        "kind": "const",
+        "source": "const BANDS: &[u8; 20] = b\"CDEFGHJKLMNPQRSTUVWX\";"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": "coordinate_utm.rs::inverse:1",
+        "source": "for band in BANDS.iter().copied().map(char::from) {\n        #[cfg(test)]\n        crate::noding::gop028::cycle(\"coordinate_utm.rs::inverse:1\");\n        if (band >= 'N') != is_north {\n            continue;\n        }\n        if let Ok((west, south, east, north)) = bounds(zone, band) {\n            let (x, y) = project(\n                zone,\n                is_north,\n                false,\n                lon.clamp(west, east),\n                lat.clamp(south, north),\n            )?;\n            closest = closest.min((x - easting).hypot(y - northing));\n        }\n    }",
+        "iterations": 20
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/predicates.rs",
+    "reason": "cells restituisce [u8;9]; IntoIterator dell array emette nove elementi. Il limite conta le entrate, non il lavoro di formatting o delle chiamate di cells.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn cells(&self) -> [u8; 9] {\n        use geo::{coordinate_position::CoordPos, dimensions::Dimensions};\n        let positions = [CoordPos::Inside, CoordPos::OnBoundary, CoordPos::Outside];\n        std::array::from_fn(\n            |index| match self.0.get(positions[index / 3], positions[index % 3]) {\n                Dimensions::Empty => b'F',\n                Dimensions::ZeroDimensional => b'0',\n                Dimensions::OneDimensional => b'1',\n                Dimensions::TwoDimensional => b'2',\n            },\n        )\n    }"
+      },
+      {
+        "kind": "function",
+        "source": "fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n        for cell in self.cells() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"predicates.rs::fmt:1\");\n            write!(formatter, \"{}\", char::from(cell))?;\n        }\n        Ok(())\n    }"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": "predicates.rs::fmt:1",
+        "source": "for cell in self.cells() {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"predicates.rs::fmt:1\");\n            write!(formatter, \"{}\", char::from(cell))?;\n        }",
+        "iterations": 9
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/analyze/helpers.rs",
+    "reason": "sources e un array locale con due elementi. Il prestito mutabile non ne cambia la cardinalita. Due entrate, senza includere il costo delle mappe e del merge.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn merge_schema_metadata(\n    op: &str,\n    left: &DataContract,\n    right: &DataContract,\n) -> Result<Metadata> {\n    let mut sources = [\n        left.schema.metadata().clone(),\n        right.schema.metadata().clone(),\n    ];\n    for source in &mut sources {\n        source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);\n    }\n    plenora_core::contract::geometry_metadata_policy::merge_schema(&[&sources[0], &sources[1]])\n        .map_err(|error| PlenoraError::InvalidPlan(format!(\"{op}: {error}\")))\n}"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": null,
+        "source": "for source in &mut sources {\n        source.remove(plenora_core::contract::arrow_schema::PRIMARY_GEOMETRY_KEY);\n    }",
+        "iterations": 2
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/analyze/measures.rs",
+    "reason": "DIAGNOSTIC_COLUMNS e un array di dieci elementi. selected senza fields contiene 0..6; con fields, column_index restituisce solo 0..5 e sort/dedup elimina i duplicati prima del ciclo, quindi al massimo sei elementi. Le dipendenze sono vincolate anche in analyze/mod.rs e config.rs. Limiti delle entrate, non dei corpi o delle chiamate esterne.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn analyze_diagnostics(\n    op: &str,\n    input: &DataContract,\n    geometry: &GeometryColumnContract,\n    allocator: &mut plenora_core::contract::FieldAllocator,\n) -> Result<DataContract> {\n    let mut fields = output_fields(input);\n    let position = fields\n        .iter()\n        .position(|field| field.name() == &geometry.name)\n        .ok_or_else(|| {\n            PlenoraError::Schema(format!(\n                \"colonna geometria `{}` assente dallo schema\",\n                geometry.name\n            ))\n        })?;\n    for (name, _) in &DIAGNOSTIC_COLUMNS {\n        if fields\n            .iter()\n            .enumerate()\n            .any(|(index, field)| index != position && field.name() == name)\n        {\n            return Err(PlenoraError::Schema(format!(\n                \"{op}: la colonna diagnostica `{name}` esiste gia' nello schema\"\n            )));\n        }\n    }\n    // Tipo, conteggio e i tre flag ci sono per ogni geometria presente;\n    // `validity_reason` manca per una geometria valida, i limiti per una\n    // vuota.\n    let diagnostic_fields: Vec<Field> = DIAGNOSTIC_COLUMNS\n        .iter()\n        .map(|(name, data_type)| {\n            let sempre_presente = matches!(\n                *name,\n                \"geometry_type\" | \"coordinate_count\" | \"is_empty\" | \"is_finite\" | \"is_valid\"\n            );\n            Field::new(\n                *name,\n                data_type.clone(),\n                geometry.nullable || !sempre_presente,\n            )\n        })\n        .collect();\n    fields\n        .splice(position..=position, diagnostic_fields)\n        .for_each(drop);\n    let mut properties = input.properties.clone();\n    if properties\n        .sorted_by\n        .as_ref()\n        .and_then(|p| p.value())\n        .is_some_and(|order| order.keys.contains(&geometry.field_id))\n    {\n        properties.sorted_by = None;\n    }\n    let mut origins = input.field_origins();\n    origins.splice(\n        position..=position,\n        std::iter::repeat_n(FieldOrigin::New, DIAGNOSTIC_COLUMNS.len()),\n    );\n    input.rebuild(\n        Arc::new(Schema::new_with_metadata(\n            fields,\n            input.schema.metadata().clone(),\n        )),\n        origins,\n        input\n            .geometries\n            .iter()\n            .filter(|g| g.field_id != geometry.field_id)\n            .cloned()\n            .collect(),\n        input.active_geometry.filter(|id| *id != geometry.field_id),\n        properties,\n        allocator,\n    )\n}"
+      },
+      {
+        "kind": "function",
+        "source": "fn analyze_geometry_accessors(\n    op: &str,\n    input: &DataContract,\n    geometry: &GeometryColumnContract,\n    config: &Value,\n    allocator: &mut plenora_core::contract::FieldAllocator,\n) -> Result<DataContract> {\n    let parsed: GeometryAccessorsConfig = parse_config(op, config)?;\n    let mut selected: Vec<usize> = match &parsed.fields {\n        None => (0..ACCESSOR_COLUMNS.len()).collect(),\n        Some(fields) => {\n            if fields.is_empty() {\n                return Err(invalid_param(op, \"fields\", \"non deve essere vuoto\"));\n            }\n            let mut indexes: Vec<usize> = fields.iter().map(|field| field.column_index()).collect();\n            indexes.sort_unstable();\n            indexes.dedup();\n            if indexes.len() != fields.len() {\n                return Err(invalid_param(op, \"fields\", \"campi duplicati\"));\n            }\n            indexes\n        }\n    };\n    selected.sort_unstable();\n    let prefix = parsed.output_prefix.as_deref().unwrap_or(\"\");\n    let geometria_nullable = geometry.nullable;\n    let mut fields = output_fields(input);\n    for index in selected {\n        let (name, data_type) = &ACCESSOR_COLUMNS[index];\n        // `start_point` ed `end_point` sono null anche per una geometria\n        // presente che non e' una linea aperta; gli altri solo dove la\n        // geometria e' null.\n        let nullable = geometria_nullable || matches!(*name, \"start_point\" | \"end_point\");\n        let name = format!(\"{prefix}{name}\");\n        if !ensure_name(&name) {\n            return Err(invalid_param(op, \"output_prefix\", \"produce un nome vuoto\"));\n        }\n        ensure_name_free(op, &fields, &name)?;\n        fields.push(Field::new(name, data_type.clone(), nullable));\n    }\n    rebuild(input, fields, input.properties.clone(), allocator)\n}"
+      },
+      {
+        "kind": "use",
+        "source": "use super::{ACCESSOR_COLUMNS, DIAGNOSTIC_COLUMNS, FRACTION_COLUMN};"
+      },
+      {
+        "kind": "use",
+        "source": "use super::config::{GeometryAccessorsConfig, LineLocatePointConfig, OutputColumnConfig};"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": null,
+        "source": "for (name, _) in &DIAGNOSTIC_COLUMNS {\n        if fields\n            .iter()\n            .enumerate()\n            .any(|(index, field)| index != position && field.name() == name)\n        {\n            return Err(PlenoraError::Schema(format!(\n                \"{op}: la colonna diagnostica `{name}` esiste gia' nello schema\"\n            )));\n        }\n    }",
+        "iterations": 10
+      },
+      {
+        "counter": null,
+        "source": "for index in selected {\n        let (name, data_type) = &ACCESSOR_COLUMNS[index];\n        // `start_point` ed `end_point` sono null anche per una geometria\n        // presente che non e' una linea aperta; gli altri solo dove la\n        // geometria e' null.\n        let nullable = geometria_nullable || matches!(*name, \"start_point\" | \"end_point\");\n        let name = format!(\"{prefix}{name}\");\n        if !ensure_name(&name) {\n            return Err(invalid_param(op, \"output_prefix\", \"produce un nome vuoto\"));\n        }\n        ensure_name_free(op, &fields, &name)?;\n        fields.push(Field::new(name, data_type.clone(), nullable));\n    }",
+        "iterations": 6
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/analyze/mod.rs",
+    "reason": "Dipendenze dei limiti locali di analyze/measures.rs: cardinalita sei e dieci.",
+    "guards": [
+      {
+        "kind": "const",
+        "source": "const ACCESSOR_COLUMNS: [(&str, DataType); 6] = [\n    (\"geometry_type\", DataType::Utf8),\n    (\"num_geometries\", DataType::UInt64),\n    (\"num_interior_rings\", DataType::UInt64),\n    (\"start_point\", DataType::Utf8),\n    (\"end_point\", DataType::Utf8),\n    (\"is_closed\", DataType::Boolean),\n];"
+      },
+      {
+        "kind": "const",
+        "source": "const DIAGNOSTIC_COLUMNS: [(&str, DataType); 10] = [\n    (\"geometry_type\", DataType::Utf8),\n    (\"coordinate_count\", DataType::UInt64),\n    (\"is_empty\", DataType::Boolean),\n    (\"is_finite\", DataType::Boolean),\n    (\"is_valid\", DataType::Boolean),\n    (\"validity_reason\", DataType::Utf8),\n    (\"bounds_minx\", DataType::Float64),\n    (\"bounds_miny\", DataType::Float64),\n    (\"bounds_maxx\", DataType::Float64),\n    (\"bounds_maxy\", DataType::Float64),\n];"
+      }
+    ],
+    "cycles": []
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/analyze/config.rs",
+    "reason": "Dipendenze di selected: fields e Option<Vec<AccessorFieldParam>>, column_index ha immagine contenuta in 0..6.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "const fn column_index(self) -> usize {\n        match self {\n            Self::GeometryType => 0,\n            Self::NumGeometries => 1,\n            Self::NumInteriorRings => 2,\n            Self::StartPoint => 3,\n            Self::EndPoint => 4,\n            Self::IsClosed => 5,\n        }\n    }"
+      },
+      {
+        "kind": "struct",
+        "source": "struct GeometryAccessorsConfig {\n    /// Colonne da aggiungere, non vuota e senza ripetizioni; assente vale\n    /// tutte e sei. Escono sempre nell'ordine di\n    /// [`super::ACCESSOR_COLUMNS`].\n    #[serde(default, deserialize_with = \"plenora_core::json::mai_null\")]\n    pub fields: Option<Vec<AccessorFieldParam>>,\n    /// Prefisso dei nomi delle colonne aggiunte; assente vale `\"\"`.\n    #[serde(default, deserialize_with = \"plenora_core::json::mai_null\")]\n    pub output_prefix: Option<String>,\n}"
+      }
+    ],
+    "cycles": []
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/noding/exact.rs",
+    "reason": "Euclide non negativo: new normalizza i segni e copy/neg passano da created/check_bits prima del ciclo, quindi a e b hanno al massimo B=145173 bit. rem calcola il resto esatto, 0 <= r < b. Dopo la possibile prima permutazione, ogni due resti il divisore si dimezza: al massimo 2*B+1=290347 entrate. La deadline interna non copre il token di cancellazione; questa e solo una prova statica locale, non un checkpoint condiviso.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn new(mut n: CountedInt, mut d: CountedInt) -> Result<Self, PredicateError> {\n        n.same_budget(&d)?;\n        if d.value.sign() == Sign::NoSign {\n            return Err(PredicateError::CalcoloNonConcluso(\"denominatore nullo\"));\n        }\n        if d.value.sign() == Sign::Minus {\n            n = n.neg()?;\n            d = d.neg()?;\n        }\n        let mut a = if n.value.sign() == Sign::Minus {\n            n.neg()?\n        } else {\n            n.copy()?\n        };\n        let mut b = d.copy()?;\n        while b.value.sign() != Sign::NoSign {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/exact.rs::new:1\");\n            crate::noding::check_interruption(\n                a.lease.budget().deadline,\n                None,\n                PredicateError::DeadlineExceeded,\n                PredicateError::Cancelled,\n            )?;\n            let r = a.rem(&b)?;\n            a = b;\n            b = r;\n        }\n        Ok(Self {\n            n: n.div(&a)?,\n            d: d.div(&a)?,\n        })\n    }"
+      },
+      {
+        "kind": "function",
+        "source": "fn created(value: BigInt, budget: &Rc<Budget>) -> Result<Self, PredicateError> {\n        Self::check_bits(value.bits(), BitCheck::Created)?;\n        let bytes = value.bits().div_ceil(LIMB_BITS) * (LIMB_BITS / 8)\n            + std::mem::size_of::<BigInt>() as u64;\n        debug_assert!(bytes <= MAX_VALUE_BYTES);\n        let lease = Lease::created(budget, bytes)?;\n        Ok(Self { value, lease })\n    }"
+      },
+      {
+        "kind": "function",
+        "source": "fn copy(&self) -> Result<Self, PredicateError> {\n        Self::created(self.value.clone(), self.lease.budget())\n    }"
+      },
+      {
+        "kind": "function",
+        "source": "fn neg(&self) -> Result<Self, PredicateError> {\n        Self::created(-&self.value, self.lease.budget())\n    }"
+      },
+      {
+        "kind": "function",
+        "source": "const fn check_bits(bits: u64, phase: BitCheck) -> Result<(), PredicateError> {\n        if bits <= MAX_BITS {\n            return Ok(());\n        }\n        Err(match phase {\n            BitCheck::BeforeCreation => PredicateError::AccuracyUnproven,\n            BitCheck::Created => PredicateError::CalcoloNonConcluso(\"dominio aritmetico\"),\n        })\n    }"
+      },
+      {
+        "kind": "function",
+        "source": "fn rem(&self, b: &Self) -> Result<Self, PredicateError> {\n        self.same_budget(b)?;\n        if b.value.sign() == Sign::NoSign {\n            return Err(PredicateError::CalcoloNonConcluso(\"divisore nullo\"));\n        }\n        Self::created(&self.value % &b.value, self.lease.budget())\n    }"
+      },
+      {
+        "kind": "const",
+        "source": "const MAX_BITS: u64 = super::bounds::INTERMEDIATE_BITS;"
+      },
+      {
+        "kind": "const",
+        "file": "crates/plenora-kernels-geo/src/noding/bounds.rs",
+        "source": "const INTERMEDIATE_BITS: u64 = 145_173;"
+      },
+      {
+        "kind": "use",
+        "source": "use num_bigint::{BigInt, Sign};"
+      },
+      {
+        "kind": "struct",
+        "source": "struct CountedInt {\n    value: BigInt,\n    lease: Lease,\n}"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": "noding/exact.rs::new:1",
+        "source": "while b.value.sign() != Sign::NoSign {\n            #[cfg(test)]\n            crate::noding::gop028::cycle(\"noding/exact.rs::new:1\");\n            crate::noding::check_interruption(\n                a.lease.budget().deadline,\n                None,\n                PredicateError::DeadlineExceeded,\n                PredicateError::Cancelled,\n            )?;\n            let r = a.rem(&b)?;\n            a = b;\n            b = r;\n        }",
+        "iterations": 290347
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/lib.rs",
+    "reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn validate_wkb_geometry_with_dimensions(\n    cursor: &mut WkbCursor<'_>,\n    depth: usize,\n    max_depth: usize,\n    components: &mut u64,\n    expected: GeometryDimensions,\n    srid_policy: EmbeddedSridPolicy,\n) -> Result<u32, PlenoraError> {\n    if depth > max_depth {\n        return Err(invalid_wkb_structure(\n            \"annidamento geometrie oltre il limite\",\n        ));\n    }\n    *components = components\n        .checked_add(1)\n        .ok_or_else(|| invalid_wkb_structure(\"conteggio componenti oltre il limite\"))?;\n    if *components > MAX_WKB_COMPONENTS {\n        return Err(invalid_wkb_structure(\n            \"conteggio componenti oltre il limite\",\n        ));\n    }\n    let byte_order = cursor.read_u8()?;\n    let little_endian = match byte_order {\n        0 => false,\n        1 => true,\n        _ => return Err(invalid_wkb_structure(\"byte order non valido\")),\n    };\n    let raw_type = cursor.read_u32(little_endian)?;\n    let raw_type = type_code_without_embedded_srid(cursor, little_endian, raw_type, srid_policy)?;\n    let (geometry_type, stride) = parse_wkb_type_code(raw_type, expected)?;\n    match geometry_type {\n        1 => {\n            cursor.read_coordinate(little_endian, stride)?;\n        }\n        2 => {\n            let count = cursor.read_u32(little_endian)?;\n            let count = checked_count(count, cursor.remaining(), stride)?;\n            if count == 1 {\n                return Err(invalid_wkb_structure(\n                    \"LineString deve essere vuota o avere almeno due coordinate\",\n                ));\n            }\n            for _ in 0..count {\n                cursor.read_coordinate(little_endian, stride)?;\n            }\n        }\n        3 => {\n            let rings = cursor.read_u32(little_endian)?;\n            let rings = checked_count(rings, cursor.remaining(), 4)?;\n            for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n            }\n        }\n        4..=7 => {\n            let children = cursor.read_u32(little_endian)?;\n            let children = checked_count(children, cursor.remaining(), 5)?;\n            for _ in 0..children {\n                let child_type = validate_wkb_geometry_with_dimensions(\n                    cursor,\n                    depth + 1,\n                    max_depth,\n                    components,\n                    expected,\n                    srid_policy,\n                )?;\n                let valid_child = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    7 => true,\n                    _ => {\n                        return Err(invalid_wkb_structure(\"tipo geometria non supportato\"));\n                    }\n                };\n                if !valid_child {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n            }\n        }\n        _ => {\n            return Err(invalid_wkb_structure(\"tipo geometria non supportato\"));\n        }\n    }\n    Ok(geometry_type)\n}"
+      },
+      {
+        "kind": "function",
+        "file": "crates/plenora-kernels-geo/src/lib.rs",
+        "source": "fn checked_count(\n    value: ::core::primitive::u32,\n    remaining: usize,\n    minimum_item_bytes: usize,\n) -> Result<usize, PlenoraError> {\n    let count = value as usize;\n    if count > remaining / minimum_item_bytes.max(1) {\n        return Err(invalid_wkb_structure(\n            \"conteggio elementi oltre i byte disponibili\",\n        ));\n    }\n    Ok(count)\n}"
+      },
+      {
+        "kind": "use",
+        "source": "use geo::{\n    BoundingRect, Centroid, ConvexHull, Coord, CoordsIter, Geometry, LineString, MapCoords, Point,\n};"
+      },
+      {
+        "kind": "use",
+        "source": "use plenora_core::contract::{GeometryDimensions, GeometryEncoding};"
+      },
+      {
+        "kind": "use",
+        "source": "use plenora_core::PlenoraError;"
+      },
+      {
+        "kind": "use",
+        "source": "use serde::{Deserialize, Serialize};"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": null,
+        "source": "for _ in 0..count {\n                cursor.read_coordinate(little_endian, stride)?;\n            }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n            }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                }",
+        "iterations": 4294967294
+      },
+      {
+        "counter": null,
+        "source": "for _ in 0..children {\n                let child_type = validate_wkb_geometry_with_dimensions(\n                    cursor,\n                    depth + 1,\n                    max_depth,\n                    components,\n                    expected,\n                    srid_policy,\n                )?;\n                let valid_child = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    7 => true,\n                    _ => {\n                        return Err(invalid_wkb_structure(\"tipo geometria non supportato\"));\n                    }\n                };\n                if !valid_child {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n            }",
+        "iterations": 4294967295
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/wkb_decoder.rs",
+    "reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn decode_geometry(\n    cursor: &mut WkbCursor<'_>,\n    depth: usize,\n    max_depth: usize,\n    components: &mut u64,\n) -> Result<(u32, Geometry<f64>), PlenoraError> {\n    if depth > max_depth {\n        return Err(invalid_wkb_structure(\n            \"annidamento geometrie oltre il limite\",\n        ));\n    }\n    *components = components\n        .checked_add(1)\n        .ok_or_else(|| invalid_wkb_structure(\"conteggio componenti oltre il limite\"))?;\n    if *components > MAX_WKB_COMPONENTS {\n        return Err(invalid_wkb_structure(\n            \"conteggio componenti oltre il limite\",\n        ));\n    }\n    let byte_order = cursor.read_u8()?;\n    let little_endian = match byte_order {\n        0 => false,\n        1 => true,\n        _ => return Err(invalid_wkb_structure(\"byte order non valido\")),\n    };\n    let raw_type = cursor.read_u32(little_endian)?;\n    let (geometry_type, stride) = parse_wkb_type_code(raw_type, GeometryDimensions::Xy)?;\n    match geometry_type {\n        1 => {\n            let (x, y) = cursor.read_coordinate(little_endian, stride)?;\n            Ok((1, Geometry::Point(Point::new(x, y))))\n        }\n        2 => {\n            let count = cursor.read_u32(little_endian)?;\n            let count = checked_count(count, cursor.remaining(), stride)?;\n            if count == 1 {\n                return Err(invalid_wkb_structure(\n                    \"LineString deve essere vuota o avere almeno due coordinate\",\n                ));\n            }\n            let mut coordinates = Vec::with_capacity(count);\n            for _ in 0..count {\n                let (x, y) = cursor.read_coordinate(little_endian, stride)?;\n                coordinates.push((x, y));\n            }\n            Ok((2, Geometry::LineString(LineString::from(coordinates))))\n        }\n        3 => {\n            let rings = cursor.read_u32(little_endian)?;\n            let rings = checked_count(rings, cursor.remaining(), 4)?;\n            let mut exterior: Option<LineString<f64>> = None;\n            // Capacita' esatta (un anello e' l'esterno): la forma\n            // decodificata resta densa, invariante del preflight\n            // (`decoded_size_xy` — il test di conservativita' misura le\n            // capacita' reali).\n            let mut interiors: Vec<LineString<f64>> = Vec::with_capacity(rings.saturating_sub(1));\n            for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut ring = Vec::with_capacity(count);\n                ring.push(first);\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                    ring.push(last);\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n                // Il primo anello e' l'esterno, i successivi gli interni.\n                // Mai `exterior.take()` nel discriminante: con un secondo\n                // anello scarterebbe il primo, e un oracolo che si ferma ai\n                // poligoni a un anello solo non lo vedrebbe.\n                if exterior.is_none() {\n                    exterior = Some(LineString::from(ring));\n                } else {\n                    interiors.push(LineString::from(ring));\n                }\n            }\n            // Zero anelli: poligono vuoto, accettato come dal percorso di\n            // riferimento (validatore strutturale e geozero concordi).\n            let exterior = exterior.unwrap_or_else(|| LineString::from(Vec::<(f64, f64)>::new()));\n            Ok((3, Geometry::Polygon(Polygon::new(exterior, interiors))))\n        }\n        4..=7 => {\n            let children = cursor.read_u32(little_endian)?;\n            let children = checked_count(children, cursor.remaining(), 5)?;\n            let mut decoded: ::std::vec::Vec<(u32, Geometry<f64>)> =\n                ::std::vec::Vec::with_capacity(children);\n            for _ in 0..children {\n                let child = decode_geometry(cursor, depth + 1, max_depth, components)?;\n                // Controllo per figlio, immediatamente dopo il suo decode:\n                // stesso ordine del validatore strutturale.\n                let compatible = match geometry_type {\n                    4 => child.0 == 1,\n                    5 => child.0 == 2,\n                    6 => child.0 == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                decoded.push(child);\n            }\n            let incompatible =\n                || invalid_wkb_structure(\"tipo figlio incompatibile con multi-geometria\");\n            match geometry_type {\n                4 => {\n                    // Nessun `collect::<Result<Vec<_>>>`: la raccolta con\n                    // Result lascia capacita' in eccesso (crescita a\n                    // raddoppio) e la forma decodificata non sarebbe densa —\n                    // invariante del preflight (`decoded_size_xy`, il\n                    // test di conservativita' misura le capacita' reali).\n                    // Il tipo figlio e' gia' verificato per costruzione nel\n                    // ciclo sopra: il ramo d'errore resta come difesa.\n                    let mut points = Vec::with_capacity(decoded.len());\n                    for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Point(point) => points.push(point),\n                            _ => return Err(incompatible()),\n                        }\n                    }\n                    Ok((4, Geometry::MultiPoint(MultiPoint::new(points))))\n                }\n                5 => {\n                    let mut lines = Vec::with_capacity(decoded.len());\n                    for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::LineString(line) => lines.push(line),\n                            _ => return Err(incompatible()),\n                        }\n                    }\n                    Ok((5, Geometry::MultiLineString(MultiLineString::new(lines))))\n                }\n                6 => {\n                    let mut polygons = Vec::with_capacity(decoded.len());\n                    for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Polygon(polygon) => polygons.push(polygon),\n                            _ => return Err(incompatible()),\n                        }\n                    }\n                    Ok((6, Geometry::MultiPolygon(MultiPolygon::new(polygons))))\n                }\n                _ => Ok((\n                    7,\n                    Geometry::GeometryCollection(GeometryCollection::new_from(\n                        decoded.into_iter().map(|(_, geometry)| geometry).collect(),\n                    )),\n                )),\n            }\n        }\n        _ => Err(invalid_wkb_structure(\"tipo geometria non supportato\")),\n    }\n}"
+      },
+      {
+        "kind": "function",
+        "file": "crates/plenora-kernels-geo/src/lib.rs",
+        "source": "fn checked_count(\n    value: ::core::primitive::u32,\n    remaining: usize,\n    minimum_item_bytes: usize,\n) -> Result<usize, PlenoraError> {\n    let count = value as usize;\n    if count > remaining / minimum_item_bytes.max(1) {\n        return Err(invalid_wkb_structure(\n            \"conteggio elementi oltre i byte disponibili\",\n        ));\n    }\n    Ok(count)\n}"
+      },
+      {
+        "kind": "use",
+        "source": "use geo::{\n    Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,\n    Polygon,\n};"
+      },
+      {
+        "kind": "use",
+        "source": "use plenora_core::PlenoraError;"
+      },
+      {
+        "kind": "use",
+        "source": "use crate::{\n    checked_count, invalid_wkb_structure, parse_wkb_type_code, GeometryDimensions, WkbCursor,\n    MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH,\n};"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": null,
+        "source": "for _ in 0..count {\n                let (x, y) = cursor.read_coordinate(little_endian, stride)?;\n                coordinates.push((x, y));\n            }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for _ in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                if count < 4 {\n                    return Err(invalid_wkb_structure(\n                        \"anello poligonale con meno di quattro coordinate\",\n                    ));\n                }\n                let first = cursor.read_coordinate(little_endian, stride)?;\n                let mut ring = Vec::with_capacity(count);\n                ring.push(first);\n                let mut last = first;\n                for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                    ring.push(last);\n                }\n                if first != last {\n                    return Err(invalid_wkb_structure(\"anello poligonale non chiuso\"));\n                }\n                // Il primo anello e' l'esterno, i successivi gli interni.\n                // Mai `exterior.take()` nel discriminante: con un secondo\n                // anello scarterebbe il primo, e un oracolo che si ferma ai\n                // poligoni a un anello solo non lo vedrebbe.\n                if exterior.is_none() {\n                    exterior = Some(LineString::from(ring));\n                } else {\n                    interiors.push(LineString::from(ring));\n                }\n            }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for _ in 1..count {\n                    last = cursor.read_coordinate(little_endian, stride)?;\n                    ring.push(last);\n                }",
+        "iterations": 4294967294
+      },
+      {
+        "counter": null,
+        "source": "for _ in 0..children {\n                let child = decode_geometry(cursor, depth + 1, max_depth, components)?;\n                // Controllo per figlio, immediatamente dopo il suo decode:\n                // stesso ordine del validatore strutturale.\n                let compatible = match geometry_type {\n                    4 => child.0 == 1,\n                    5 => child.0 == 2,\n                    6 => child.0 == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                decoded.push(child);\n            }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Point(point) => points.push(point),\n                            _ => return Err(incompatible()),\n                        }\n                    }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::LineString(line) => lines.push(line),\n                            _ => return Err(incompatible()),\n                        }\n                    }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for (_, geometry) in decoded {\n                        match geometry {\n                            Geometry::Polygon(polygon) => polygons.push(polygon),\n                            _ => return Err(incompatible()),\n                        }\n                    }",
+        "iterations": 4294967295
+      }
+    ]
+  },
+  {
+    "file": "crates/plenora-kernels-geo/src/decoded_size.rs",
+    "reason": "Conteggi WKB: checked_count riceve u32 e restituisce value as usize solo dopo il confronto con remaining / minimum_item_bytes.max(1). I range 0..count/rings/children hanno al massimo 4294967295 entrate; 1..count ne ha al massimo 4294967294. Il decoder inserisce esattamente un elemento in decoded per ogni figlio e i tre rami consumano quel Vec senza aggiunte: stesso limite. Guardia sull intera funzione per dominanza, assenza di riassegnazioni e cardinalita del Vec. Solo entrate locali, esclusi ricorsione, cicli annidati, conversioni e lavoro delle chiamate; non e un limite fra checkpoint.",
+    "guards": [
+      {
+        "kind": "function",
+        "source": "fn decoded_size_geometry(\n    cursor: &mut WkbCursor<'_>,\n    depth: usize,\n    max_depth: usize,\n    components: &mut u64,\n    total: &mut u64,\n) -> Result<u32, PlenoraError> {\n    if depth > max_depth {\n        return Err(invalid_wkb_structure(\n            \"annidamento geometrie oltre il limite\",\n        ));\n    }\n    *components = components\n        .checked_add(1)\n        .ok_or_else(|| invalid_wkb_structure(\"conteggio componenti oltre il limite\"))?;\n    if *components > MAX_WKB_COMPONENTS {\n        return Err(invalid_wkb_structure(\n            \"conteggio componenti oltre il limite\",\n        ));\n    }\n    let byte_order = cursor.read_u8()?;\n    let little_endian = match byte_order {\n        0 => false,\n        1 => true,\n        _ => return Err(invalid_wkb_structure(\"byte order non valido\")),\n    };\n    let raw_type = cursor.read_u32(little_endian)?;\n    let (geometry_type, stride) = parse_wkb_type_code(raw_type, GeometryDimensions::Xy)?;\n    match geometry_type {\n        // Point: coordinata inline nell'enum, nessun heap.\n        1 => {\n            cursor.skip(stride)?;\n            Ok(1)\n        }\n        2 => {\n            let count = cursor.read_u32(little_endian)?;\n            let count = checked_count(count, cursor.remaining(), stride)?;\n            if count == 1 {\n                return Err(invalid_wkb_structure(\n                    \"LineString deve essere vuota o avere almeno due coordinate\",\n                ));\n            }\n            cursor.skip(count * stride)?;\n            *total = total.saturating_add(COORD_BYTES.saturating_mul(count as u64));\n            Ok(2)\n        }\n        3 => {\n            let rings = cursor.read_u32(little_endian)?;\n            let rings = checked_count(rings, cursor.remaining(), 4)?;\n            for ring_index in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                cursor.skip(count * stride)?;\n                *total = total.saturating_add(COORD_BYTES.saturating_mul(count as u64));\n                // Anelli interni: header `LineString` nel buffer degli\n                // interni (l'esterno e' inline nel `Polygon`).\n                if ring_index > 0 {\n                    *total = total.saturating_add(LINESTRING_BYTES);\n                }\n            }\n            Ok(3)\n        }\n        4..=7 => {\n            let children = cursor.read_u32(little_endian)?;\n            let children = checked_count(children, cursor.remaining(), 5)?;\n            for _ in 0..children {\n                let child_type =\n                    decoded_size_geometry(cursor, depth + 1, max_depth, components, total)?;\n                // Controllo per figlio, immediatamente dopo la sua\n                // camminata: stesso ordine del decoder.\n                let compatible = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                // Slot del figlio nel buffer del contenitore (inline).\n                let slot = match geometry_type {\n                    4 => POINT_BYTES,\n                    5 => LINESTRING_BYTES,\n                    6 => POLYGON_BYTES,\n                    _ => GEOMETRY_BYTES,\n                };\n                *total = total.saturating_add(slot);\n            }\n            Ok(geometry_type)\n        }\n        _ => Err(invalid_wkb_structure(\"tipo geometria non supportato\")),\n    }\n}"
+      },
+      {
+        "kind": "function",
+        "file": "crates/plenora-kernels-geo/src/lib.rs",
+        "source": "fn checked_count(\n    value: ::core::primitive::u32,\n    remaining: usize,\n    minimum_item_bytes: usize,\n) -> Result<usize, PlenoraError> {\n    let count = value as usize;\n    if count > remaining / minimum_item_bytes.max(1) {\n        return Err(invalid_wkb_structure(\n            \"conteggio elementi oltre i byte disponibili\",\n        ));\n    }\n    Ok(count)\n}"
+      },
+      {
+        "kind": "use",
+        "source": "use geo::Geometry;"
+      },
+      {
+        "kind": "use",
+        "source": "use plenora_core::PlenoraError;"
+      },
+      {
+        "kind": "use",
+        "source": "use crate::{\n    checked_count, invalid_wkb_structure, parse_wkb_type_code, GeometryDimensions, WkbCursor,\n    MAX_WKB_BYTES, MAX_WKB_COMPONENTS, MAX_WKB_DEPTH,\n};"
+      }
+    ],
+    "cycles": [
+      {
+        "counter": null,
+        "source": "for ring_index in 0..rings {\n                let count = cursor.read_u32(little_endian)?;\n                let count = checked_count(count, cursor.remaining(), stride)?;\n                cursor.skip(count * stride)?;\n                *total = total.saturating_add(COORD_BYTES.saturating_mul(count as u64));\n                // Anelli interni: header `LineString` nel buffer degli\n                // interni (l'esterno e' inline nel `Polygon`).\n                if ring_index > 0 {\n                    *total = total.saturating_add(LINESTRING_BYTES);\n                }\n            }",
+        "iterations": 4294967295
+      },
+      {
+        "counter": null,
+        "source": "for _ in 0..children {\n                let child_type =\n                    decoded_size_geometry(cursor, depth + 1, max_depth, components, total)?;\n                // Controllo per figlio, immediatamente dopo la sua\n                // camminata: stesso ordine del decoder.\n                let compatible = match geometry_type {\n                    4 => child_type == 1,\n                    5 => child_type == 2,\n                    6 => child_type == 3,\n                    _ => true,\n                };\n                if !compatible {\n                    return Err(invalid_wkb_structure(\n                        \"tipo figlio incompatibile con multi-geometria\",\n                    ));\n                }\n                // Slot del figlio nel buffer del contenitore (inline).\n                let slot = match geometry_type {\n                    4 => POINT_BYTES,\n                    5 => LINESTRING_BYTES,\n                    6 => POLYGON_BYTES,\n                    _ => GEOMETRY_BYTES,\n                };\n                *total = total.saturating_add(slot);\n            }",
+        "iterations": 4294967295
+      }
+    ]
+  }
+]

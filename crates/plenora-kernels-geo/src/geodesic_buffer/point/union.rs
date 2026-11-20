@@ -132,8 +132,12 @@ fn execute<'a>(
     }
     let mut count = 0_u32;
     for input in inputs {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:1");
         work.step()?;
         for p in points(input)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:2");
             work.step()?;
             if !((-180.0..=180.0).contains(&p.x) && (-90.0..=90.0).contains(&p.y)) {
                 return Err(DegenerateBufferError::InvalidGeometry.into());
@@ -158,12 +162,22 @@ fn execute<'a>(
     let disk_tolerance = (tolerance_m.min(0.01) - overlay_allowance).next_down();
     let mut vertices = 0_u64;
     for &radius in radii_m {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:3");
         work.step()?;
-        let (n, _) = plan(radius, disk_tolerance, crs)?;
+        let (n, _) = plan(radius, disk_tolerance, crs, || {
+            work.checkpoint()
+                .map_err(|error| super::topology_error(&error))
+        })?;
         let mut west = f64::INFINITY;
         let mut east = f64::NEG_INFINITY;
         for input in inputs {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:4");
+            work.step()?;
             for p in points(input)? {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:5");
                 work.step()?;
                 domain(p, radius)?;
                 // La barriera del disco usa 15000 m/grado fino a 81 gradi.
@@ -189,12 +203,22 @@ fn execute<'a>(
     }
     let mut output = CountedVec::new();
     for &radius in radii_m {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:6");
         work.step()?;
-        let (n, certificate) = plan(radius, disk_tolerance, crs)?;
+        let (n, certificate) = plan(radius, disk_tolerance, crs, || {
+            work.checkpoint()
+                .map_err(|error| super::topology_error(&error))
+        })?;
         let mut accumulated = CountedVec::new();
         let mut error = 0.0;
         for input in inputs {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:7");
+            work.step()?;
             for p in points(input)? {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:8");
                 work.step()?;
                 let bytes = (u64::from(n) + 1)
                     .checked_mul(
@@ -239,6 +263,9 @@ fn execute<'a>(
             )?;
             if let Some(surface) = output.last() {
                 for input in inputs {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("geodesic_buffer/point/union.rs::execute:9");
+                    work.step()?;
                     super::super::verify_coverage(&surface.geometry, input, work)?;
                 }
             }

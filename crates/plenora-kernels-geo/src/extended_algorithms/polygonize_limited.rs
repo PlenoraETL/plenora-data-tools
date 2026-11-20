@@ -51,16 +51,28 @@ fn collect(
     let mut edges = CountedVec::new();
     work.push(&mut pending, linework)?;
     while let Some(g) = pending.pop() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::collect:1");
         work.step()?;
         match g {
             Geometry::LineString(line) => add_line(line, &mut edges, work)?,
             Geometry::MultiLineString(lines) => {
                 for line in &lines.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "extended_algorithms/polygonize_limited.rs::collect:2",
+                    );
+                    work.checkpoint()?;
                     add_line(line, &mut edges, work)?;
                 }
             }
             Geometry::GeometryCollection(gs) => {
                 for g in gs.0.iter().rev() {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "extended_algorithms/polygonize_limited.rs::collect:3",
+                    );
+                    work.checkpoint()?;
                     work.push(&mut pending, g)?;
                 }
             }
@@ -75,6 +87,9 @@ fn add_line(
     edges: &mut CountedVec<Edge>,
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
+    #[cfg(test)]
+    crate::noding::gop028::unit();
+    work.step()?;
     if line.0.len() == 1 {
         return Err(PredicateError::InvalidGeometry {
             side: "linework",
@@ -82,12 +97,16 @@ fn add_line(
         });
     }
     for p in &line.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::add_line:1");
         work.step()?;
         if !p.x.is_finite() || !p.y.is_finite() {
             return Err(PredicateError::NonFiniteCoordinate { side: "linework" });
         }
     }
     for pair in line.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::add_line:2");
         work.step()?;
         if pair[0] != pair[1] {
             work.nodes(2)?;
@@ -108,12 +127,19 @@ fn output_ring(
 ) -> Result<LineString<f64>, PredicateError> {
     let mut out = CountedVec::new();
     for i in 0..ring.atoms.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::output_ring:1");
+        work.checkpoint()?;
         work.push(&mut out, coords[ring.vertices[i]])?;
     }
     work.push(&mut out, coords[ring.vertices[0]])?;
     Ok(LineString(out.export(work)?))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sonde O-M3 per ciclo, assenti in produzione"
+)]
 fn publish_faces(
     linework: &Geometry<f64>,
     points: &[P],
@@ -124,10 +150,17 @@ fn publish_faces(
     let originals = Originals::for_editing(std::iter::empty(), linework, work)?;
     let mut selected = CountedVec::new();
     for (i, ring) in rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:1");
         work.step()?;
         if ring.orientation.is_gt() {
             work.push(&mut selected, i)?;
             for &h in &holes[i] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "extended_algorithms/polygonize_limited.rs::publish_faces:2",
+                );
+                work.checkpoint()?;
                 work.push(&mut selected, h)?;
             }
         }
@@ -135,11 +168,21 @@ fn publish_faces(
     let mut boundary = CountedVec::new();
     let mut coords = CountedVec::new();
     for _ in points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:3");
+        work.checkpoint()?;
         work.push(&mut coords, geo::Coord { x: 0.0, y: 0.0 })?;
     }
     for &i in &selected {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:4");
+        work.checkpoint()?;
         let vertices = &rings[i].vertices;
         for j in 0..vertices.len() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "extended_algorithms/polygonize_limited.rs::publish_faces:5",
+            );
             work.step()?;
             let (a, b) = (vertices[j], vertices[(j + 1) % vertices.len()]);
             coords[a] = originals
@@ -161,6 +204,8 @@ fn publish_faces(
     }
     let mut output = CountedVec::new();
     for (i, ring) in rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:6");
         work.step()?;
         if !ring.orientation.is_gt() {
             continue;
@@ -168,6 +213,11 @@ fn publish_faces(
         let exterior = output_ring(ring, &coords, work)?;
         let mut interiors = CountedVec::new();
         for &h in &holes[i] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "extended_algorithms/polygonize_limited.rs::publish_faces:7",
+            );
+            work.checkpoint()?;
             let line = output_ring(&rings[h], &coords, work)?;
             work.push(&mut interiors, line)?;
         }
@@ -177,6 +227,9 @@ fn publish_faces(
     let geometry = Geometry::GeometryCollection(geo::GeometryCollection(output.export(work)?));
     let mut published = CountedVec::new();
     for (edge, a, b) in &boundary {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:8");
+        work.checkpoint()?;
         let mut certificate = PublishedEdge::new(edge, [coords[*a], coords[*b]], work)?;
         certificate.surface = true;
         work.push(&mut published, certificate)?;
@@ -190,6 +243,9 @@ fn publish_faces(
     };
     let mut output = CountedVec::new();
     for geometry in collection.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:9");
+        work.checkpoint()?;
         let Geometry::Polygon(polygon) = geometry else {
             return Err(PredicateError::CalcoloNonConcluso(
                 "contenitore delle facce",
@@ -208,6 +264,9 @@ fn polygonize(
     let edges = collect(linework, work)?;
     let mut refs = CountedVec::new();
     for e in &edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::polygonize:1");
+        work.checkpoint()?;
         work.push(&mut refs, e)?;
     }
     let nodes = crate::noding::node(&refs, work)?;

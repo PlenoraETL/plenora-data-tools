@@ -177,6 +177,8 @@ impl De9imMatrix {
 impl std::fmt::Display for De9imMatrix {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for cell in self.cells() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("predicates.rs::fmt:1");
             write!(formatter, "{}", char::from(cell))?;
         }
         Ok(())

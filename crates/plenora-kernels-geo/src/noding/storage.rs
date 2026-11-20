@@ -205,6 +205,8 @@ impl<T> CountedVec<T> {
     ) -> Result<(), PredicateError> {
         let mut kept = 0;
         for read in 0..self.len() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/storage.rs::dedup_by:1");
             work.step()?;
             if kept == 0 || !equal(&self[read], &self[kept - 1])? {
                 self.values.swap(kept, read);
@@ -212,6 +214,8 @@ impl<T> CountedVec<T> {
             }
         }
         while self.len() > kept {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/storage.rs::dedup_by:2");
             work.step()?;
             self.pop();
         }

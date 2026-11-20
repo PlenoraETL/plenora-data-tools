@@ -445,6 +445,8 @@ pub struct Q {
 impl Q {
     /// Radice razionale esatta, oppure assenza se il valore e' irrazionale.
     pub fn try_sqrt_exact(&self) -> Result<Option<Self>, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         if self.sign().is_lt() {
             return Err(PredicateError::CalcoloNonConcluso("radicando negativo"));
         }
@@ -458,11 +460,15 @@ impl Q {
     }
 
     pub(super) fn belongs_to(&self, budget: &Rc<Budget>) -> bool {
+        #[cfg(test)]
+        super::gop028::unit();
         Rc::ptr_eq(self.n.lease.budget(), budget) && Rc::ptr_eq(self.d.lease.budget(), budget)
     }
     #[cfg(test)]
     #[deny(clippy::disallowed_methods)]
     pub(super) fn bits(&self) -> (u64, u64) {
+        #[cfg(test)]
+        super::gop028::unit();
         (self.n.value.bits(), self.d.value.bits())
     }
 
@@ -482,6 +488,8 @@ impl Q {
         };
         let mut b = d.copy()?;
         while b.value.sign() != Sign::NoSign {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/exact.rs::new:1");
             crate::noding::check_interruption(
                 a.lease.budget().deadline,
                 None,
@@ -499,6 +507,8 @@ impl Q {
     }
 
     pub(super) fn int_in(value: i32, budget: &Rc<Budget>) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         Ok(Self {
             n: CountedInt::int(value, budget)?,
             d: CountedInt::int(1, budget)?,
@@ -506,6 +516,8 @@ impl Q {
     }
 
     pub(super) fn float_in(value: f64, budget: &Rc<Budget>) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         if !value.is_finite() {
             return Err(PredicateError::CalcoloNonConcluso("coordinata non finita"));
         }
@@ -535,6 +547,8 @@ impl Q {
     }
 
     pub fn try_clone(&self) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         Ok(Self {
             n: self.n.copy()?,
             d: self.d.copy()?,
@@ -542,6 +556,8 @@ impl Q {
     }
 
     pub fn try_add(&self, b: &Self) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         Self::new(
             self.n.mul(&b.d)?.add(&b.n.mul(&self.d)?)?,
             self.d.mul(&b.d)?,
@@ -549,6 +565,8 @@ impl Q {
     }
 
     pub fn try_sub(&self, b: &Self) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         Self::new(
             self.n.mul(&b.d)?.sub(&b.n.mul(&self.d)?)?,
             self.d.mul(&b.d)?,
@@ -556,14 +574,20 @@ impl Q {
     }
 
     pub fn try_mul(&self, b: &Self) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         Self::new(self.n.mul(&b.n)?, self.d.mul(&b.d)?)
     }
 
     pub fn try_div(&self, b: &Self) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         Self::new(self.n.mul(&b.d)?, self.d.mul(&b.n)?)
     }
 
     pub fn sign(&self) -> Ordering {
+        #[cfg(test)]
+        super::gop028::unit();
         match self.n.value.sign() {
             Sign::Minus => Ordering::Less,
             Sign::NoSign => Ordering::Equal,
@@ -572,11 +596,15 @@ impl Q {
     }
 
     pub fn try_midpoint(&self, b: &Self) -> Result<Self, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         self.try_add(b)?
             .try_div(&Self::int_in(2, self.n.lease.budget())?)
     }
 
     pub fn try_cmp(&self, b: &Self) -> Result<Ordering, PredicateError> {
+        #[cfg(test)]
+        super::gop028::unit();
         let left = self.n.mul(&b.d)?;
         let right = b.n.mul(&self.d)?;
         Ok(left.value.cmp(&right.value))
@@ -643,6 +671,8 @@ pub fn sum_sign(
 ) -> Result<Ordering, PredicateError> {
     let mut filter = BoundedSum::new(128, work)?;
     for (term, subtract) in terms {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/exact.rs::sum_sign:1");
         work.step()?;
         filter.add(term, *subtract)?;
     }
@@ -653,6 +683,8 @@ pub fn sum_sign(
     let mut value = CountedInt::int(0, &work.budget)?;
     let mut bound = u128::from(usize::BITS) + 2;
     for (term, subtract) in terms {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/exact.rs::sum_sign:2");
         work.step()?;
         // Al massimo usize::MAX denominatori di MAX_BITS bit: su host
         // fino a 64 bit il contatore di separazione richiede meno di 83 bit.
@@ -675,6 +707,8 @@ pub fn sum_sign(
     let count = CountedInt::created(BigInt::from(terms.len()), &work.budget)?;
     let mut precision = 128_u128;
     loop {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/exact.rs::sum_sign:3");
         work.step()?;
         // L'errore troncato ha modulo strettamente minore del numero di
         // termini. Dopo un passo indeciso l'accumulatore ha al massimo
@@ -695,6 +729,8 @@ pub fn sum_sign(
         value = value.shift(1)?;
         let mut exact = true;
         for (remainder, denominator) in residuals.iter_mut() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/exact.rs::sum_sign:4");
             work.step()?;
             let doubled = remainder.shift(1)?;
             value = value.add(&doubled.div(denominator)?)?;

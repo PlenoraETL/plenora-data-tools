@@ -1024,11 +1024,13 @@ dependencies = [
  "plenora-kernels-table",
  "plenora-rstar",
  "plenora-wkt",
+ "proc-macro2",
  "proptest",
  "rayon",
  "serde",
  "serde_json",
  "spade",
+ "syn 3.0.6",
  "thiserror 2.0.21",
  "tracking-allocator",
 ]

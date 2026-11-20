@@ -39,6 +39,8 @@ impl Enclosure {
             (&self.high, &b.low),
             (&self.high, &b.high),
         ] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("offset/enclosure.rs::mul:1");
             let q = a.try_mul(b)?;
             if q.try_cmp(&low)?.is_lt() {
                 low = q.try_clone()?;
@@ -175,6 +177,8 @@ pub(super) fn length(
     let mut low = if x.try_cmp(&y)?.is_gt() { x } else { y };
     let mut high = low.try_mul(&work.integer(2)?)?;
     for _ in 0..precision {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("offset/enclosure.rs::length:1");
         work.step()?;
         let mid = low.try_midpoint(&high)?;
         match mid.try_mul(&mid)?.try_cmp(&square)? {

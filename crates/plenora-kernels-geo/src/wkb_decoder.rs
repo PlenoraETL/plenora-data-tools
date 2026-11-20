@@ -169,7 +169,8 @@ fn decode_geometry(
         4..=7 => {
             let children = cursor.read_u32(little_endian)?;
             let children = checked_count(children, cursor.remaining(), 5)?;
-            let mut decoded: Vec<(u32, Geometry<f64>)> = Vec::with_capacity(children);
+            let mut decoded: ::std::vec::Vec<(u32, Geometry<f64>)> =
+                ::std::vec::Vec::with_capacity(children);
             for _ in 0..children {
                 let child = decode_geometry(cursor, depth + 1, max_depth, components)?;
                 // Controllo per figlio, immediatamente dopo il suo decode:

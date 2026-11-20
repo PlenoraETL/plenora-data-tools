@@ -75,7 +75,12 @@ fn signed_distance(
     let mut inside = false;
     let mut uncertain = false;
     for ring in parts(geometry)? {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::signed_distance:1");
+        work.step()?;
         for edge in ring.0.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::signed_distance:2");
             work.step()?;
             let a = edge[0];
             let b = edge[1];
@@ -141,9 +146,14 @@ pub(super) fn clearance(
         return Err(BufferFailure::AccuracyUnproven.into());
     }
     for edge in line.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::clearance:1");
+        work.checkpoint()?;
         let mut pending = CountedVec::new();
         work.push(&mut pending, (0.0_f64, 1.0_f64, 0_u32))?;
         while let Some((lo, hi, depth)) = pending.pop() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::clearance:2");
             work.step()?;
             let parameter = ErosionRange { lo, hi };
             let coordinate = |a, b| {
@@ -229,8 +239,15 @@ pub(super) fn certify(
         },
     };
     for geometry in [operand, result] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::certify:1");
         for ring in parts(geometry)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::certify:2");
+            work.step()?;
             for p in &ring.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::certify:3");
                 work.step()?;
                 root.low.x = root.low.x.min(p.x);
                 root.low.y = root.low.y.min(p.y);
@@ -242,6 +259,8 @@ pub(super) fn certify(
     let mut pending = CountedVec::new();
     work.push(&mut pending, root)?;
     while let Some(cell) = pending.pop() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::certify:4");
         work.step()?;
         let center = cell.center();
         let half = cell.reach(center);
@@ -291,10 +310,16 @@ fn covered(
     // Direzioni intermedie nei settori acuti; la distanza euclidea
     // arrotondata verso l'alto certifica ogni candidato sull'intera cella.
     for scale in [0.0, 0.25, 0.5, 0.75, 0.875, 0.9375, 0.96875] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::covered:1");
         for index in 0..=64 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::covered:2");
             let x = f64::from(index) / 64.0;
             let y = 1.0 - x;
             for (x, y) in [(x, y), (-y, x), (-x, -y), (y, -x)] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::covered:3");
                 work.step()?;
                 let distance = reach * scale / x.hypot(y);
                 let witness = Coord {

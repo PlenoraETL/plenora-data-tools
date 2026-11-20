@@ -16,6 +16,107 @@ stanno nella sua guida:
 | riproiezione | [`riproiezione.md`, «Limiti dichiarati della riproiezione»](riproiezione.md#limiti-dichiarati-della-riproiezione) |
 | operazioni topologiche | [`topologia.md`, «Differenze da GEOS»](topologia.md#differenze-da-geos) |
 
+## Interruzione cooperativa e lavoro esterno
+
+**Voce 23 — 6.2.0: CHIUSA PARZIALE DICHIARATA.** Decisione del titolare
+del 20 novembre 2026: entra nella 6.2.0 la copertura locale dimostrata di
+640 cicli su 978, mediante checkpoint condiviso o limite statico delle
+entrate. Restano 338 cicli dichiarati e i maggioranti composti delle 34 API:
+previsto **6.3.0**. La chiusura di release non certifica il lavoro totale
+fra checkpoint e non introduce una garanzia di latenza.
+
+
+**Regola (decisione del titolare del 20 novembre 2026, opzione A).** La
+qualifica dell'interruzione dentro le chiamate richiede un checkpoint
+condiviso o un limite statico dimostrato per ogni ciclo esplicito del nostro
+codice geo e pipeline. Il censimento deve registrare la giustificazione e
+rifiutare nuovi cicli scoperti; il registro delle API deve comporre questi
+limiti in un maggiorante fra checkpoint nelle unita' del contatore.
+Una sonda `cfg(test)` conta il lavoro, ma non interrompe la produzione.
+Un massimo osservato sul corpus non dimostra un maggiorante universale.
+
+**Ambito e limite dichiarato.** Il lavoro interno alle librerie esterne,
+agli iteratori della libreria standard, alle espansioni di macro di terzi
+e ai distruttori non ha un limite dimostrato fra checkpoint. Una chiamata
+esterna puo' continuare dopo l'annullamento o la scadenza fino al ritorno
+al controllo cooperativo. Anche la distruzione degli oggetti su errore
+puo' proseguire dopo il controllo che ha osservato l'interruzione. Non e'
+promessa una latenza wall-clock, ne' un tempo massimo di ritorno dall'API.
+Il limite non esenta i cicli espliciti delle nostre closure, dei nostri
+callback, delle `const fn` chiamabili a runtime o delle nostre macro.
+Nemmeno una chiamata a un altro crate del workspace diventa per questo
+una libreria esterna.
+
+Il [registro AST](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-cycles.json)
+localizza per file, funzione e posizione le seguenti chiamate opache
+potenzialmente lunghe. La classificazione e' sintattica: un metodo
+omonimo puo' essere nostro o scalare; il suo nome non prova il costo.
+
+| Famiglia | Chiamate individuate e lavoro escluso dalla dimostrazione |
+| --- | --- |
+| Iteratori | `map`, `flat_map`, `flatten`, `filter`, `filter_map`, `find`, `find_map`, `position`, `any`, `all`, `fold`, `try_fold`, `for_each`, `try_for_each`, `collect`, `sum`, `count`: avanzamento e consumo interni; i cicli espliciti delle closure restano nel censimento |
+| Collezioni | `extend`, `retain`, `sort`, `sort_by`, `sort_unstable`, `sort_unstable_by`, `clone`, `to_vec`, `resize`, `truncate`, `clear`: scansioni, copie, ordinamenti, allocazioni e rilasci interni |
+| Geometrie | `Polygon::new`: chiusura degli anelli, compresi tutti i buchi, senza callback di interruzione |
+| Calcolo numerico | `inverse`, `direct` di GeographicLib; `sqrt`, `pow`, `modpow` quando risolti a librerie numeriche; aritmetica di `num-bigint`, anche attraverso operatori: lavoro interno non contato dai soli resti del gcd |
+| Parallelismo | `par_iter`, `into_par_iter` e consumo degli iteratori Rayon: scheduling e lavoro della dipendenza, senza esentare i corpi del repository |
+| Macro | Record `macro` con path e token: nessuna attribuzione automatica di costo costante; il censimento non espande il corpo. Solo le macro di terzi rientrano nel limite dichiarato |
+| Distruttori | Rilascio di batch, stringhe, grafi e geometrie, anche sui percorsi d'errore; i drop impliciti non sono chiamate risolte dall'AST |
+
+**Stato della prova e rientro.** Il registro conserva ora anche il sorgente
+dei cicli: una rimozione di checkpoint a parita' di posizione invalida la
+fixture. Per gli intervalli letterali registra un limite delle entrate nel
+corpo (`literal_iteration_bound`), che non include i cicli annidati o le
+funzioni chiamate. Gli array scritti nel `for` hanno un analogo limite
+locale (`array_iteration_bound`); le espressioni degli elementi sono
+visitate separatamente. `entry_checkpoint` registra un controllo condiviso
+incondizionato come prima istruzione di produzione nei moduli verificati.
+Il controllo `noding::Work::checkpoint` osserva deadline e cancellazione
+con la stessa precedenza di `step`, senza aumentare gli addebiti di lavoro.
+Nel buffer puntuale il callback `checkpoint` di pianificazione, costruzione
+e verifica del ventaglio delega al controllo condiviso del chiamante.
+Anche multipunto, linee, superfici a raggio zero o positivo ed erosione
+passano dal medesimo controllo, tramite `BufferWork` o `noding::Work`.
+La tabella GOP-028 esercita separatamente i tre profili di superficie
+esposti dall'API delle linee, con scadenza prevalente e annullamento
+al primo checkpoint interno, a meta' lavoro e prima della pubblicazione.
+I cicli dei moduli del buffer sono chiusi nel censimento: checkpoint
+all'ingresso o limite locale registrato, senza nuovo debito.
+Nel runner i nove cicli di `run_interrompibile` osservano l'interruzione
+all'ingresso di ogni iterazione, anche durante preparazione e raccolta
+degli output. Anche i tre helper di esecuzione ricevono la stessa interruzione; `run`
+riusa il proprio controllo di default per tutta la chiamata. Tutti i
+tredici cicli di `esecuzione.rs` sono coperti localmente.
+Il dispatch geo propaga lo stesso riferimento ai moduli `geo/mod.rs`,
+`geo/binari.rs`, `geo/collettivi.rs` e `geo/unari.rs`: tutti i loro 21 cicli
+espliciti controllano l'interruzione all'ingresso del corpo. Il controllo
+dei tipi mantiene distinte cancellazione, timeout ed errore di schema.
+Non e' ancora una prova del costo dei kernel chiamati o degli iteratori.
+Il [registro delle prove statiche](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-static-proofs.json)
+vincola i cicli e gli item AST da cui dipende la loro cardinalita': costanti,
+funzioni, tipi e macro locali. Registra `registered_iteration_bound` e la
+motivazione; non viene rigenerato insieme al censimento. Copre le due
+scansioni delle quattro opzioni coordinate, le venti bande UTM, le nove
+celle DE-9IM, i due metadati di schema e le dieci colonne diagnostiche o
+sei accessori. Sono limiti delle entrate nei corpi, non maggioranti composti.
+Il batch coordinate e i quattro cicli di `noding::exact::sum_sign` hanno
+checkpoint condivisi gia' presenti e ora riconosciuti. Il gcd ha ora un
+limite statico locale registrato, come i tredici cicli WKB del lotto finale.
+I moduli chiusi sono elencati in `CLOSED_MODULES` e `CLOSED_PIPELINE_MODULES` nel test: ogni loro ciclo
+deve superare una di queste verifiche, anche rigenerando la fixture.
+Il [debito esplicito](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json)
+e' un registro dichiarato chiuso di 338 voci: modulo (`file`), funzione,
+posizione (`line`, `column`), sorgente esatto, motivo della prova mancante
+e `previsto: 6.3.0`. Conserva la molteplicita'; non e' una
+prova e non viene aggiornato da `PLENORA_RIGENERA_CICLI`. Un ciclo nuovo,
+duplicato o modificato senza prova fa fallire il gate anche nei moduli
+aperti. Falliscono anche una voce assente dal sorgente o gia' coperta ma
+ancora registrata e metadati dichiarativi incompleti. Il tetto e' 338;
+non si aggiunge nuovo debito alla chiusura 6.2.0. Per chiudere un lotto si rimuovono dal debito solo le voci per cui
+il censimento riconosce la prova locale. Questi controlli non costituiscono ancora la prova
+composta richiesta per tutti i cicli e tutte le API. Il limite sul lavoro
+esterno cade solo sostituendo le chiamate opache con percorsi cooperativi
+qualificati o provandone il costo al pin adottato, inclusi i rilasci.
+
 ## Ambito dell'adozione dei contratti
 
 **Regola.** Public Catalogs 2.0 distingue obiettivo e disponibilita; Runtime

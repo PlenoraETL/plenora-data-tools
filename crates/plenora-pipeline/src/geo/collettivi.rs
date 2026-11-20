@@ -278,6 +278,7 @@ impl KernelCollettivo {
         batch: &RecordBatch,
         righe_massime: u64,
         margine: MargineMemoria,
+        interruzione: &crate::Interruzione,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         if let Self::Griglia {
             estensione,
@@ -294,7 +295,9 @@ impl KernelCollettivo {
         let celle = lato.celle(batch)?;
         let righe = batch.num_rows();
         match self {
-            Self::Espandi(espansione) => espandi(op, espansione, lato, batch, righe_massime),
+            Self::Espandi(espansione) => {
+                espandi(op, espansione, lato, batch, righe_massime, interruzione)
+            }
             Self::Dividi {
                 lama,
                 tolleranza,
@@ -380,9 +383,9 @@ impl KernelCollettivo {
                 )?;
                 un_batch(op, &uscite)
             }
-            Self::Raccogli(chiavi) => raccogli(op, celle, batch, chiavi),
+            Self::Raccogli(chiavi) => raccogli(op, celle, batch, chiavi, interruzione),
             Self::Voronoi { punti, precisione } => {
-                allineate_alle_righe(op, lato, batch, |geometrie| {
+                allineate_alle_righe(op, lato, batch, interruzione, |geometrie| {
                     advanced::voronoi_cells(geometrie, *punti, *precisione)
                         .map(|celle| celle.into_iter().map(Some).collect())
                         .map_err(|e| del_kernel(op, &e))
@@ -393,7 +396,7 @@ impl KernelCollettivo {
                 sovrapposizioni,
                 buchi,
                 precisione,
-            } => allineate_alle_righe(op, lato, batch, |geometrie| {
+            } => allineate_alle_righe(op, lato, batch, interruzione, |geometrie| {
                 topology::clean_valid_polygon_topology_validated(
                     geometrie,
                     *aggancio,
@@ -514,6 +517,7 @@ fn espandi(
     lato: &Lato,
     batch: &RecordBatch,
     righe_massime: u64,
+    interruzione: &crate::Interruzione,
 ) -> Result<(Vec<ArrayRef>, usize)> {
     let parti = map_nullable(lato.celle(batch)?, |cella| {
         let parti: Vec<Vec<u8>> = match espansione {
@@ -544,11 +548,13 @@ fn espandi(
     let mut madri: Vec<u64> = Vec::new();
     let mut celle: Vec<Option<Vec<u8>>> = Vec::new();
     for (riga, parti) in parti.into_iter().enumerate() {
+        interruzione.verifica("esecuzione pipeline")?;
         let madre = u64::try_from(riga)
             .map_err(|_| PlenoraError::Internal(format!("{op}: riga non rappresentabile")))?;
         match parti {
             Some(parti) => {
                 for parte in parti {
+                    interruzione.verifica("esecuzione pipeline")?;
                     madri.push(madre);
                     celle.push(Some(parte));
                 }
@@ -570,6 +576,7 @@ fn espandi(
     let indici = UInt64Array::from(madri);
     let mut colonne = Vec::with_capacity(batch.num_columns() + 1);
     for (indice, colonna) in batch.columns().iter().enumerate() {
+        interruzione.verifica("esecuzione pipeline")?;
         if indice == lato.indice {
             colonne.push(binaria(&celle));
         } else {
@@ -588,12 +595,14 @@ fn allineate_alle_righe(
     op: &str,
     lato: &Lato,
     batch: &RecordBatch,
+    interruzione: &crate::Interruzione,
     kernel: impl FnOnce(&[Geometry<f64>]) -> Result<Vec<Option<Geometry<f64>>>>,
 ) -> Result<(Vec<ArrayRef>, usize)> {
     let tutte = decodifica(lato.celle(batch)?)?;
     let mut posizioni = Vec::new();
     let mut presenti = Vec::new();
     for (riga, geometria) in tutte.into_iter().enumerate() {
+        interruzione.verifica("esecuzione pipeline")?;
         if let Some(geometria) = geometria {
             posizioni.push(riga);
             presenti.push(geometria);
@@ -607,6 +616,7 @@ fn allineate_alle_righe(
     }
     let mut celle: Vec<Option<Vec<u8>>> = vec![None; batch.num_rows()];
     for (riga, risultato) in posizioni.into_iter().zip(risultati) {
+        interruzione.verifica("esecuzione pipeline")?;
         let cella = celle
             .get_mut(riga)
             .ok_or_else(|| PlenoraError::Internal(format!("{op}: posizione oltre le righe")))?;
@@ -637,12 +647,14 @@ fn raccogli(
     celle: &BinaryArray,
     batch: &RecordBatch,
     chiavi: &[usize],
+    interruzione: &crate::Interruzione,
 ) -> Result<(Vec<ArrayRef>, usize)> {
     let geometrie = decodifica(celle)?;
-    let gruppi = gruppi_in_ordine(op, batch, chiavi)?;
+    let gruppi = gruppi_in_ordine(op, batch, chiavi, interruzione)?;
     let mut raccolte: Vec<Option<Vec<u8>>> = Vec::with_capacity(gruppi.len());
     let mut rappresentanti: Vec<u64> = Vec::with_capacity(gruppi.len());
     for righe in &gruppi {
+        interruzione.verifica("esecuzione pipeline")?;
         let gruppo: Vec<Option<Geometry<f64>>> = righe
             .iter()
             .map(|&riga| geometrie.get(riga).cloned().flatten())
@@ -662,6 +674,7 @@ fn raccogli(
     let mut colonne: Vec<ArrayRef> = Vec::with_capacity(chiavi.len() + 1);
     colonne.push(binaria(&raccolte));
     for &indice in chiavi {
+        interruzione.verifica("esecuzione pipeline")?;
         let colonna = batch.columns().get(indice).ok_or_else(|| {
             PlenoraError::Internal(format!("{op}: colonna chiave oltre lo schema"))
         })?;
@@ -672,12 +685,18 @@ fn raccogli(
 
 /// I gruppi di `collect` in ordine naturale delle chiavi, ognuno con le sue
 /// righe in ordine d'ingresso.
-fn gruppi_in_ordine(op: &str, batch: &RecordBatch, chiavi: &[usize]) -> Result<Vec<Vec<usize>>> {
+fn gruppi_in_ordine(
+    op: &str,
+    batch: &RecordBatch,
+    chiavi: &[usize],
+    interruzione: &crate::Interruzione,
+) -> Result<Vec<Vec<usize>>> {
     const INDICE: &str = "__plenora_riga";
     let mut campi = Vec::with_capacity(chiavi.len() + 1);
     let mut colonne: Vec<ArrayRef> = Vec::with_capacity(chiavi.len() + 1);
     let mut nomi = Vec::with_capacity(chiavi.len());
     for (posizione, &indice) in chiavi.iter().enumerate() {
+        interruzione.verifica("esecuzione pipeline")?;
         let colonna = batch.columns().get(indice).ok_or_else(|| {
             PlenoraError::Internal(format!("{op}: colonna chiave oltre lo schema"))
         })?;
@@ -707,6 +726,7 @@ fn gruppi_in_ordine(op: &str, batch: &RecordBatch, chiavi: &[usize]) -> Result<V
         .ok_or_else(|| PlenoraError::Internal(format!("{op}: indice di riga non UInt64")))?;
     let mut gruppi: Vec<Vec<usize>> = Vec::new();
     for posizione in 0..ordinata.num_rows() {
+        interruzione.verifica("esecuzione pipeline")?;
         let riga = usize::try_from(indici.value(posizione))
             .map_err(|_| PlenoraError::Internal(format!("{op}: riga non rappresentabile")))?;
         let stesso_gruppo = match posizione.checked_sub(1) {
@@ -714,6 +734,7 @@ fn gruppi_in_ordine(op: &str, batch: &RecordBatch, chiavi: &[usize]) -> Result<V
             Some(precedente) => {
                 let mut uguali = true;
                 for colonna in &ordinata.columns()[..chiavi.len()] {
+                    interruzione.verifica("esecuzione pipeline")?;
                     if plenora_kernels_table::aggregation::compare_cells_typed(
                         colonna, precedente, colonna, posizione,
                     )? != std::cmp::Ordering::Equal

@@ -19,6 +19,7 @@ mod storage;
 pub use storage::CountedVec;
 
 /// GOP-028: un solo ordine di osservazione per tutti i checkpoint.
+#[cfg_attr(test, track_caller)]
 pub fn check_interruption<E>(
     deadline: Option<std::time::Instant>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
@@ -73,16 +74,29 @@ impl<'a> Work<'a> {
     }
     /// Prenota un buffer esportato prima della sua allocazione.
     /// La ricevuta resta viva fino al termine dell'intera operazione.
+    #[cfg_attr(test, track_caller)]
     pub fn reserve_export(&mut self, bytes: u64) -> Result<(), PredicateError> {
         self.step()?;
         let lease = storage::Lease::created(&self.budget, bytes)?;
         self.exports.push(lease, &self.budget)
     }
 
+    /// Osserva l'interruzione condivisa senza modificare gli addebiti di lavoro.
+    #[cfg_attr(test, track_caller)]
+    pub(crate) fn checkpoint(&self) -> Result<(), PredicateError> {
+        crate::noding::check_interruption(
+            self.limits.deadline,
+            self.cancelled,
+            PredicateError::DeadlineExceeded,
+            PredicateError::Cancelled,
+        )
+    }
+
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
         Q::int_in(value, &self.budget)
     }
 
+    #[cfg_attr(test, track_caller)]
     pub fn step(&mut self) -> Result<(), PredicateError> {
         #[cfg(test)]
         if let Some((at, deadline)) = self.interrupt_at {
@@ -107,6 +121,7 @@ impl<'a> Work<'a> {
             .ok_or(PredicateError::WorkLimit)?;
         Ok(())
     }
+    #[cfg_attr(test, track_caller)]
     pub fn pair(&mut self) -> Result<(), PredicateError> {
         self.step()?;
         self.pairs = self
@@ -116,6 +131,7 @@ impl<'a> Work<'a> {
             .ok_or(PredicateError::WorkLimit)?;
         Ok(())
     }
+    #[cfg_attr(test, track_caller)]
     pub fn nodes(&mut self, count: u64) -> Result<(), PredicateError> {
         self.step()?;
         self.nodes = self
@@ -129,6 +145,7 @@ impl<'a> Work<'a> {
         self.budget.peak()
     }
 
+    #[cfg_attr(test, track_caller)]
     pub fn push<T>(&mut self, vector: &mut CountedVec<T>, value: T) -> Result<(), PredicateError> {
         self.step()?;
         vector.push(value, &self.budget)
@@ -154,6 +171,9 @@ pub fn sorted_with_work<T>(
         work: &mut Work<'_>,
     ) -> Result<(), PredicateError> {
         while root < values.len() / 2 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::sift:1");
+            work.checkpoint()?;
             let mut child = root * 2 + 1;
             if child + 1 < values.len() {
                 work.step()?;
@@ -170,10 +190,16 @@ pub fn sorted_with_work<T>(
         }
         Ok(())
     }
+    work.step()?;
     for root in (0..values.len() / 2).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::sorted_with_work:1");
+        work.checkpoint()?;
         sift(values, root, &compare, work)?;
     }
     for end in (1..values.len()).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::sorted_with_work:2");
         work.step()?;
         values.swap(0, end);
         sift(&mut values[..end], 0, &compare, work)?;
@@ -279,6 +305,9 @@ fn intersections(
     let mut first = None;
     let mut last = None;
     for p in [&a.a, &a.b, &b.a, &b.b] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::intersections:1");
+        work.checkpoint()?;
         if a.contains(p)? && b.contains(p)? {
             if match first {
                 None => true,
@@ -345,6 +374,8 @@ fn sift(
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
     while root < index.len() / 2 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::sift:2");
         work.step()?;
         let mut child = root * 2 + 1;
         if child + 1 < index.len() && index_cmp(index[child], index[child + 1], edges)?.is_lt() {
@@ -369,8 +400,13 @@ pub fn visit(
     work.step()?;
     let mut index = CountedVec::new();
     for (i, edge) in edges.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:1");
         work.step()?;
         for point in [&edge.a, &edge.b] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::visit:2");
+            work.checkpoint()?;
             if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {
                 return Err(PredicateError::CalcoloNonConcluso(
                     "proprietario del budget",
@@ -380,16 +416,26 @@ pub fn visit(
         work.push(&mut index, i)?;
     }
     for root in (0..index.len() / 2).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:3");
+        work.checkpoint()?;
         sift(&mut index, root, edges, work)?;
     }
     for end in (1..index.len()).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:4");
         work.step()?;
         index.swap(0, end);
         sift(&mut index[..end], 0, edges, work)?;
     }
     for (position, &i) in index.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:5");
+        work.checkpoint()?;
         let a = edges[i];
         for &j in &index[position + 1..] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::visit:6");
             work.step()?;
             let b = edges[j];
             if b.a
@@ -430,6 +476,9 @@ pub fn node(
     work.step()?;
     let mut result = CountedVec::new();
     for edge in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::node:1");
+        work.checkpoint()?;
         let mut points = CountedVec::new();
         work.nodes(2)?;
         work.push(&mut points, edge.a.try_clone()?)?;
@@ -438,15 +487,23 @@ pub fn node(
     }
     visit(edges, work, |i, j, hits, work| {
         for p in hits.into_iter().flatten() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::node:2");
+            work.checkpoint()?;
             work.push(&mut result[i], p.try_clone()?)?;
             work.push(&mut result[j], p)?;
         }
         Ok(())
     })?;
     for (points, edge) in result.iter_mut().zip(edges) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::node:3");
+        work.checkpoint()?;
         sorted(points, point_cmp, work)?;
         let mut kept = 0;
         for read in 0..points.len() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::node:4");
             work.step()?;
             if kept == 0 || points[read] != points[kept - 1] {
                 points.swap(kept, read);
@@ -454,11 +511,15 @@ pub fn node(
             }
         }
         while points.len() > kept {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::node:5");
             work.step()?;
             points.pop();
         }
         if point_cmp(&edge.a, &edge.b)?.is_gt() {
             for i in 0..points.len() / 2 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("noding.rs::node:6");
                 work.step()?;
                 let other = points.len() - 1 - i;
                 points.swap(i, other);
@@ -906,7 +967,7 @@ mod tests {
 
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
-mod gop028 {
+pub mod gop028 {
     use super::*;
     use crate::coordinate_api::*;
     use crate::geodesic_densify::*;
@@ -914,7 +975,7 @@ mod gop028 {
     use crate::preserve_shape_measure::*;
     use crate::{general_boolean, line_boolean, point_boolean, polygon_boolean};
     use geo::{Geometry, LineString, Point, Polygon};
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::collections::BTreeSet;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
@@ -925,6 +986,7 @@ mod gop028 {
     thread_local! {
         static PROBE: Cell<Option<(usize, Option<usize>)>> = const { Cell::new(None) };
     }
+    #[cfg_attr(test, track_caller)]
     pub(super) fn checkpoint(
         deadline: Option<Instant>,
         flag: Option<&AtomicBool>,
@@ -932,18 +994,60 @@ mod gop028 {
         let Some(flag) = flag else {
             return deadline;
         };
+        let site = std::panic::Location::caller();
         PROBE.with(|probe| {
             let Some((count, at)) = probe.get() else {
                 return deadline;
             };
             probe.set(Some((count + 1, at)));
+            if TRACE_SITES.with(Cell::get) {
+                SITES.with(|sites| sites.borrow_mut().push((site.file(), site.line())));
+            }
+            WORK.with(|work| {
+                let (total, _, max) = work.get();
+                work.set((total, 0, max));
+            });
+            CYCLES.with(|work| {
+                let (total, _, max) = work.get();
+                work.set((total, 0, max));
+            });
             if at == Some(count) {
                 flag.store(true, AtomicOrdering::Relaxed);
-                Some(Instant::now())
+                if CANCEL_ONLY.with(Cell::get) {
+                    deadline
+                } else {
+                    Some(Instant::now())
+                }
             } else {
                 deadline
             }
         })
+    }
+    // O-M3: primitive reali, contate indipendentemente dai checkpoint.
+    thread_local! {
+        static WORK: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+        static TRACE_SITES: Cell<bool> = const { Cell::new(false) };
+        static SITES: RefCell<Vec<(&'static str, u32)>> = const { RefCell::new(Vec::new()) };
+        static CANCEL_ONLY: Cell<bool> = const { Cell::new(false) };
+        static CYCLES: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+        static CYCLE_SITES: RefCell<std::collections::BTreeMap<&'static str, usize>> = const { RefCell::new(std::collections::BTreeMap::new()) };
+    }
+    pub fn cycle(site: &'static str) {
+        if PROBE.with(|probe| probe.get().is_some()) {
+            CYCLES.with(|work| {
+                let (total, gap, max) = work.get();
+                work.set((total + 1, gap + 1, max.max(gap + 1)));
+            });
+            CYCLE_SITES.with(|sites| *sites.borrow_mut().entry(site).or_default() += 1);
+        }
+    }
+    pub fn unit() {
+        if PROBE.with(|probe| probe.get().is_some()) {
+            WORK.with(|work| {
+                let (total, gap, max) = work.get();
+                work.set((total + 1, gap + 1, max.max(gap + 1)));
+            });
+        }
     }
     struct Probe;
     impl Probe {
@@ -951,6 +1055,10 @@ mod gop028 {
             PROBE.with(|probe| {
                 assert!(probe.get().is_none());
                 probe.set(Some((0, at)));
+                WORK.with(|work| work.set((0, 0, 0)));
+                CYCLES.with(|work| work.set((0, 0, 0)));
+                CYCLE_SITES.with(|sites| sites.borrow_mut().clear());
+                SITES.with(|sites| sites.borrow_mut().clear());
             });
             Self
         }
@@ -964,6 +1072,8 @@ mod gop028 {
     impl Drop for Probe {
         fn drop(&mut self) {
             PROBE.with(|probe| probe.set(None));
+            CANCEL_ONLY.with(|mode| mode.set(false));
+            TRACE_SITES.with(|trace| trace.set(false));
         }
     }
     struct Fixture {
@@ -1045,23 +1155,58 @@ mod gop028 {
     struct Case {
         source: &'static str,
         name: &'static str,
+        // Limite delle sole primitive strumentate, non di allocatore/distruttori.
+        max_instrumented_units: usize,
         run: fn(&Fixture, Option<Instant>, &AtomicBool, bool),
     }
+    // Riferimento 6.1.0: i contatori diagnostici crescono con le visite ora addebitate.
+    fn verify_output(source: &str, name: &str, output: &str) {
+        let mut parts = output.split(" work: ");
+        let mut canonical = parts.next().unwrap().to_owned();
+        for part in parts {
+            let digits = part.bytes().take_while(u8::is_ascii_digit).count();
+            assert!(digits > 0);
+            canonical.push_str(" work: <counter>");
+            canonical.push_str(&part[digits..]);
+        }
+        let key = format!("{source}::{name}\t");
+        let expected = include_str!("../tests/fixtures/checkpoint620.txt")
+            .lines()
+            .find_map(|line| line.strip_prefix(&key))
+            .expect("API assente dal riferimento 6.1.0");
+        assert_eq!(canonical, expected, "{source}::{name}");
+    }
     macro_rules! case {
-        ($source:literal, $name:ident, |$f:ident, $d:ident, $t:ident| $call:expr, $error:pat) => {
+        ($source:literal, $name:ident, |$f:ident, $d:ident, $t:ident| $call:expr, $error:pat, $cancel:pat) => {
             Case {
                 source: $source,
                 name: stringify!($name),
+                max_instrumented_units: match $source {
+                    "coordinate_api.rs" | "geodesic_buffer.rs" => 1,
+                    "geodesic_densify.rs"
+                    | "geodesic_densify/geometry.rs"
+                    | "geodesic_distance.rs"
+                    | "preserve_shape_measure.rs" => 2,
+                    // Maggiorante Q documentato sul Work del noder.
+                    _ => 256,
+                },
                 run: |$f, $d, $t, interrupted| {
                     let result = $call;
-                    if interrupted {
+                    if interrupted && CANCEL_ONLY.with(Cell::get) {
+                        assert!(
+                            matches!(result, Err($cancel)),
+                            "{}: {result:?}",
+                            stringify!($name)
+                        );
+                    } else if interrupted {
                         assert!(
                             matches!(result, Err($error)),
                             "{}: {result:?}",
                             stringify!($name)
                         );
                     } else {
-                        result.unwrap();
+                        let output = result.unwrap();
+                        verify_output($source, stringify!($name), &format!("{output:?}"));
                     }
                 },
             }
@@ -1084,6 +1229,101 @@ mod gop028 {
             max_vertices: 100_000,
         }
     }
+    fn buffer_profiles() -> Vec<Case> {
+        vec![
+            Case {
+                source: "geodesic_buffer/projected.rs",
+                name: "geodesic_line_buffer_with_limits/surface_zero",
+                max_instrumented_units: 256,
+                run: |f, d, t, interrupted| surface_case(f, d, t, interrupted, 0.0),
+            },
+            Case {
+                source: "geodesic_buffer/projected.rs",
+                name: "geodesic_line_buffer_with_limits/surface_positive",
+                max_instrumented_units: 256,
+                run: |f, d, t, interrupted| surface_case(f, d, t, interrupted, 0.1),
+            },
+            Case {
+                source: "geodesic_buffer/projected.rs",
+                name: "geodesic_line_buffer_with_limits/surface_erosion",
+                max_instrumented_units: 256,
+                run: |f, d, t, interrupted| surface_case(f, d, t, interrupted, -0.1),
+            },
+        ]
+    }
+    // Superfici ed erosione condividono l'API delle linee, ma attraversano
+    // fasi diverse. L'oracolo qui verifica identita' a zero e certificato;
+    // le geometrie complete restano coperte dagli oracoli del buffer.
+    fn surface_case(
+        fixture: &Fixture,
+        deadline: Option<Instant>,
+        flag: &AtomicBool,
+        interrupted: bool,
+        radius: f64,
+    ) {
+        let input: Geometry = Polygon::new(
+            LineString::from(vec![
+                (0., 0.),
+                (0.00002, 0.),
+                (0.00002, 0.00002),
+                (0., 0.00002),
+                (0., 0.),
+            ]),
+            vec![],
+        )
+        .into();
+        let result = crate::geodesic_buffer::projected::geodesic_line_buffer_with_limits(
+            std::slice::from_ref(&input),
+            &fixture.crs,
+            &[radius],
+            0.01,
+            false,
+            buffer_union_limits(deadline),
+            Some(flag),
+        );
+        if interrupted {
+            if CANCEL_ONLY.with(Cell::get) {
+                assert!(
+                    matches!(
+                        result,
+                        Err(
+                            crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                                polygon_boolean::PolygonBooleanError::Predicate(
+                                    PredicateError::Cancelled
+                                )
+                            )
+                        )
+                    ),
+                    "{result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(
+                            crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                                polygon_boolean::PolygonBooleanError::Predicate(
+                                    PredicateError::DeadlineExceeded
+                                )
+                            )
+                        )
+                    ),
+                    "{result:?}"
+                );
+            }
+        } else {
+            let output = result.unwrap();
+            assert_eq!(output.surfaces.len(), 1);
+            let surface = &output.surfaces[0];
+            assert!(surface.certificate.absolute_m <= 0.01);
+            assert!(
+                matches!(&surface.geometry, Geometry::Polygon(p) if !p.exterior().0.is_empty())
+            );
+            if radius == 0.0 {
+                assert_eq!(surface.geometry, input);
+            }
+        }
+    }
     #[allow(
         clippy::too_many_lines,
         reason = "Registro unico eseguibile delle API GOP-028"
@@ -1101,7 +1341,8 @@ mod gop028 {
                     buffer_limits(d),
                     Some(t)
                 ),
-                crate::geodesic_buffer::DegenerateBufferError::DeadlineExceeded
+                crate::geodesic_buffer::DegenerateBufferError::DeadlineExceeded,
+                crate::geodesic_buffer::DegenerateBufferError::Cancelled
             ),
             case!(
                 "geodesic_buffer/point.rs",
@@ -1117,7 +1358,8 @@ mod gop028 {
                     },
                     Some(t)
                 ),
-                crate::geodesic_buffer::DegenerateBufferError::DeadlineExceeded
+                crate::geodesic_buffer::DegenerateBufferError::DeadlineExceeded,
+                crate::geodesic_buffer::DegenerateBufferError::Cancelled
             ),
             case!(
                 "geodesic_buffer/point/union.rs",
@@ -1137,6 +1379,9 @@ mod gop028 {
                     polygon_boolean::PolygonBooleanError::Predicate(
                         PredicateError::DeadlineExceeded
                     )
+                ),
+                crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                    polygon_boolean::PolygonBooleanError::Predicate(PredicateError::Cancelled)
                 )
             ),
             case!(
@@ -1155,6 +1400,9 @@ mod gop028 {
                     polygon_boolean::PolygonBooleanError::Predicate(
                         PredicateError::DeadlineExceeded
                     )
+                ),
+                crate::geodesic_buffer::point::union::UnionBufferError::Overlay(
+                    polygon_boolean::PolygonBooleanError::Predicate(PredicateError::Cancelled)
                 )
             ),
             case!(
@@ -1166,7 +1414,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                PredicateError::DeadlineExceeded
+                PredicateError::DeadlineExceeded,
+                PredicateError::Cancelled
             ),
             case!(
                 "predicates/arrangement_indexed/point_boolean.rs",
@@ -1179,7 +1428,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                point_boolean::PointBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/point_boolean.rs",
@@ -1191,7 +1441,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                point_boolean::PointBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/point_boolean.rs",
@@ -1203,7 +1454,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                point_boolean::PointBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/point_boolean.rs",
@@ -1215,7 +1467,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                point_boolean::PointBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                point_boolean::PointBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/line_boolean.rs",
@@ -1228,7 +1481,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                line_boolean::LineBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/line_boolean.rs",
@@ -1240,7 +1494,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                line_boolean::LineBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/line_boolean.rs",
@@ -1252,7 +1507,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                line_boolean::LineBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/line_boolean.rs",
@@ -1264,7 +1520,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                line_boolean::LineBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                line_boolean::LineBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/polygon_boolean.rs",
@@ -1277,7 +1534,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/polygon_boolean.rs",
@@ -1288,7 +1546,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/polygon_boolean.rs",
@@ -1299,7 +1558,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/polygon_boolean.rs",
@@ -1310,7 +1570,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                polygon_boolean::PolygonBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/general_boolean.rs",
@@ -1323,7 +1584,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/general_boolean.rs",
@@ -1334,7 +1596,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/general_boolean.rs",
@@ -1346,7 +1609,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/general_boolean.rs",
@@ -1358,7 +1622,8 @@ mod gop028 {
                     polygons(d),
                     Some(t)
                 ),
-                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded)
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::DeadlineExceeded),
+                general_boolean::GeneralBooleanError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "predicates/arrangement_indexed/polygon_completion.rs",
@@ -1371,6 +1636,9 @@ mod gop028 {
                 ),
                 crate::polygon_completion::PolygonCompletionError::Predicate(
                     PredicateError::DeadlineExceeded
+                ),
+                crate::polygon_completion::PolygonCompletionError::Predicate(
+                    PredicateError::Cancelled
                 )
             ),
             case!(
@@ -1382,17 +1650,19 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                PredicateError::DeadlineExceeded
+                PredicateError::DeadlineExceeded,
+                PredicateError::Cancelled
             ),
             case!(
                 "extended_algorithms/polygonize_limited.rs",
                 polygonize_with_limits,
                 |f, d, t| crate::extended_algorithms::polygonize_with_limits(
-                    &f.line_geometry,
+                    &Geometry::LineString(f.polygon.exterior().clone()),
                     limits(d),
                     Some(t)
                 ),
-                PredicateError::DeadlineExceeded
+                PredicateError::DeadlineExceeded,
+                PredicateError::Cancelled
             ),
             case!(
                 "offset.rs",
@@ -1403,7 +1673,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                crate::offset::OffsetError::Predicate(PredicateError::DeadlineExceeded)
+                crate::offset::OffsetError::Predicate(PredicateError::DeadlineExceeded),
+                crate::offset::OffsetError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "trim_extend.rs",
@@ -1415,7 +1686,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                crate::trim_extend::TrimExtendError::Predicate(PredicateError::DeadlineExceeded)
+                crate::trim_extend::TrimExtendError::Predicate(PredicateError::DeadlineExceeded),
+                crate::trim_extend::TrimExtendError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "reshape.rs",
@@ -1426,7 +1698,8 @@ mod gop028 {
                     limits(d),
                     Some(t)
                 ),
-                crate::reshape::ReshapeError::Predicate(PredicateError::DeadlineExceeded)
+                crate::reshape::ReshapeError::Predicate(PredicateError::DeadlineExceeded),
+                crate::reshape::ReshapeError::Predicate(PredicateError::Cancelled)
             ),
             case!(
                 "coordinate_api.rs",
@@ -1445,6 +1718,10 @@ mod gop028 {
                 ),
                 CoordinateApiError {
                     kind: CoordinateErrorKind::DeadlineExceeded,
+                    ..
+                },
+                CoordinateApiError {
+                    kind: CoordinateErrorKind::Cancelled,
                     ..
                 }
             ),
@@ -1466,6 +1743,10 @@ mod gop028 {
                 CoordinateApiError {
                     kind: CoordinateErrorKind::DeadlineExceeded,
                     ..
+                },
+                CoordinateApiError {
+                    kind: CoordinateErrorKind::Cancelled,
+                    ..
                 }
             ),
             case!(
@@ -1478,7 +1759,8 @@ mod gop028 {
                     measure(d),
                     Some(t)
                 ),
-                ShapeMeasureError::DeadlineExceeded
+                ShapeMeasureError::DeadlineExceeded,
+                ShapeMeasureError::Cancelled
             ),
             case!(
                 "preserve_shape_measure.rs",
@@ -1490,7 +1772,8 @@ mod gop028 {
                     measure(d),
                     Some(t)
                 ),
-                ShapeMeasureError::DeadlineExceeded
+                ShapeMeasureError::DeadlineExceeded,
+                ShapeMeasureError::Cancelled
             ),
             case!(
                 "geodesic_densify.rs",
@@ -1502,7 +1785,8 @@ mod gop028 {
                     densify(d),
                     Some(t)
                 ),
-                GeodesicDensifyError::DeadlineExceeded
+                GeodesicDensifyError::DeadlineExceeded,
+                GeodesicDensifyError::Cancelled
             ),
             case!(
                 "geodesic_densify/geometry.rs",
@@ -1517,7 +1801,8 @@ mod gop028 {
                     },
                     Some(t)
                 ),
-                GeodesicDensifyError::DeadlineExceeded
+                GeodesicDensifyError::DeadlineExceeded,
+                GeodesicDensifyError::Cancelled
             ),
             case!(
                 "geodesic_distance.rs",
@@ -1533,14 +1818,15 @@ mod gop028 {
                     },
                     Some(t)
                 ),
-                GeodesicDistanceError::DeadlineExceeded
+                GeodesicDistanceError::DeadlineExceeded,
+                GeodesicDistanceError::Cancelled
             ),
         ]
     }
     /// Fonte GOP-028: stesso esito pubblico all'ingresso e dopo lavoro reale.
     #[test]
     fn all_public_limits_deadline_precedence() {
-        for case in cases() {
+        for case in cases().into_iter().chain(buffer_profiles()) {
             for reverse in [false, true] {
                 let fixture = Fixture::new(reverse);
                 let flag = AtomicBool::new(false);
@@ -1563,6 +1849,305 @@ mod gop028 {
             }
         }
     }
+    /// O-M3: visite/primitive indipendenti dal numero di checkpoint. Il massimo
+    /// osservato non viene presentato come limite universale di latenza.
+    #[test]
+    fn checkpoint620_measurements() {
+        for case in cases().into_iter().chain(buffer_profiles()) {
+            let fixture = Fixture::new(false);
+            let flag = AtomicBool::new(false);
+            let probe = Probe::start(None);
+            (case.run)(&fixture, None, &flag, false);
+            let (units, _, maximum) = WORK.with(Cell::get);
+            let total = Probe::count();
+            assert!(
+                maximum <= case.max_instrumented_units,
+                "{}::{}: {maximum}",
+                case.source,
+                case.name
+            );
+            println!(
+                "CHECKPOINT620\t{}::{}\t{total}\t{units}\t{maximum}",
+                case.source, case.name
+            );
+            let (cycles, _, cycle_maximum) = CYCLES.with(Cell::get);
+            let sites = CYCLE_SITES.with(|sites| sites.borrow().len());
+            println!(
+                "CHECKPOINT620-CYCLES\t{}::{}\t{cycles}\t{cycle_maximum}\t{sites}",
+                case.source, case.name
+            );
+            CYCLE_SITES.with(|sites| {
+                println!(
+                    "CHECKPOINT620-CYCLE-SITES\t{}::{}\t{}",
+                    case.source,
+                    case.name,
+                    serde_json::to_string(&*sites.borrow()).unwrap()
+                );
+            });
+            drop(probe);
+            for at in [1, total / 2, total - 1] {
+                flag.store(false, AtomicOrdering::Relaxed);
+                let _probe = Probe::start(Some(at));
+                CANCEL_ONLY.with(|mode| mode.set(true));
+                (case.run)(&fixture, None, &flag, true);
+                assert_eq!(Probe::count(), at + 1);
+            }
+        }
+    }
+
+    /// La sonda dei cicli non perde il lavoro prima del primo controllo,
+    /// dopo l'ultimo, o attraversando un controllo di sola deadline.
+    #[test]
+    fn checkpoint620_cycle_accounting() {
+        let flag = AtomicBool::new(false);
+        let _probe = Probe::start(None);
+        cycle("a");
+        cycle("b");
+        assert_eq!(CYCLES.with(Cell::get), (2, 2, 2));
+        assert_eq!(checkpoint(None, None), None);
+        cycle("a");
+        assert_eq!(CYCLES.with(Cell::get), (3, 3, 3));
+        assert_eq!(checkpoint(None, Some(&flag)), None);
+        cycle("a");
+        assert_eq!(CYCLES.with(Cell::get), (4, 1, 3));
+        CYCLE_SITES.with(|sites| {
+            assert_eq!(sites.borrow().get("a"), Some(&3));
+            assert_eq!(sites.borrow().get("b"), Some(&1));
+        });
+    }
+
+    /// O-M3: n/2n/4n parti vuote, visite indipendenti dal contatore dei check.
+    /// Prima: n visite senza check. Dopo: una visita fra due check, anche a vuoto.
+    #[test]
+    fn checkpoint620_empty_parts() {
+        for n in [32, 64, 128] {
+            let input =
+                Geometry::MultiLineString(geo::MultiLineString(vec![LineString::empty(); n]));
+            for split in [false, true] {
+                let flag = AtomicBool::new(false);
+                let probe = Probe::start(None);
+                if split {
+                    let out = crate::extended_algorithms::split_line_with_limits(
+                        &LineString::empty(),
+                        &input,
+                        limits(None),
+                        Some(&flag),
+                    )
+                    .unwrap();
+                    assert_eq!(out, vec![LineString::empty()]);
+                } else {
+                    assert_eq!(
+                        crate::extended_algorithms::polygonize_with_limits(
+                            &input,
+                            limits(None),
+                            Some(&flag)
+                        )
+                        .unwrap(),
+                        Vec::<Polygon>::new()
+                    );
+                }
+                let (visits, _, maximum) = WORK.with(Cell::get);
+                assert!(visits >= n);
+                assert_eq!(maximum, 1);
+                let total = Probe::count();
+                println!("EMPTY620\t{split}\t{n}\t{visits}\t{maximum}\t{total}");
+                drop(probe);
+                for cancel in [false, true] {
+                    flag.store(false, AtomicOrdering::Relaxed);
+                    let _probe = Probe::start(Some(n / 2));
+                    CANCEL_ONLY.with(|mode| mode.set(cancel));
+                    let result = if split {
+                        crate::extended_algorithms::split_line_with_limits(
+                            &LineString::empty(),
+                            &input,
+                            limits(None),
+                            Some(&flag),
+                        )
+                        .map(|_| ())
+                    } else {
+                        crate::extended_algorithms::polygonize_with_limits(
+                            &input,
+                            limits(None),
+                            Some(&flag),
+                        )
+                        .map(|_| ())
+                    };
+                    let outcome = result;
+                    if cancel {
+                        assert!(matches!(outcome, Err(PredicateError::Cancelled)));
+                    } else {
+                        assert!(matches!(outcome, Err(PredicateError::DeadlineExceeded)));
+                    }
+                    assert_eq!(Probe::count(), n / 2 + 1);
+                }
+            }
+        }
+    }
+
+    /// O-M1/O-M4: griglia cartesiana, quattro facce; byte identici con e senza
+    /// sonda. Interruzione nel centro delle fasi realmente attraversate.
+    #[test]
+    fn checkpoint620_polygonize_phases() {
+        let mut lines = Vec::new();
+        for i in 0..3 {
+            let v = f64::from(i);
+            lines.push(LineString::from(vec![(v, 0.), (v, 2.)]));
+            lines.push(LineString::from(vec![(0., v), (2., v)]));
+        }
+        let input = Geometry::MultiLineString(geo::MultiLineString(lines));
+        let run =
+            |flag| crate::extended_algorithms::polygonize_with_limits(&input, limits(None), flag);
+        let expected = run(None).unwrap();
+        assert_eq!(expected.len(), 4);
+        let bytes = |polygons| {
+            crate::test_support::to_wkb(&Geometry::MultiPolygon(geo::MultiPolygon(polygons)))
+        };
+        let expected = bytes(expected);
+        println!("WKB620\t{expected:?}");
+        let flag = AtomicBool::new(false);
+        let probe = Probe::start(None);
+        TRACE_SITES.with(|trace| trace.set(true));
+        assert_eq!(bytes(run(Some(&flag)).unwrap()), expected);
+        let sites = SITES.with(|sites| sites.borrow().clone());
+        drop(probe);
+        for phase in [
+            "interval_index.rs",
+            "noding.rs",
+            "faces.rs",
+            "polygonize_limited.rs",
+        ] {
+            let candidates: Vec<_> = sites
+                .iter()
+                .enumerate()
+                .filter_map(|(i, (file, line))| {
+                    (file.ends_with(phase) && (*line < 900 || phase != "noding.rs")).then_some(i)
+                })
+                .collect();
+            assert!(!candidates.is_empty(), "{phase}");
+            let at = candidates[candidates.len() / 2];
+            for cancel in [false, true] {
+                flag.store(false, AtomicOrdering::Relaxed);
+                let _probe = Probe::start(Some(at));
+                CANCEL_ONLY.with(|mode| mode.set(cancel));
+                let outcome = run(Some(&flag));
+                if cancel {
+                    assert!(matches!(outcome, Err(PredicateError::Cancelled)));
+                } else {
+                    assert!(matches!(outcome, Err(PredicateError::DeadlineExceeded)));
+                }
+                assert_eq!(Probe::count(), at + 1);
+            }
+        }
+    }
+
+    /// O-M3/O-M4: il codec testuale bounded emette un elemento fra checkpoint;
+    /// il golden e' scalare e indipendente dalla sonda del batch.
+    #[test]
+    fn checkpoint620_serialization() {
+        for n in [32, 64, 128] {
+            let fixture = Fixture::new(false);
+            let points = vec![
+                CoordinatePoint {
+                    longitude: 1.,
+                    latitude: 1.
+                };
+                n
+            ];
+            let flag = AtomicBool::new(false);
+            let probe = Probe::start(None);
+            let output = encode_coordinates_with_limits(
+                fixture.request(),
+                &points,
+                CoordinateLimits::default(),
+                Some(&flag),
+            )
+            .unwrap();
+            assert_eq!(output, vec!["1.0000N 1.0000E"; n]);
+            assert_eq!(WORK.with(Cell::get), (n, 0, 1));
+            drop(probe);
+            for cancel in [false, true] {
+                flag.store(false, AtomicOrdering::Relaxed);
+                let _probe = Probe::start(Some(1 + n / 2));
+                CANCEL_ONLY.with(|mode| mode.set(cancel));
+                let output = encode_coordinates_with_limits(
+                    fixture.request(),
+                    &points,
+                    CoordinateLimits::default(),
+                    Some(&flag),
+                );
+                if cancel {
+                    assert!(matches!(
+                        output,
+                        Err(CoordinateApiError {
+                            kind: CoordinateErrorKind::Cancelled,
+                            ..
+                        })
+                    ));
+                } else {
+                    assert!(matches!(
+                        output,
+                        Err(CoordinateApiError {
+                            kind: CoordinateErrorKind::DeadlineExceeded,
+                            ..
+                        })
+                    ));
+                }
+                assert_eq!(Probe::count(), 2 + n / 2);
+            }
+        }
+    }
+
+    /// O-M3/GOP-028: la scansione di degenerazione osserva il token prima
+    /// del rifiuto finale; la controparte senza segnale resta `InvalidGeometry`.
+    #[test]
+    fn checkpoint620_degenerate_guide() {
+        for n in [512, 1024, 2048] {
+            let target = Geometry::LineString(LineString::from(vec![(0., 0.), (10., 0.)]));
+            let guide = Geometry::LineString(LineString::from(vec![(0., 1.); n + 1]));
+            let flag = AtomicBool::new(false);
+            let run = |flag| {
+                crate::trim_extend::trim_extend_with_limits(
+                    &target,
+                    &guide,
+                    crate::trim_extend::TrimExtendOptions::default(),
+                    limits(None),
+                    Some(flag),
+                )
+            };
+            let probe = Probe::start(None);
+            assert!(matches!(
+                run(&flag),
+                Err(crate::trim_extend::TrimExtendError::InvalidGeometry)
+            ));
+            let total = Probe::count();
+            let (units, _, maximum) = WORK.with(Cell::get);
+            println!("GUIDE620\t{n}\t{units}\t{maximum}\t{total}");
+            assert!(maximum <= 256);
+            drop(probe);
+            for cancel in [false, true] {
+                flag.store(false, AtomicOrdering::Relaxed);
+                let _probe = Probe::start(Some(total - n / 2));
+                CANCEL_ONLY.with(|mode| mode.set(cancel));
+                if cancel {
+                    assert!(matches!(
+                        run(&flag),
+                        Err(crate::trim_extend::TrimExtendError::Predicate(
+                            PredicateError::Cancelled
+                        ))
+                    ));
+                } else {
+                    assert!(matches!(
+                        run(&flag),
+                        Err(crate::trim_extend::TrimExtendError::Predicate(
+                            PredicateError::DeadlineExceeded
+                        ))
+                    ));
+                }
+                assert_eq!(Probe::count(), total - n / 2 + 1);
+            }
+        }
+    }
+
     // Anche API prive di token/deadline devono essere censite esplicitamente.
     const BUDGET_ONLY: &[(&str, &str)] = &[
         ("rust_backend/mod.rs", "make_valid_wkb_with_limits"),

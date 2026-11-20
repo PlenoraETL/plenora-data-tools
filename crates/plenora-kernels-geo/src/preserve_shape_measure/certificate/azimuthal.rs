@@ -24,6 +24,8 @@ fn authalic(s: ShapeInterval, q: ShapeInterval) -> Result<ShapeInterval, ShapeMe
     let mut power = s;
     let mut sum = s;
     for k in 1..=12 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("preserve_shape_measure/certificate/azimuthal.rs::authalic:1");
         power = power.mul(ratio);
         sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * k + 1)))?);
     }

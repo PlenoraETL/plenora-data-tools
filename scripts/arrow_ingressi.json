@@ -9134,7 +9134,7 @@
       "checks": [
         {
           "function": "crates/plenora-pipeline/src/esecuzione.rs::run",
-          "contains": "for (_, batch_arrow) in &tables {\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
+          "contains": "let interruzione = Interruzione::default();\nfor (_, batch_arrow) in &tables {\n    interruzione.verifica(\"esecuzione pipeline\")?;\n    plenora_core::valida_arrow::batch(batch_arrow)?;\n}"
         }
       ],
       "classification": "ingresso guardato",
@@ -9145,10 +9145,11 @@
       "checks": [
         {
           "function": "crates/plenora-pipeline/src/esecuzione.rs::run_interrompibile",
-          "contains": "for (_, batch_arrow) in &tables {\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
+          "contains": "for (_, batch_arrow) in &tables {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
         }
       ],
       "classification": "ingresso guardato",
+      "prefix": "        // Conserva contesto e fase per un'interruzione gia presente all'ingresso.\n        if let Some(passo) = self.passi.first() {\n            let op = passo.descrittore.id;\n            interruzione.verifica(&format!(\"prima del passo `{}` ({op})\", passo.out))?;\n        } else {\n            interruzione\n                .verifica(\"prima di consegnare gli output\")\n                .map_err(|errore| errore.with_phase(ErrorPhase::Finalize))?;\n        }\nfor (_, batch_arrow) in &tables {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }",
       "reason": "Validazione completa dei dati Arrow prima del primo uso.",
       "signature": "pub fn run_interrompibile( self, tables: Vec<(String, RecordBatch)>, interruzione: &Interruzione, ) -> Result<Esito>"
     },
@@ -9240,12 +9241,12 @@
       "checks": [
         {
           "function": "crates/plenora-pipeline/src/geo/mod.rs::esegui",
-          "contains": "for batch_arrow in ingressi {\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
+          "contains": "for batch_arrow in ingressi {\n        interruzione.verifica(\"esecuzione pipeline\")?;\n        plenora_core::valida_arrow::batch(batch_arrow)?;\n    }"
         }
       ],
       "classification": "ingresso guardato",
       "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn esegui( &self, ingressi: &[&RecordBatch], uscita: &DataContract, margine: usize, ) -> Result<RecordBatch>"
+      "signature": "pub fn esegui( &self, ingressi: &[&RecordBatch], uscita: &DataContract, margine: usize, interruzione: &crate::Interruzione, ) -> Result<RecordBatch>"
     },
     "crates/plenora-pipeline/src/geo/mod.rs::prepara": {
       "arrow_arguments": [],

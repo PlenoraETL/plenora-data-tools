@@ -373,7 +373,14 @@ fn independent_reader_large_division_ratios() {
     for (maximum, length) in [(0.01, 1_000.0), (0.1, 10_000.0), (1.0, 3_000_000.0)] {
         let longitude = (length / 6_378_137.0_f64).to_degrees();
         let input = LineString::from(vec![(0.0, 0.0), (longitude, 0.0)]);
-        let segment = edge(input.0[0], input.0[1], &ellipsoid, maximum).unwrap();
+        let segment = edge(
+            input.0[0],
+            input.0[1],
+            &ellipsoid,
+            maximum,
+            &DensifyWork::new(limits(), None),
+        )
+        .unwrap();
         assert!(f64::from(segment.divisions) > (length / maximum).ceil() + 1.0);
         let count = u64::from(segment.divisions) + 1;
         let exact = GeodesicDensifyLimits {

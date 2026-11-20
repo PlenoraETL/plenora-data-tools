@@ -1774,6 +1774,12 @@
       "foreign_edge_budget_is_rejected",
       "indexed_intersections_match_exhaustive_pairs",
       "all_public_limits_deadline_precedence",
+      "checkpoint620_measurements",
+      "checkpoint620_cycle_accounting",
+      "checkpoint620_empty_parts",
+      "checkpoint620_polygonize_phases",
+      "checkpoint620_serialization",
+      "checkpoint620_degenerate_guide",
       "public_limits_registry_is_complete"
     ],
     "crates/plenora-kernels-geo/src/noding/bounds.rs": [
@@ -1976,7 +1982,8 @@
       "existing_role_on_hole_and_subnormal_collapse",
       "open_input_rings_are_not_implicitly_closed",
       "adjacent_existing_polygons_and_null_line_edges",
-      "resource_prefixes_are_atomic_and_monotone"
+      "resource_prefixes_are_atomic_and_monotone",
+      "checkpoint620_provenance_matches_generic_any"
     ],
     "crates/plenora-kernels-geo/src/predicates/interval_index.rs": [
       "ranges_and_boxes_match_exhaustive_candidates",
@@ -2220,7 +2227,8 @@
       "cancellation_deadline_entry_and_during_work",
       "reused_signs_do_not_charge_candidates_and_overflow_is_typed",
       "degenerate_guide_is_invalid_geometry",
-      "resource_prefixes_terminal_extensions_are_atomic"
+      "resource_prefixes_terminal_extensions_are_atomic",
+      "checkpoint620_degeneracy_matches_generic_all"
     ],
     "crates/plenora-kernels-geo/src/validazione_ogc/tests.rs": [
       "quadrato_semplice_nessuna_autointersezione",
@@ -2274,6 +2282,24 @@
       "una_geometria_invalida_resta_un_ingresso_invalido",
       "il_rifiuto_di_un_ingresso_invalido_non_pubblica_il_testo_della_dipendenza",
       "le_geometrie_valide_con_coordinate_minuscole_passano"
+    ],
+    "crates/plenora-kernels-geo/tests/checkpoint620_census.rs": [
+      "checkpoint620_census",
+      "checkpoint620_counter_requires_first_test_statement",
+      "checkpoint620_ast_finds_nested_and_conditional_loops",
+      "checkpoint620_ast_keeps_module_macros_and_default_methods",
+      "checkpoint620_ast_keeps_runtime_const_functions_and_loop_source",
+      "checkpoint620_literal_bounds_are_structural",
+      "checkpoint620_entry_requires_unconditional_shared_call",
+      "checkpoint620_new_cycles_cannot_hide_in_regeneration",
+      "checkpoint620_callbacks_receivers_and_pipeline_require_propagation",
+      "checkpoint620_coordinate_test_unit_is_not_production_work"
+    ],
+    "crates/plenora-kernels-geo/tests/checkpoint620_census/rules.rs": [
+      "structural_rules_accept_only_proven_cardinality"
+    ],
+    "crates/plenora-kernels-geo/tests/checkpoint620_census/static_proofs.rs": [
+      "static_proofs_reject_changed_dependencies_and_comment_copies"
     ],
     "crates/plenora-kernels-geo/tests/concave_scavo.rs": [
       "divergenza_dodici_punti",
@@ -3173,7 +3199,8 @@
     "crates/plenora-pipeline/src/esecuzione.rs": [
       "un_passo_fuori_budget_si_rifiuta_senza_chiamare_il_kernel",
       "metadati_diversi_dal_contratto_sono_un_errore_interno",
-      "un_interruzione_prima_del_primo_passo_non_chiama_kernel"
+      "un_interruzione_prima_del_primo_passo_non_chiama_kernel",
+      "gli_helper_osservano_la_stessa_interruzione"
     ],
     "crates/plenora-pipeline/src/geo/errori.rs": [
       "tutte_le_varianti_di_interruzione_kernel",
@@ -3185,7 +3212,8 @@
     ],
     "crates/plenora-pipeline/src/geo/mod.rs": [
       "la_config_rifiutata_non_cita_i_valori_scritti",
-      "il_tipo_si_legge_dal_type_code_iso_ed_ewkb"
+      "il_tipo_si_legge_dal_type_code_iso_ed_ewkb",
+      "tipi_preservano_timeout_e_cancellazione"
     ],
     "crates/plenora-pipeline/src/geo/unari.rs": [
       "il_buffer_conta_l_uscita_accumulata_nel_margine"
@@ -3596,6 +3624,10 @@
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-principale.txt",
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25-diretti.txt",
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25.txt",
+    "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-cycles.json",
+    "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json",
+    "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-static-proofs.json",
+    "crates/plenora-kernels-geo/tests/fixtures/checkpoint620.txt",
     "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.json",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/aree.csv",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/distanze.csv",

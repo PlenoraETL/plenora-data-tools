@@ -10,9 +10,78 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [6.2.0] - non rilasciata
+
+### Correzioni
+
+- Voce 23, decisione del titolare del 20/11: **6.2.0: CHIUSA PARZIALE DICHIARATA**.
+  Copertura locale di 640 cicli su 978 con checkpoint o limite dimostrato.
+  Registro chiuso dei 338 residui, con posizione, motivo e previsto 6.3.0;
+  il censimento rifiuta nuovi cicli scoperti, voci obsolete e voci coperte
+  ancora registrate. I 338 cicli e i maggioranti composti delle 34 API
+  restano previsti per la 6.3.0. Opzione A invariata: lavoro esterno non
+  dimostrato, nessuna promessa di latenza o di lavoro totale fra checkpoint.
+
+- Copertura locale dei quattro moduli geo del runner: il dispatch propaga
+  il controllo condiviso ai 21 cicli espliciti di validazione, unari,
+  binari e collettivi. Cancellazione e timeout della verifica dei tipi
+  conservano la propria categoria. Restano da qualificare i kernel
+  chiamati e i maggioranti composti, secondo l'opzione A invariata.
+
+- Checkpoint GOP-028 nelle scansioni di parti vuote di polygonize/split con
+  limiti, negli input vuoti dei buffer geodetici e nei rami scartati delle
+  scansioni topologiche e geodetiche. Riutilizzato il controllo condiviso;
+  scadenza prima dell'annullamento. Prove deterministiche delle parti vuote,
+  delle fasi del noder e della cancellazione sulle API censite. Controllate
+  anche le guide degeneri di trim/extend, le scansioni di provenienza,
+  gli ordinamenti vuoti e il raffinamento della densificazione geodetica.
+  Contatori delle primitive con maggioranti nel registro tabellare e prova
+  del codec testuale a meta batch, con golden identico senza interruzione.
+- Chiarito che il comportamento di cancellazione del catalogo proviene dal
+  progetto d'origine: il runner locale controlla solo i confini dei passi.
+- Censimento AST riproducibile dei cicli geo/pipeline e contatori per sito
+  nei cicli espliciti dei moduli cooperativi, inclusi i resti del gcd.
+  Il test rifiuta cicli privi di sonda e identificatori duplicati. Le misure
+  dei cicli restano distinte dalle primitive: non certificano ancora il
+  lavoro interno delle dipendenze, dei costruttori e dei distruttori.
+- Ulteriore lotto di sei moduli coperti localmente: API coordinate, UTM,
+  predicati, helper e misure di analisi, esecuzione pipeline. I tre helper
+  del runner ricevono la stessa interruzione del chiamante. Le prove statiche vincolano anche
+  le dipendenze AST e non vengono rigenerate dal censimento. Riconosciuti
+  inoltre i quattro checkpoint di `noding::exact::sum_sign`; il gcd ha ora un limite statico locale; i
+  maggioranti composti delle 34 API restano previsti per la 6.3.0.
+- Regola di qualifica dell'interruzione secondo l'opzione A del 20/11:
+  checkpoint condiviso o limite statico per i cicli espliciti del repository;
+  lavoro interno di librerie esterne, iteratori standard, macro di terzi e
+  distruttori come [limite dichiarato](docs/limiti.md#interruzione-cooperativa-e-lavoro-esterno),
+  con elenco delle chiamate opache censite. Il censimento conserva il
+  sorgente dei cicli, tratta le `const fn` come eseguibili a runtime e
+  registra i limiti locali degli intervalli letterali. La dimostrazione
+  composta dei maggioranti per tutte le API resta da completare.
+- Primo lotto di dodici moduli con copertura locale di tutti i cicli
+  espliciti, verificata dal censimento indipendentemente dalla rigenerazione.
+  Aggiunti sedici controlli condivisi nelle scansioni della densificazione
+  e delle superfici geodetiche, senza cambiare gli addebiti di budget.
+  Registrati anche i limiti degli array letterali e separato il debito dei
+  cicli ancora aperti: rigenerare la fixture non aggiorna questo debito.
+
+- Secondo lotto di sedici moduli con copertura locale completa: buffer
+  proiettato, polygonize/split con limiti, facce del noder, indice degli
+  intervalli, relazioni e operazioni booleane, offset e trim/extend/reshape.
+  I nuovi checkpoint osservano il controllo condiviso senza addebiti
+  aggiuntivi; il censimento protegge ogni ciclo dei moduli chiusi.
+  Restano da completare gli altri moduli e i maggioranti composti delle API.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni
+
+- Terzo lotto: copertura locale completa di noding, buffer degenere e
+  puntuale, validazione della densificazione e misure preserve-shape.
+  Controllati anche i nove cicli di `run_interrompibile`, inclusa la
+  preparazione e la raccolta degli output. Il censimento verifica callback
+  e ricevitori condivisi con controprove sulla propagazione degli errori.
+  Restano aperti gli altri cicli censiti e i maggioranti composti delle API.
 
 - GOP-028 nella pipeline e in tutto il workspace: quando scadenza e
   annullamento sono entrambi attivi prevale sempre la scadenza, anche ai

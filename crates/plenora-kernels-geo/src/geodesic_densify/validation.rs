@@ -58,7 +58,7 @@ fn validate_surface(
         representatives: Vec::new(),
         root: 0,
     };
-    let mut polygon = |polygon: &geo::Polygon| {
+    let mut polygon = |polygon: &geo::Polygon, work: &mut Work<'_>| {
         work.step()?;
         if polygon.exterior().0.is_empty() {
             if polygon.interiors().is_empty() {
@@ -66,13 +66,16 @@ fn validate_surface(
             }
             return Err(GeodesicDistanceError::InvalidGeometry);
         }
-        index.polygon(polygon, &mut work)
+        index.polygon(polygon, work)
     };
     match geometry {
-        Geometry::Polygon(value) => polygon(value)?,
+        Geometry::Polygon(value) => polygon(value, &mut work)?,
         Geometry::MultiPolygon(values) => {
             for value in values {
-                polygon(value)?;
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_densify/validation.rs::validate_surface:1");
+                work.checkpoint()?;
+                polygon(value, &mut work)?;
             }
         }
         _ => return Ok(0),

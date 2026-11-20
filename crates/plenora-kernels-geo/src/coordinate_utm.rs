@@ -216,6 +216,8 @@ fn inverse(value: UtmCoordinate, margin: f64) -> Result<(f64, f64), UtmError> {
     // senza dedurre una banda dal punto gia' arrotondato sul bordo.
     let mut closest = f64::INFINITY;
     for band in BANDS.iter().copied().map(char::from) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("coordinate_utm.rs::inverse:1");
         if (band >= 'N') != is_north {
             continue;
         }

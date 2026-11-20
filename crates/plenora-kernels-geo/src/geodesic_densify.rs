@@ -186,9 +186,12 @@ fn edge(
     end: Coord<f64>,
     ellipsoid: &EllissoideGeodetico,
     maximum: f64,
+    work: &DensifyWork<'_>,
 ) -> Result<GeodesicEdge, GeodesicDensifyError> {
     coordinate(start)?;
     coordinate(end)?;
+    #[cfg(test)]
+    crate::noding::gop028::unit();
     let (length, azimuth, final_azimuth, _): (f64, f64, f64, f64) = ellipsoid
         .geodetica()
         .inverse(start.y, start.x, end.y, end.x);
@@ -233,6 +236,9 @@ fn edge(
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let mut divisions = count as u32;
         loop {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_densify.rs::edge:1");
+            work.checkpoint()?;
             if 4.0_f64.mul_add(ROUND_OFF_M, length / f64::from(divisions)) <= maximum {
                 break;
             }
@@ -304,6 +310,8 @@ pub fn geodesic_densify_with_limits(
         return Err(GeodesicDensifyError::UnsupportedEllipsoid);
     }
     for part in parts {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_densify.rs::geodesic_densify_with_limits:1");
         work.checkpoint()?;
         work.charge(0, size_of::<LineString<f64>>() as u64)?;
         if let Some(&first) = part.0.first() {
@@ -311,8 +319,10 @@ pub fn geodesic_densify_with_limits(
             work.charge(1, size_of::<Coord<f64>>() as u64)?;
         }
         for pair in part.0.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_densify.rs::geodesic_densify_with_limits:2");
             work.checkpoint()?;
-            let segment = edge(pair[0], pair[1], &ellipsoid, maximum_m)?;
+            let segment = edge(pair[0], pair[1], &ellipsoid, maximum_m, &work)?;
             let count = u64::from(segment.divisions);
             work.charge(count, count * size_of::<Coord<f64>>() as u64)?;
         }
@@ -322,6 +332,8 @@ pub fn geodesic_densify_with_limits(
         .try_reserve_exact(parts.len())
         .map_err(|_| GeodesicDensifyError::Allocation)?;
     for part in parts {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_densify.rs::geodesic_densify_with_limits:3");
         work.checkpoint()?;
         output.push(emit_part(part, &ellipsoid, maximum_m, &work)?);
     }
@@ -345,8 +357,10 @@ fn emit_part(
 ) -> Result<LineString<f64>, GeodesicDensifyError> {
     let mut count = usize::from(!part.0.is_empty());
     for pair in part.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_densify.rs::emit_part:1");
         work.checkpoint()?;
-        let divisions = edge(pair[0], pair[1], ellipsoid, maximum_m)?.divisions;
+        let divisions = edge(pair[0], pair[1], ellipsoid, maximum_m, work)?.divisions;
         count = count
             .checked_add(usize::try_from(divisions).map_err(|_| GeodesicDensifyError::PointLimit)?)
             .ok_or(GeodesicDensifyError::PointLimit)?;
@@ -359,14 +373,20 @@ fn emit_part(
         points.push(first);
     }
     for pair in part.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_densify.rs::emit_part:2");
         work.checkpoint()?;
-        let segment = edge(pair[0], pair[1], ellipsoid, maximum_m)?;
+        let segment = edge(pair[0], pair[1], ellipsoid, maximum_m, work)?;
         let mut previous = pair[0];
         for i in 1..=segment.divisions {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_densify.rs::emit_part:3");
             work.checkpoint()?;
             let point = if i == segment.divisions {
                 pair[1]
             } else {
+                #[cfg(test)]
+                crate::noding::gop028::unit();
                 let (latitude, longitude): (f64, f64) = ellipsoid.geodetica().direct(
                     pair[0].y,
                     pair[0].x,
@@ -376,6 +396,8 @@ fn emit_part(
                 canonical_coordinate(latitude, longitude)
             };
             coordinate(point)?;
+            #[cfg(test)]
+            crate::noding::gop028::unit();
             let distance: f64 = ellipsoid
                 .geodetica()
                 .inverse(previous.y, previous.x, point.y, point.x);

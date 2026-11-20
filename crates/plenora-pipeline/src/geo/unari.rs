@@ -550,6 +550,7 @@ fn celle_nel_margine(
     op: &str,
     celle: &plenora_core::arrow::array::BinaryArray,
     margine: MargineMemoria,
+    interruzione: &crate::Interruzione,
     kernel: impl Fn(&Geometry<f64>, MargineMemoria) -> Result<Option<Geometry<f64>>> + Sync,
 ) -> Result<Vec<Option<Vec<u8>>>> {
     use plenora_core::arrow::array::Array;
@@ -568,6 +569,7 @@ fn celle_nel_margine(
     margine.verifica(usati).map_err(oltre)?;
     let mut inizio = 0;
     while inizio < righe {
+        interruzione.verifica("esecuzione pipeline")?;
         let fine = (inizio + RIGHE_IN_VOLO).min(righe);
         let per_riga = (margine.byte_disponibili() - usati) / RIGHE_IN_VOLO as u64;
         let fetta = celle.slice(inizio, fine - inizio);
@@ -587,6 +589,7 @@ fn celle_nel_margine(
                 .transpose()
         })?;
         for risultato in blocco {
+            interruzione.verifica("esecuzione pipeline")?;
             if let Some(wkb) = &risultato {
                 // La cella (capacita' vera) e la sua copia nella colonna.
                 usati = usati
@@ -704,6 +707,7 @@ impl KernelUnario {
     }
 
     /// Le colonne dell'uscita, nell'ordine del contratto, e le righe.
+    #[allow(clippy::too_many_lines)] // Un braccio per operazione, come i dispatch collettivo e binario.
     pub(super) fn esegui(
         &self,
         op: &str,
@@ -711,12 +715,13 @@ impl KernelUnario {
         batch: &RecordBatch,
         _uscita: &DataContract,
         margine: MargineMemoria,
+        interruzione: &crate::Interruzione,
     ) -> Result<(Vec<ArrayRef>, usize)> {
         let righe = batch.num_rows();
         let mut colonne = batch.columns().to_vec();
         match self {
             Self::DaCoordinate { x, y, crs } => {
-                colonne.push(da_coordinate(op, batch, *x, *y, crs)?);
+                colonne.push(da_coordinate(op, batch, *x, *y, crs, interruzione)?);
                 return Ok((colonne, righe));
             }
             Self::DaWkt {
@@ -735,9 +740,13 @@ impl KernelUnario {
         match self {
             Self::Trasforma(trasformazione) => {
                 let celle = if matches!(trasformazione, Trasformazione::Buffer { .. }) {
-                    celle_nel_margine(op, lato.celle(batch)?, margine, |g, margine_riga| {
-                        trasformazione.applica(op, g, margine_riga)
-                    })?
+                    celle_nel_margine(
+                        op,
+                        lato.celle(batch)?,
+                        margine,
+                        interruzione,
+                        |g, margine_riga| trasformazione.applica(op, g, margine_riga),
+                    )?
                 } else {
                     per_cella(lato.celle(batch)?, |g| {
                         trasformazione
@@ -787,6 +796,7 @@ impl KernelUnario {
                     operations::bounds(g).map_err(|e| del_kernel(op, &e))
                 })?;
                 for asse in 0..4 {
+                    interruzione.verifica("esecuzione pipeline")?;
                     colonne.push(Arc::new(Float64Array::from(
                         limiti
                             .iter()
@@ -802,6 +812,7 @@ impl KernelUnario {
                         .map_err(|e| del_kernel(op, &e))
                 })?;
                 for campo in scelti {
+                    interruzione.verifica("esecuzione pipeline")?;
                     colonne.push(colonna_accessoria(*campo, &accessori));
                 }
             }
@@ -965,11 +976,13 @@ fn da_coordinate(
     x: usize,
     y: usize,
     crs: &ResolvedCrs,
+    interruzione: &crate::Interruzione,
 ) -> Result<ArrayRef> {
     let xs = coordinate(op, batch, x)?;
     let ys = coordinate(op, batch, y)?;
     let mut celle = Vec::with_capacity(xs.len());
     for (x, y) in xs.into_iter().zip(ys) {
+        interruzione.verifica("esecuzione pipeline")?;
         let (Some(x), Some(y)) = (x, y) else {
             return Err(PlenoraError::InvalidPlan(format!(
                 "{op}: coordinata null: la colonna geometria prodotta non ammette null"
@@ -1039,8 +1052,14 @@ mod tests {
             .map(Some)
             .map_err(|e| del_kernel("geo.buffer", &e))
         };
-        let ampio = celle_nel_margine("geo.buffer", &celle, MargineMemoria::byte(1 << 30), kernel)
-            .expect("margine ampio");
+        let ampio = celle_nel_margine(
+            "geo.buffer",
+            &celle,
+            MargineMemoria::byte(1 << 30),
+            &crate::Interruzione::default(),
+            kernel,
+        )
+        .expect("margine ampio");
         let attese = per_cella(&celle, |g| {
             kernel(g, MargineMemoria::ILLIMITATO)?
                 .map(|b| encode_geometry(&b))
@@ -1081,8 +1100,14 @@ mod tests {
         // Almeno 70 lati per cerchio (freccia <= 1 m): oltre un milione
         // di byte per 1 000 geometrie. 500 000 byte non contengono l'uscita,
         // pur bastando alla singola riga. Il limite non dipende dall'output.
-        let errore = celle_nel_margine("geo.buffer", &celle, MargineMemoria::byte(500_000), kernel)
-            .expect_err("uscita accumulata oltre il margine");
+        let errore = celle_nel_margine(
+            "geo.buffer",
+            &celle,
+            MargineMemoria::byte(500_000),
+            &crate::Interruzione::default(),
+            kernel,
+        )
+        .expect_err("uscita accumulata oltre il margine");
         assert_eq!(
             errore.category(),
             plenora_core::ErrorCategory::ResourceLimit
