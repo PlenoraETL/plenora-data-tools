@@ -22,6 +22,10 @@ pub struct FaceGraph {
 /// Riceve percorsi prodotti da node, nello stesso ordine dei lati sorgente.
 /// Nessuna nuova intersezione viene costruita. Ogni anello conserva gli id
 /// dei lati atomici nello stesso ordine dei vertici; ponti e dangles esclusi.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sonde O-M3 per ciclo, assenti in produzione"
+)]
 pub fn enumerate(
     nodes: &[CountedVec<P>],
     work: &mut Work<'_>,
@@ -29,7 +33,11 @@ pub fn enumerate(
     work.step()?;
     let mut points = CountedVec::new();
     for line in nodes {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::enumerate:1");
         for p in line {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/faces.rs::enumerate:2");
             work.push(&mut points, p.try_clone()?)?;
         }
     }
@@ -39,14 +47,20 @@ pub fn enumerate(
     let rings = rings(&mut arcs, &points, work)?;
     let mut holes = CountedVec::new();
     for _ in &rings {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::enumerate:3");
         work.push(&mut holes, CountedVec::new())?;
     }
     let mut bounds = CountedVec::new();
     let mut owners = CountedVec::new();
     for _ in &atoms {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::enumerate:4");
         work.push(&mut owners, None)?;
     }
     for (id, ring) in rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::enumerate:5");
         let p = &points[ring.vertices[0]];
         let mut bb = [
             p.x.try_clone()?,
@@ -55,10 +69,14 @@ pub fn enumerate(
             p.y.try_clone()?,
         ];
         for &v in &ring.vertices {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/faces.rs::enumerate:6");
             for (i, q) in [&points[v].x, &points[v].x, &points[v].y, &points[v].y]
                 .into_iter()
                 .enumerate()
             {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("noding/faces.rs::enumerate:7");
                 work.step()?;
                 let order = q.try_cmp(&bb[i])?;
                 if (i % 2 == 0 && order.is_lt()) || (i % 2 == 1 && order.is_gt()) {
@@ -69,6 +87,8 @@ pub fn enumerate(
         work.push(&mut bounds, bb)?;
         if ring.orientation.is_gt() {
             for &atom in &ring.atoms {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("noding/faces.rs::enumerate:8");
                 work.step()?;
                 owners[atom] = Some(id);
             }
@@ -76,12 +96,16 @@ pub fn enumerate(
     }
     let index = BoxIndex::new(bounds, work)?;
     for (h, hole) in rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::enumerate:9");
         work.step()?;
         if !hole.orientation.is_lt() {
             continue;
         }
         let mut parent: Option<usize> = None;
         for i in index.point_candidates(&points[hole.vertices[0]], work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/faces.rs::enumerate:10");
             let shell = &rings[i];
             work.step()?;
             if !shell.orientation.is_gt() || owners[hole.atoms[0]] == Some(i) {
@@ -137,6 +161,8 @@ pub struct FaceRing {
 fn vertex(points: &[P], p: &P, work: &mut Work<'_>) -> Result<usize, PredicateError> {
     let (mut lo, mut hi) = (0, points.len());
     while lo < hi {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::vertex:1");
         work.step()?;
         let mid = lo + (hi - lo) / 2;
         match compare(&points[mid], p)? {
@@ -165,7 +191,11 @@ fn graph(
 ) -> Result<(CountedVec<ArcSide>, CountedVec<FaceAtom>), PredicateError> {
     let mut pairs = CountedVec::new();
     for (source, line) in nodes.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::graph:1");
         for pair in line.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/faces.rs::graph:2");
             let a = vertex(points, &pair[0], work)?;
             let b = vertex(points, &pair[1], work)?;
             work.push(&mut pairs, (a.min(b), a.max(b), source))?;
@@ -176,10 +206,14 @@ fn graph(
     let mut arcs = CountedVec::new();
     let mut outgoing = CountedVec::new();
     for _ in points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::graph:3");
         work.push(&mut outgoing, CountedVec::new())?;
     }
     let mut atoms: CountedVec<FaceAtom> = CountedVec::new();
     for (a, b, source) in pairs {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::graph:4");
         work.step()?;
         if let Some(atom) = atoms.last_mut() {
             if (atom.from, atom.to) == (a, b) {
@@ -201,6 +235,8 @@ fn graph(
             },
         )?;
         for (from, to) in [(a, b), (b, a)] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/faces.rs::graph:5");
             work.push(&mut outgoing[from], arcs.len())?;
             work.push(
                 &mut arcs,
@@ -215,6 +251,8 @@ fn graph(
         }
     }
     for (v, list) in outgoing.iter_mut().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::graph:6");
         sorted(
             list,
             |a, b| {
@@ -226,6 +264,8 @@ fn graph(
             work,
         )?;
         for i in 0..list.len() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/faces.rs::graph:7");
             work.step()?;
             // Predecessore antiorario del gemello: mantiene la faccia a sinistra.
             arcs[list[i] ^ 1].next = list[if i == 0 { list.len() - 1 } else { i - 1 }];
@@ -245,6 +285,8 @@ fn orientation(
     }
     let mut minimum = 0;
     for i in 1..vertices.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::orientation:1");
         work.step()?;
         if vertices[i] < vertices[minimum] {
             minimum = i;
@@ -272,6 +314,8 @@ fn rings(
             let mut vertices = CountedVec::new();
             let mut atoms = CountedVec::new();
             for &id in path {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("noding/faces.rs::rings:1");
                 work.step()?;
                 let arc = &arcs[id];
                 work.push(&mut vertices, arc.from)?;
@@ -312,9 +356,13 @@ pub fn walk(
 ) -> Result<(), PredicateError> {
     let mut positions = CountedVec::new();
     for _ in 0..vertex_count {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::walk:1");
         work.push(&mut positions, None)?;
     }
     for start in 0..arcs.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::walk:2");
         work.step()?;
         if arcs[start].seen {
             continue;
@@ -323,11 +371,15 @@ pub fn walk(
         let mut path = CountedVec::new();
         let mut current = start;
         loop {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/faces.rs::walk:3");
             work.step()?;
             let v = arcs[current].from;
             if let Some(pos) = positions[v] {
                 ring(&path[pos..], arcs, work)?;
                 while path.len() > pos {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("noding/faces.rs::walk:4");
                     work.step()?;
                     if let Some(a) = path.pop() {
                         positions[arcs[a].from] = None;
@@ -356,6 +408,8 @@ fn nested(
     work: &mut Work<'_>,
 ) -> Result<bool, PredicateError> {
     for &v in &inner.vertices {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::nested:1");
         work.step()?;
         if let Some(inside) = inside(&points[v], outer, points, work)? {
             return Ok(inside);
@@ -373,6 +427,8 @@ fn inside(
 ) -> Result<Option<bool>, PredicateError> {
     let mut odd = false;
     for i in ring.index.candidates(&p.y, work)? {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/faces.rs::inside:1");
         work.step()?;
         let a = &points[ring.vertices[i]];
         let b = &points[ring.vertices[(i + 1) % ring.vertices.len()]];

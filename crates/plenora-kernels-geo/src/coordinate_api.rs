@@ -281,6 +281,8 @@ fn validate(
         CoordinateDirection::Decode => rule.decode,
     };
     for (key, requirement) in CoordinateOptionKind::ALL.iter().zip(requirements) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("coordinate_api.rs::validate:1");
         let count = request
             .options
             .iter()
@@ -302,6 +304,8 @@ fn validate(
         .iter()
         .filter_map(|key| request.options.iter().find(|option| option.kind() == *key))
     {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("coordinate_api.rs::validate:2");
         match *option {
             CoordinateOption::Datum(datum) => {
                 if !rule.datums.contains(&datum) {
@@ -558,6 +562,8 @@ fn batch<T, U>(
         .try_reserve_exact(input.len())
         .map_err(|_| CoordinateErrorKind::ResourceLimit)?;
     for (index, value) in input.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("coordinate_api.rs::batch:1");
         #[cfg(test)]
         crate::noding::gop028::unit();
         checkpoint(work)?;

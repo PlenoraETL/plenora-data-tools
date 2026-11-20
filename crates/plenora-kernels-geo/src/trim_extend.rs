@@ -126,6 +126,8 @@ pub(crate) fn read_path(
     }
     let mut points = CountedVec::new();
     for coord in &line.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::read_path:1");
         work.nodes(1)?;
         if !coord.x.is_finite() || !coord.y.is_finite() {
             return Err(TrimExtendError::InvalidGeometry);
@@ -142,6 +144,8 @@ pub(crate) fn edges(
 ) -> Result<CountedVec<Edge>, TrimExtendError> {
     let mut result = CountedVec::new();
     for pair in points.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::edges:1");
         work.nodes(2)?;
         if pair[0] == pair[1] {
             return Err(TrimExtendError::Unsupported);
@@ -174,6 +178,8 @@ fn simple_path(
     let edges = edges(points, work)?;
     let mut refs = CountedVec::new();
     for edge in &edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::simple_path:1");
         work.push(&mut refs, edge)?;
     }
     let mut invalid = false;
@@ -214,6 +220,8 @@ struct Cut {
 fn cuts(points: &[P], sides: &[Q], work: &mut Work<'_>) -> Result<Option<Cut>, TrimExtendError> {
     let mut cut = None;
     for i in 0..points.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::cuts:1");
         work.step()?;
         let sign = sides[i].sign();
         let candidate = if sign.is_eq() {
@@ -268,6 +276,8 @@ fn degenerate_guide(line: &LineString<f64>, work: &mut Work<'_>) -> Result<bool,
     let mut degenerate = true;
     for pair in line.0.windows(2) {
         #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::degenerate_guide:1");
+        #[cfg(test)]
         crate::noding::gop028::unit();
         work.step()?;
         if pair[0] != pair[1] {
@@ -278,6 +288,10 @@ fn degenerate_guide(line: &LineString<f64>, work: &mut Work<'_>) -> Result<bool,
     Ok(degenerate)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sonde O-M3 per ciclo, assenti in produzione"
+)]
 fn execute(
     target: &Geometry<f64>,
     guide: &Geometry<f64>,
@@ -295,6 +309,8 @@ fn execute(
     let origin = &guide_points[0];
     let direction = guide_points[1].try_sub(origin)?;
     for point in &guide_points[2..] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::execute:1");
         work.pair()?;
         if !side(point, origin, &direction)?.sign().is_eq() {
             return Err(TrimExtendError::Unsupported);
@@ -302,6 +318,8 @@ fn execute(
     }
     let mut sides = CountedVec::new();
     for point in &points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::execute:2");
         work.pair()?;
         work.push(&mut sides, side(point, origin, &direction)?)?;
     }
@@ -309,12 +327,16 @@ fn execute(
     if let Some(cut) = cuts(&points, &sides, work)? {
         if sides[cut.before].sign().is_gt() {
             for point in &points[..=cut.before] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("trim_extend.rs::execute:3");
                 append(&mut output, point, work)?;
             }
             append(&mut output, &cut.point, work)?;
         } else {
             append(&mut output, &cut.point, work)?;
             for point in &points[cut.after..] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("trim_extend.rs::execute:4");
                 append(&mut output, point, work)?;
             }
         }
@@ -333,6 +355,8 @@ fn execute(
                 last - 1,
             ),
         ] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("trim_extend.rs::execute:5");
             work.step()?;
             if !enabled {
                 continue;
@@ -363,6 +387,8 @@ fn execute(
                 append(&mut output, &point, work)?;
             }
             for (i, original) in points.iter().enumerate() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("trim_extend.rs::execute:6");
                 work.step()?;
                 if i != terminal || options.mode == TrimExtendMode::AddVertex {
                     append(&mut output, original, work)?;
@@ -398,6 +424,8 @@ pub(crate) fn publish_paths(
     let originals = Originals::new(target, reshaper, work)?;
     let mut coords = CountedVec::new();
     for point in points {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::publish_paths:1");
         work.nodes(1)?;
         let coord = originals.coordinate(point, work)?;
         work.push(&mut coords, coord)?;
@@ -405,6 +433,8 @@ pub(crate) fn publish_paths(
     let edges = edges(points, work)?;
     let mut certificates = CountedVec::new();
     for (edge, pair) in edges.iter().zip(coords.windows(2)) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("trim_extend.rs::publish_paths:2");
         let certificate = PublishedEdge::new(edge, [pair[0], pair[1]], work)?;
         work.push(&mut certificates, certificate)?;
     }

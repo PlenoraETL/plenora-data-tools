@@ -80,6 +80,8 @@ pub(super) fn cosine(x: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureErro
     let mut term = ShapeInterval::exact(1.0);
     let mut sum = term;
     for k in 1..=12 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("preserve_shape_measure/certificate/transverse.rs::cosine:1");
         term = term
             .mul(square)
             .div_positive(ShapeInterval::exact(f64::from((2 * k - 1) * 2 * k)))?;
@@ -98,6 +100,10 @@ fn hyperbolic(x: ShapeInterval) -> Result<(ShapeInterval, ShapeInterval), ShapeM
     let mut odd = sinh;
     let mut even = cosh;
     for k in 1..=12 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "preserve_shape_measure/certificate/transverse.rs::hyperbolic:1",
+        );
         odd = odd
             .mul(square)
             .div_positive(ShapeInterval::exact(f64::from(2 * k * (2 * k + 1))))?;
@@ -144,6 +150,10 @@ pub(super) fn arctangent(mut x: ShapeInterval) -> Result<ShapeInterval, ShapeMea
         return Err(ShapeMeasureError::AccuracyUnproven);
     }
     for _ in 0..2 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "preserve_shape_measure/certificate/transverse.rs::arctangent:1",
+        );
         x = x.div_positive(one.add(square_root(one.add(x.mul(x)))?))?;
     }
     if x.max_abs() > 0.4 {
@@ -153,6 +163,10 @@ pub(super) fn arctangent(mut x: ShapeInterval) -> Result<ShapeInterval, ShapeMea
     let mut power = x;
     let mut sum = x;
     for k in 1..=40 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "preserve_shape_measure/certificate/transverse.rs::arctangent:2",
+        );
         power = power.mul(square);
         sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * k + 1)))?);
     }
@@ -192,6 +206,10 @@ fn meridian_correction(
     let mut coefficient = ShapeInterval::exact(1.0);
     let mut sum = w.scale(q.neg());
     for k in 1..=12 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "preserve_shape_measure/certificate/transverse.rs::meridian_correction:1",
+        );
         integral = integral
             .scale(ShapeInterval::exact(f64::from(2 * k - 1)))
             .sub(odd_power.mul(cos))
@@ -307,6 +325,10 @@ impl TransverseCertificate {
         let target = self.target(x, y)?;
         let mut root = target.widen(0.1);
         for _ in 0..24 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "preserve_shape_measure/certificate/transverse.rs::certify:1",
+            );
             root = root.intersect(target.sub(meridian_correction(root, self.q)?))?;
         }
         let (sin, _) = complex_trig(root)?;

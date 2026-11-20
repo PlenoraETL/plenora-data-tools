@@ -372,6 +372,8 @@ fn resolve_cell(mut cell: MgrsCell, ellipsoid: GridEllipsoid) -> Result<MgrsCell
     } else {
         let mut found = None;
         for cycle in 0..5 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("coordinate_mgrs.rs::resolve_cell:1");
             let mut candidate = cell;
             candidate.south += cycle * 2_000_000;
             candidate.north += cycle * 2_000_000;
@@ -434,12 +436,16 @@ fn intersects(cell: MgrsCell, ellipsoid: GridEllipsoid) -> Result<bool, MgrsErro
         ((west, north), (split, north)),
         ((split, north), (east, north)),
     ] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("coordinate_mgrs.rs::intersects:1");
         let eval = |t: f64| project(a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1));
         let start = eval(0.0)?;
         let end = eval(1.0)?;
         let mut lo = 0.0_f64;
         let mut hi = 1.0_f64;
         for (axis, minimum, maximum) in [(0, cell.west, cell.east), (1, cell.south, cell.north)] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("coordinate_mgrs.rs::intersects:2");
             let component = |p: (f64, f64)| if axis == 0 { p.0 } else { p.1 };
             let s = component(start);
             let e = component(end);
@@ -451,12 +457,16 @@ fn intersects(cell: MgrsCell, ellipsoid: GridEllipsoid) -> Result<bool, MgrsErro
                 continue;
             }
             for boundary in [f64::from(minimum), f64::from(maximum)] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("coordinate_mgrs.rs::intersects:3");
                 if boundary <= s.min(e) || boundary >= s.max(e) {
                     continue;
                 }
                 let mut left = 0.0;
                 let mut right = 1.0;
                 for _ in 0..52 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("coordinate_mgrs.rs::intersects:4");
                     let middle = f64::midpoint(left, right);
                     if (component(eval(middle)?) < boundary) == (e > s) {
                         left = middle;

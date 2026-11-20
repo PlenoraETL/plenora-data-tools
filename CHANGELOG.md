@@ -25,6 +25,11 @@ la cui versione non ha qui una voce datata.
   del codec testuale a meta batch, con golden identico senza interruzione.
 - Chiarito che il comportamento di cancellazione del catalogo proviene dal
   progetto d'origine: il runner locale controlla solo i confini dei passi.
+- Censimento AST riproducibile dei cicli geo/pipeline e contatori per sito
+  nei cicli espliciti dei moduli cooperativi, inclusi i resti del gcd.
+  Il test rifiuta cicli privi di sonda e identificatori duplicati. Le misure
+  dei cicli restano distinte dalle primitive: non certificano ancora il
+  lavoro interno delle dipendenze, dei costruttori e dei distruttori.
 
 ## [6.1.0] - 2026-11-19
 

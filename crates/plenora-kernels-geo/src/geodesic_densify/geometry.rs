@@ -29,6 +29,8 @@ fn count_line(
         work.charge(1, size_of::<Coord>() as u64)?;
     }
     for pair in line.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_densify/geometry.rs::count_line:1");
         work.checkpoint()?;
         let divisions = u64::from(edge(pair[0], pair[1], ellipsoid, maximum, work)?.divisions);
         work.charge(divisions, divisions * size_of::<Coord>() as u64)?;
@@ -44,6 +46,8 @@ fn count_polygon(
 ) -> Result<(), GeodesicDensifyError> {
     count_line(polygon.exterior(), ellipsoid, maximum, work)?;
     for hole in polygon.interiors() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_densify/geometry.rs::count_polygon:1");
         work.checkpoint()?;
         work.charge(0, size_of::<LineString>() as u64)?;
         count_line(hole, ellipsoid, maximum, work)?;
@@ -64,6 +68,8 @@ fn emit_polygon(
         .try_reserve_exact(polygon.interiors().len())
         .map_err(|_| GeodesicDensifyError::Allocation)?;
     for hole in polygon.interiors() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_densify/geometry.rs::emit_polygon:1");
         work.checkpoint()?;
         holes.push(emit_part(hole, ellipsoid, maximum, work)?);
     }
@@ -116,6 +122,10 @@ fn emit_polygon(
 /// # Errors
 /// [`GeodesicDensifyError`] distingue dominio, struttura, accuratezza,
 /// risorse e interruzione; i messaggi non contengono dati dell'ingresso.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sonde O-M3 per ciclo, assenti in produzione"
+)]
 pub fn geodesic_densify_geometry_with_limits(
     geometry: &Geometry,
     crs: &ResolvedCrs,
@@ -152,6 +162,10 @@ pub fn geodesic_densify_geometry_with_limits(
         Geometry::LineString(line) => count_line(line, &ellipsoid, maximum_m, &mut work)?,
         Geometry::MultiLineString(lines) => {
             for line in lines {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits:1",
+                );
                 work.charge(0, size_of::<LineString>() as u64)?;
                 count_line(line, &ellipsoid, maximum_m, &mut work)?;
             }
@@ -159,6 +173,10 @@ pub fn geodesic_densify_geometry_with_limits(
         Geometry::Polygon(polygon) => count_polygon(polygon, &ellipsoid, maximum_m, &mut work)?,
         Geometry::MultiPolygon(polygons) => {
             for polygon in polygons {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits:2",
+                );
                 work.checkpoint()?;
                 work.charge(0, size_of::<Polygon>() as u64)?;
                 count_polygon(polygon, &ellipsoid, maximum_m, &mut work)?;
@@ -177,6 +195,10 @@ pub fn geodesic_densify_geometry_with_limits(
                 .try_reserve_exact(lines.0.len())
                 .map_err(|_| GeodesicDensifyError::Allocation)?;
             for line in lines {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits:3",
+                );
                 work.checkpoint()?;
                 output.push(emit_part(line, &ellipsoid, maximum_m, &work)?);
             }
@@ -191,6 +213,10 @@ pub fn geodesic_densify_geometry_with_limits(
                 .try_reserve_exact(polygons.0.len())
                 .map_err(|_| GeodesicDensifyError::Allocation)?;
             for polygon in polygons {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "geodesic_densify/geometry.rs::geodesic_densify_geometry_with_limits:4",
+                );
                 output.push(emit_polygon(polygon, &ellipsoid, maximum_m, &work)?);
             }
             Geometry::MultiPolygon(MultiPolygon(output))

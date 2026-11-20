@@ -310,11 +310,15 @@ impl GeometryIndex {
             return Err(GeodesicDistanceError::InvalidGeometry);
         }
         for &point in &line.0 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_surface/metric.rs::line:1");
             work.step()?;
             coordinate(point)?;
         }
         work.push(&mut self.representatives, line.0[0])?;
         for pair in line.0.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_surface/metric.rs::line:2");
             let ball = edge(pair[0], pair[1], work)?;
             if ring {
                 surface::append_short_pieces(ball, &mut self.nodes, work, 0)?;
@@ -332,6 +336,8 @@ impl GeometryIndex {
     ) -> Result<(), GeodesicDistanceError> {
         let shell = self.rings.len();
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_surface/metric.rs::polygon:1");
             let begin = self.nodes.len();
             self.line(ring, true, work)?;
             if self.nodes.len() - begin < 3 {
@@ -369,6 +375,8 @@ impl GeometryIndex {
             }
             Geometry::MultiPoint(points) => {
                 for point in points {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("geodesic_surface/metric.rs::new:1");
                     work.step()?;
                     work.push(&mut index.nodes, MetricBall::point(coordinate(point.0)?))?;
                     work.push(&mut index.representatives, point.0)?;
@@ -377,12 +385,16 @@ impl GeometryIndex {
             Geometry::LineString(line) => index.line(line, false, work)?,
             Geometry::MultiLineString(lines) => {
                 for line in lines {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("geodesic_surface/metric.rs::new:2");
                     index.line(line, false, work)?;
                 }
             }
             Geometry::Polygon(polygon) => index.polygon(polygon, work)?,
             Geometry::MultiPolygon(polygons) => {
                 for polygon in polygons {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("geodesic_surface/metric.rs::new:3");
                     index.polygon(polygon, work)?;
                 }
             }
@@ -563,6 +575,8 @@ pub(crate) fn minimum(
     };
     queue.add(a, b, work)?;
     while let Some(candidate) = queue.heap.pop() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface/metric.rs::minimum:1");
         work.step()?;
         if queue.best
             <= if separation_only {

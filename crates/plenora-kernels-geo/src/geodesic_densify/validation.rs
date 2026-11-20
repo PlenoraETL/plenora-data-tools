@@ -72,6 +72,8 @@ fn validate_surface(
         Geometry::Polygon(value) => polygon(value)?,
         Geometry::MultiPolygon(values) => {
             for value in values {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_densify/validation.rs::validate_surface:1");
                 polygon(value)?;
             }
         }

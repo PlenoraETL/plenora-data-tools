@@ -160,6 +160,8 @@ pub fn sorted_with_work<T>(
         work: &mut Work<'_>,
     ) -> Result<(), PredicateError> {
         while root < values.len() / 2 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::sift:1");
             let mut child = root * 2 + 1;
             if child + 1 < values.len() {
                 work.step()?;
@@ -178,9 +180,13 @@ pub fn sorted_with_work<T>(
     }
     work.step()?;
     for root in (0..values.len() / 2).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::sorted_with_work:1");
         sift(values, root, &compare, work)?;
     }
     for end in (1..values.len()).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::sorted_with_work:2");
         work.step()?;
         values.swap(0, end);
         sift(&mut values[..end], 0, &compare, work)?;
@@ -286,6 +292,8 @@ fn intersections(
     let mut first = None;
     let mut last = None;
     for p in [&a.a, &a.b, &b.a, &b.b] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::intersections:1");
         if a.contains(p)? && b.contains(p)? {
             if match first {
                 None => true,
@@ -352,6 +360,8 @@ fn sift(
     work: &mut Work<'_>,
 ) -> Result<(), PredicateError> {
     while root < index.len() / 2 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::sift:2");
         work.step()?;
         let mut child = root * 2 + 1;
         if child + 1 < index.len() && index_cmp(index[child], index[child + 1], edges)?.is_lt() {
@@ -376,8 +386,12 @@ pub fn visit(
     work.step()?;
     let mut index = CountedVec::new();
     for (i, edge) in edges.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:1");
         work.step()?;
         for point in [&edge.a, &edge.b] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::visit:2");
             if !point.x.belongs_to(&work.budget) || !point.y.belongs_to(&work.budget) {
                 return Err(PredicateError::CalcoloNonConcluso(
                     "proprietario del budget",
@@ -387,16 +401,24 @@ pub fn visit(
         work.push(&mut index, i)?;
     }
     for root in (0..index.len() / 2).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:3");
         sift(&mut index, root, edges, work)?;
     }
     for end in (1..index.len()).rev() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:4");
         work.step()?;
         index.swap(0, end);
         sift(&mut index[..end], 0, edges, work)?;
     }
     for (position, &i) in index.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::visit:5");
         let a = edges[i];
         for &j in &index[position + 1..] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::visit:6");
             work.step()?;
             let b = edges[j];
             if b.a
@@ -437,6 +459,8 @@ pub fn node(
     work.step()?;
     let mut result = CountedVec::new();
     for edge in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::node:1");
         let mut points = CountedVec::new();
         work.nodes(2)?;
         work.push(&mut points, edge.a.try_clone()?)?;
@@ -445,15 +469,21 @@ pub fn node(
     }
     visit(edges, work, |i, j, hits, work| {
         for p in hits.into_iter().flatten() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::node:2");
             work.push(&mut result[i], p.try_clone()?)?;
             work.push(&mut result[j], p)?;
         }
         Ok(())
     })?;
     for (points, edge) in result.iter_mut().zip(edges) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding.rs::node:3");
         sorted(points, point_cmp, work)?;
         let mut kept = 0;
         for read in 0..points.len() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::node:4");
             work.step()?;
             if kept == 0 || points[read] != points[kept - 1] {
                 points.swap(kept, read);
@@ -461,11 +491,15 @@ pub fn node(
             }
         }
         while points.len() > kept {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding.rs::node:5");
             work.step()?;
             points.pop();
         }
         if point_cmp(&edge.a, &edge.b)?.is_gt() {
             for i in 0..points.len() / 2 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("noding.rs::node:6");
                 work.step()?;
                 let other = points.len() - 1 - i;
                 points.swap(i, other);
@@ -953,6 +987,10 @@ pub mod gop028 {
                 let (total, _, max) = work.get();
                 work.set((total, 0, max));
             });
+            CYCLES.with(|work| {
+                let (total, _, max) = work.get();
+                work.set((total, 0, max));
+            });
             if at == Some(count) {
                 flag.store(true, AtomicOrdering::Relaxed);
                 if CANCEL_ONLY.with(Cell::get) {
@@ -971,6 +1009,17 @@ pub mod gop028 {
         static TRACE_SITES: Cell<bool> = const { Cell::new(false) };
         static SITES: RefCell<Vec<(&'static str, u32)>> = const { RefCell::new(Vec::new()) };
         static CANCEL_ONLY: Cell<bool> = const { Cell::new(false) };
+        static CYCLES: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+        static CYCLE_SITES: RefCell<std::collections::BTreeMap<&'static str, usize>> = const { RefCell::new(std::collections::BTreeMap::new()) };
+    }
+    pub fn cycle(site: &'static str) {
+        if PROBE.with(|probe| probe.get().is_some()) {
+            CYCLES.with(|work| {
+                let (total, gap, max) = work.get();
+                work.set((total + 1, gap + 1, max.max(gap + 1)));
+            });
+            CYCLE_SITES.with(|sites| *sites.borrow_mut().entry(site).or_default() += 1);
+        }
     }
     pub fn unit() {
         if PROBE.with(|probe| probe.get().is_some()) {
@@ -987,6 +1036,8 @@ pub mod gop028 {
                 assert!(probe.get().is_none());
                 probe.set(Some((0, at)));
                 WORK.with(|work| work.set((0, 0, 0)));
+                CYCLES.with(|work| work.set((0, 0, 0)));
+                CYCLE_SITES.with(|sites| sites.borrow_mut().clear());
                 SITES.with(|sites| sites.borrow_mut().clear());
             });
             Self
@@ -1704,6 +1755,20 @@ pub mod gop028 {
                 "CHECKPOINT620\t{}::{}\t{total}\t{units}\t{maximum}",
                 case.source, case.name
             );
+            let (cycles, _, cycle_maximum) = CYCLES.with(Cell::get);
+            let sites = CYCLE_SITES.with(|sites| sites.borrow().len());
+            println!(
+                "CHECKPOINT620-CYCLES\t{}::{}\t{cycles}\t{cycle_maximum}\t{sites}",
+                case.source, case.name
+            );
+            CYCLE_SITES.with(|sites| {
+                println!(
+                    "CHECKPOINT620-CYCLE-SITES\t{}::{}\t{}",
+                    case.source,
+                    case.name,
+                    serde_json::to_string(&*sites.borrow()).unwrap()
+                );
+            });
             drop(probe);
             for at in [1, total / 2, total - 1] {
                 flag.store(false, AtomicOrdering::Relaxed);
@@ -1713,6 +1778,27 @@ pub mod gop028 {
                 assert_eq!(Probe::count(), at + 1);
             }
         }
+    }
+
+    /// La sonda dei cicli non perde il lavoro prima del primo controllo,
+    /// dopo l'ultimo, o attraversando un controllo di sola deadline.
+    #[test]
+    fn checkpoint620_cycle_accounting() {
+        let flag = AtomicBool::new(false);
+        let _probe = Probe::start(None);
+        cycle("a");
+        cycle("b");
+        assert_eq!(CYCLES.with(Cell::get), (2, 2, 2));
+        assert_eq!(checkpoint(None, None), None);
+        cycle("a");
+        assert_eq!(CYCLES.with(Cell::get), (3, 3, 3));
+        assert_eq!(checkpoint(None, Some(&flag)), None);
+        cycle("a");
+        assert_eq!(CYCLES.with(Cell::get), (4, 1, 3));
+        CYCLE_SITES.with(|sites| {
+            assert_eq!(sites.borrow().get("a"), Some(&3));
+            assert_eq!(sites.borrow().get("b"), Some(&1));
+        });
     }
 
     /// O-M3: n/2n/4n parti vuote, visite indipendenti dal contatore dei check.

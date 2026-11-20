@@ -78,6 +78,8 @@ fn line_edges(
     work.step()?;
     let mut distinct = false;
     for p in &line.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::line_edges:1");
         work.step()?;
         if !p.x.is_finite() || !p.y.is_finite() {
             return Err(PredicateError::NonFiniteCoordinate { side });
@@ -88,6 +90,8 @@ fn line_edges(
         return Err(invalid(side));
     }
     for pair in line.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::line_edges:2");
         let value = edge(pair[0], pair[1], side, work)?;
         work.push(edges, value)?;
     }
@@ -102,6 +106,8 @@ fn cutters(
     let mut pending = CountedVec::new();
     work.push(&mut pending, geometry)?;
     while let Some(g) = pending.pop() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::cutters:1");
         work.step()?;
         match g {
             Geometry::Point(p) => {
@@ -110,6 +116,8 @@ fn cutters(
             }
             Geometry::MultiPoint(ps) => {
                 for p in &ps.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::cutters:2");
                     let e = edge(p.0, p.0, "right", work)?;
                     work.push(edges, e)?;
                 }
@@ -117,11 +125,15 @@ fn cutters(
             Geometry::LineString(l) => line_edges(l, "right", edges, work)?,
             Geometry::MultiLineString(ls) => {
                 for l in &ls.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::cutters:3");
                     line_edges(l, "right", edges, work)?;
                 }
             }
             Geometry::GeometryCollection(gs) => {
                 for g in gs.0.iter().rev() {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::cutters:4");
                     work.push(&mut pending, g)?;
                 }
             }
@@ -135,12 +147,24 @@ fn cutters(
                 match g {
                     Geometry::Polygon(p) => {
                         for l in std::iter::once(p.exterior()).chain(p.interiors()) {
+                            #[cfg(test)]
+                            crate::noding::gop028::cycle(
+                                "extended_algorithms/split_limited.rs::cutters:5",
+                            );
                             line_edges(l, "right", edges, work)?;
                         }
                     }
                     Geometry::MultiPolygon(ps) => {
                         for p in &ps.0 {
+                            #[cfg(test)]
+                            crate::noding::gop028::cycle(
+                                "extended_algorithms/split_limited.rs::cutters:6",
+                            );
                             for l in std::iter::once(p.exterior()).chain(p.interiors()) {
+                                #[cfg(test)]
+                                crate::noding::gop028::cycle(
+                                    "extended_algorithms/split_limited.rs::cutters:7",
+                                );
                                 line_edges(l, "right", edges, work)?;
                             }
                         }
@@ -196,6 +220,8 @@ fn record_path<'a>(
 ) -> Result<(), PredicateError> {
     let mut path = CountedVec::new();
     loop {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::record_path:1");
         work.step()?;
         let p = topology
             .get(*cursor)
@@ -228,6 +254,8 @@ fn split_nodes(
     let mut topology = CountedVec::new();
     let mut cuts = CountedVec::new();
     for e in &edges[..source_count] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:1");
         let mut path = CountedVec::new();
         work.nodes(2)?;
         work.push(&mut path, e.a.try_clone()?)?;
@@ -237,12 +265,20 @@ fn split_nodes(
     }
     let mut references = CountedVec::new();
     for e in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:2");
         work.push(&mut references, e)?;
     }
     crate::noding::visit(&references, work, |i, j, hits, work| {
         for index in [i, j] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:3");
             if index < source_count {
                 for p in hits.iter().flatten() {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "extended_algorithms/split_limited.rs::split_nodes:4",
+                    );
                     work.nodes(1)?;
                     work.push(&mut topology[index], p.try_clone()?)?;
                 }
@@ -256,11 +292,15 @@ fn split_nodes(
             return Ok(());
         };
         for p in hits.into_iter().flatten() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:5");
             work.push(&mut cuts[source_index], p)?;
         }
         Ok(())
     })?;
     for (e, path) in edges[..source_count].iter().zip(topology.iter_mut()) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:6");
         let reverse = compare(&e.a, &e.b)?.is_gt();
         sorted(
             path,
@@ -286,6 +326,8 @@ fn split(
     let SplitNodes { mut cuts, topology } = split_nodes(&edges, source_count, work)?;
     let mut last_nondegenerate = 0;
     for (i, e) in edges[..source_count].iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split:1");
         work.step()?;
         if e.a != e.b {
             last_nondegenerate = i;
@@ -300,6 +342,8 @@ fn split(
         work.push(&mut piece, *first)?;
     }
     for (index, points) in cuts.iter_mut().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split:2");
         let e = &edges[index];
         let reverse = compare(&e.a, &e.b)?.is_gt();
         sorted(
@@ -312,6 +356,8 @@ fn split(
         let mut previous_coord = source.0[index];
         let mut cursor = 0;
         for p in points.iter() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split:3");
             work.step()?;
             if *p == e.a || *p == e.b {
                 continue;
@@ -354,6 +400,8 @@ fn split(
         piece_has_length |= e.a != e.b;
         let mut cut_end = false;
         for p in points.iter() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split:4");
             work.step()?;
             cut_end |= *p == e.b;
         }
@@ -376,16 +424,22 @@ fn certify_paths(
 ) -> Result<(), PredicateError> {
     let mut refs = CountedVec::new();
     for edge in converted {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::certify_paths:1");
         work.push(&mut refs, edge)?;
     }
     let rounded_paths = crate::noding::node(&refs, work)?;
     let mut published = CountedVec::new();
     for (exact, rounded) in paths.iter().zip(&rounded_paths) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::certify_paths:2");
         work.step()?;
         if exact.len() < 2 || exact.len() != rounded.len() {
             return Err(PredicateError::InvalidRoundedTopology);
         }
         for i in 0..exact.len() - 1 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::certify_paths:3");
             let certificate = PublishedEdge::noded(
                 [exact[i], exact[i + 1]],
                 [&rounded[i], &rounded[i + 1]],

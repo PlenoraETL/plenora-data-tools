@@ -113,6 +113,10 @@ fn execute(
     let mut other_ids = CountedVec::new();
     if ld == 0 && rd == 0 {
         for c in geo::CoordsIter::coords_iter(other) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/point_boolean.rs::execute:1",
+            );
             work.nodes(1)?;
             work.push(&mut other_ids, other_points.len())?;
             work.push(&mut other_points, canonical(c))?;
@@ -128,11 +132,17 @@ fn execute(
     }
     let mut selected = CountedVec::new();
     for c in geo::CoordsIter::coords_iter(sites) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/point_boolean.rs::execute:2");
         let covered = if ld == 0 && rd == 0 {
             work.nodes(1)?;
             let site = canonical(c);
             let (mut low, mut high) = (0, other_ids.len());
             while low < high {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/point_boolean.rs::execute:3",
+                );
                 work.step()?;
                 let middle = low + (high - low) / 2;
                 if site_cmp(&other_points[other_ids[middle]], &site).is_lt() {
@@ -160,12 +170,18 @@ fn execute(
     }
     if ld == 0 && rd == 0 && operation == PointBooleanOp::Union {
         for c in geo::CoordsIter::coords_iter(other) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/point_boolean.rs::execute:4",
+            );
             work.nodes(1)?;
             work.push(&mut selected, canonical(c))?;
         }
     }
     let mut ids = CountedVec::new();
     for id in 0..selected.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/point_boolean.rs::execute:5");
         work.push(&mut ids, id)?;
     }
     crate::predicates::interval_index::sort_ids(
@@ -181,6 +197,8 @@ fn execute(
     let originals = super::line_boolean::Originals::new(left, right, work)?;
     let mut points = CountedVec::new();
     for id in ids {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/point_boolean.rs::execute:6");
         work.step()?;
         if points.last() != Some(&selected[id]) {
             work.nodes(1)?;
@@ -244,6 +262,10 @@ pub(super) fn copy_line(
 ) -> Result<LineString<f64>, PredicateError> {
     let mut coords = CountedVec::new();
     for c in &line.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/point_boolean.rs::copy_line:1",
+        );
         work.nodes(1)?;
         work.push(&mut coords, *c)?;
     }
@@ -267,6 +289,10 @@ pub(super) fn copy_higher(
             let shell = copy_line(p.exterior(), work)?;
             let mut holes = CountedVec::new();
             for h in p.interiors() {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/point_boolean.rs::copy_higher:1",
+                );
                 let h = copy_line(h, work)?;
                 work.push(&mut holes, h)?;
             }

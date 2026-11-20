@@ -215,9 +215,13 @@ impl<'a> BufferWork<'a> {
             return Err(DegenerateBufferError::InvalidGeometry);
         }
         for &point in &line.0 {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer.rs::line:1");
             self.coordinate(point)?;
         }
         for edge in line.0.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer.rs::line:2");
             self.step()?;
             let a = edge[0];
             let b = edge[1];
@@ -264,6 +268,8 @@ impl<'a> BufferWork<'a> {
             Geometry::Polygon(polygon) => return self.empty_surface(polygon),
             Geometry::MultiPolygon(polygons) => {
                 for polygon in &polygons.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("geodesic_buffer.rs::geometry:1");
                     self.empty_surface(polygon)?;
                 }
                 return Ok(());
@@ -274,6 +280,8 @@ impl<'a> BufferWork<'a> {
             }
             Geometry::MultiPoint(points) => {
                 for point in &points.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("geodesic_buffer.rs::geometry:2");
                     self.coordinate(point.0)?;
                 }
                 points.0.is_empty()
@@ -285,6 +293,8 @@ impl<'a> BufferWork<'a> {
             Geometry::MultiLineString(lines) => {
                 let mut empty = true;
                 for line in &lines.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle("geodesic_buffer.rs::geometry:3");
                     self.line(line, ellipsoid)?;
                     empty &= line.0.is_empty();
                 }
@@ -350,11 +360,15 @@ pub fn geodesic_empty_buffer_with_limits<'a>(
     }
     let mut items = 0_u64;
     for &radius in radii_m {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer.rs::geodesic_empty_buffer_with_limits:1");
         work.step()?;
         if !radius.is_finite() {
             return Err(DegenerateBufferError::InvalidRadius);
         }
         for input in inputs {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer.rs::geodesic_empty_buffer_with_limits:2");
             work.geometry(input, radius, &ellipsoid)?;
         }
         let count = if union_results {
@@ -372,6 +386,8 @@ pub fn geodesic_empty_buffer_with_limits<'a>(
     work.checkpoint()?;
     let count = usize::try_from(items).map_err(|_| DegenerateBufferError::OutputLimit)?;
     for _ in 0..count {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer.rs::geodesic_empty_buffer_with_limits:3");
         work.step()?;
     }
     let polygons = EmptyPolygonBatch { count };
@@ -406,11 +422,15 @@ fn verify_surface(
         }
     }
     for polygon in polygons {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer.rs::verify_surface:1");
         work.step()?;
         for (index, ring) in std::iter::once(polygon.exterior())
             .chain(polygon.interiors())
             .enumerate()
         {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer.rs::verify_surface:2");
             work.step()?;
             if ring.0.is_empty() {
                 continue;
@@ -435,6 +455,8 @@ fn ring_orientation(
     use crate::noding::P;
     let mut area = work.integer(0)?;
     for edge in ring.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer.rs::ring_orientation:1");
         work.step()?;
         let a = P::of_in(edge[0], work)?;
         let b = P::of_in(edge[1], work)?;

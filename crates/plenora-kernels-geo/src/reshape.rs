@@ -153,6 +153,8 @@ fn transverse(
         (1, &reshaper[hit.reshaper.before]),
         (1, &reshaper[hit.reshaper.after]),
     ] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("reshape.rs::transverse:1");
         work.nodes(1)?;
         work.push(&mut rays, (owner, point.try_sub(&hit.point)?))?;
     }
@@ -166,6 +168,8 @@ fn transverse(
         work,
     )?;
     for i in 0..4 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("reshape.rs::transverse:2");
         work.step()?;
         let a = &rays[i];
         let b = &rays[(i + 1) % 4];
@@ -185,6 +189,8 @@ fn crossings(
     let right = edges(reshaper, work)?;
     let mut refs = CountedVec::new();
     for edge in left.iter().chain(right.iter()) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("reshape.rs::crossings:1");
         work.push(&mut refs, edge)?;
     }
     let mut hits: CountedVec<Crossing> = CountedVec::new();
@@ -203,6 +209,8 @@ fn crossings(
         }
         if let [Some(point), _] = pair {
             for hit in &hits {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("reshape.rs::crossings:2");
                 work.step()?;
                 if hit.point == point {
                     return Ok(());
@@ -229,6 +237,8 @@ fn crossings(
         return Err(ReshapeError::Unsupported);
     }
     for hit in &hits {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("reshape.rs::crossings:3");
         if !transverse(hit, target, reshaper, work)? {
             return Err(ReshapeError::Unsupported);
         }
@@ -253,21 +263,29 @@ fn execute(
     let end = &hits[1];
     let mut output = CountedVec::new();
     for point in &target_points[..=start.target.before] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("reshape.rs::execute:1");
         append(&mut output, point, work)?;
     }
     append(&mut output, &start.point, work)?;
     work.step()?;
     if start.reshaper.compare(&end.reshaper)?.is_lt() {
         for i in start.reshaper.after..=end.reshaper.before {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("reshape.rs::execute:2");
             append(&mut output, &reshaper_points[i], work)?;
         }
     } else {
         for i in (end.reshaper.after..=start.reshaper.before).rev() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("reshape.rs::execute:3");
             append(&mut output, &reshaper_points[i], work)?;
         }
     }
     append(&mut output, &end.point, work)?;
     for point in &target_points[end.target.after..] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("reshape.rs::execute:4");
         append(&mut output, point, work)?;
     }
     simple(&output, work)?;

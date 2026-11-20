@@ -488,6 +488,8 @@ impl Q {
         };
         let mut b = d.copy()?;
         while b.value.sign() != Sign::NoSign {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/exact.rs::new:1");
             crate::noding::check_interruption(
                 a.lease.budget().deadline,
                 None,
@@ -669,6 +671,8 @@ pub fn sum_sign(
 ) -> Result<Ordering, PredicateError> {
     let mut filter = BoundedSum::new(128, work)?;
     for (term, subtract) in terms {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/exact.rs::sum_sign:1");
         work.step()?;
         filter.add(term, *subtract)?;
     }
@@ -679,6 +683,8 @@ pub fn sum_sign(
     let mut value = CountedInt::int(0, &work.budget)?;
     let mut bound = u128::from(usize::BITS) + 2;
     for (term, subtract) in terms {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/exact.rs::sum_sign:2");
         work.step()?;
         // Al massimo usize::MAX denominatori di MAX_BITS bit: su host
         // fino a 64 bit il contatore di separazione richiede meno di 83 bit.
@@ -701,6 +707,8 @@ pub fn sum_sign(
     let count = CountedInt::created(BigInt::from(terms.len()), &work.budget)?;
     let mut precision = 128_u128;
     loop {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("noding/exact.rs::sum_sign:3");
         work.step()?;
         // L'errore troncato ha modulo strettamente minore del numero di
         // termini. Dopo un passo indeciso l'accumulatore ha al massimo
@@ -721,6 +729,8 @@ pub fn sum_sign(
         value = value.shift(1)?;
         let mut exact = true;
         for (remainder, denominator) in residuals.iter_mut() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("noding/exact.rs::sum_sign:4");
             work.step()?;
             let doubled = remainder.shift(1)?;
             value = value.add(&doubled.div(denominator)?)?;

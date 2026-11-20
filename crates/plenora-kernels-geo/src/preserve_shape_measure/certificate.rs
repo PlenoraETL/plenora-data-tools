@@ -103,6 +103,8 @@ fn sine(phi: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     let mut term = phi;
     let mut sum = phi;
     for n in 1..=12 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("preserve_shape_measure/certificate.rs::sine:1");
         term = term
             .mul(squared)
             .div_positive(ShapeInterval::exact(f64::from(2 * n * (2 * n + 1))))?;
@@ -123,6 +125,8 @@ fn log_series(z: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     let mut power = t;
     let mut sum = t;
     for n in 1..25 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("preserve_shape_measure/certificate.rs::log_series:1");
         power = power.mul(squared);
         sum = sum.add(power.div_positive(ShapeInterval::exact(f64::from(2 * n + 1)))?);
     }
@@ -135,6 +139,8 @@ fn logarithm(mut z: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
     }
     let mut exponent = 0_i32;
     for _ in 0..10 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("preserve_shape_measure/certificate.rs::logarithm:1");
         if z.lo >= 0.75 {
             break;
         }
@@ -142,6 +148,8 @@ fn logarithm(mut z: ShapeInterval) -> Result<ShapeInterval, ShapeMeasureError> {
         exponent -= 1;
     }
     for _ in 0..10 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("preserve_shape_measure/certificate.rs::logarithm:2");
         if z.hi <= 1.5 {
             break;
         }

@@ -156,6 +156,10 @@ fn occupies_interval(shape: &Shape, p: &P, work: &mut Work<'_>) -> Result<bool, 
         return Ok(true);
     }
     for edge in shape.edges() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::occupies_interval:1",
+        );
         work.step()?;
         if edge.contains(p)? {
             return Ok(true);
@@ -163,6 +167,10 @@ fn occupies_interval(shape: &Shape, p: &P, work: &mut Work<'_>) -> Result<bool, 
     }
     Ok(false)
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sonde O-M3 per ciclo, assenti in produzione"
+)]
 fn boundary(
     a: &Shape,
     b: &Shape,
@@ -172,12 +180,24 @@ fn boundary(
 ) -> Result<Boundary, PredicateError> {
     let mut source = CountedVec::new();
     for edge in a.edges().chain(b.edges()) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::boundary:1",
+        );
         work.push(&mut source, edge)?;
     }
     let nodes = crate::noding::node(&source, work)?;
     let mut atomic = CountedVec::new();
     for path in &nodes {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::boundary:2",
+        );
         for pair in path.windows(2) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::boundary:3",
+            );
             charge(0, limits.max_edges, work)?;
             work.nodes(2)?;
             let (a, b) = if point_cmp(&pair[0], &pair[1])?.is_gt() {
@@ -198,6 +218,10 @@ fn boundary(
     let mut edges = CountedVec::new();
     let mut contacts = CountedVec::new();
     for id in ids {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::boundary:4",
+        );
         work.step()?;
         let edge = &atomic[id];
         let p = midpoint(edge)?;
@@ -250,7 +274,15 @@ fn boundary(
     }
     let mut sites = CountedVec::new();
     for path in nodes {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::boundary:5",
+        );
         for p in path {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::boundary:6",
+            );
             work.push(&mut sites, p)?;
         }
     }
@@ -263,6 +295,10 @@ fn boundary(
 
 // Un nodo costruito di grado due su un supporto rettilineo non appartiene
 // alla topologia pubblicata. I vertici originali e le incidenze restano.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sonde O-M3 per ciclo, assenti in produzione"
+)]
 pub(super) fn carried_edges(
     edges: &[Edge],
     incident: &[Edge],
@@ -271,6 +307,10 @@ pub(super) fn carried_edges(
 ) -> Result<CountedVec<Edge>, PredicateError> {
     let mut endpoints = CountedVec::new();
     for (id, edge) in edges.iter().chain(incident).enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:1",
+        );
         work.push(&mut endpoints, (&edge.a, id))?;
         work.push(&mut endpoints, (&edge.b, id))?;
     }
@@ -281,10 +321,18 @@ pub(super) fn carried_edges(
     )?;
     let mut used = CountedVec::new();
     for _ in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:2",
+        );
         work.push(&mut used, false)?;
     }
     let mut result = CountedVec::new();
     for (id, edge) in edges.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:3",
+        );
         work.step()?;
         if used[id] {
             continue;
@@ -293,7 +341,15 @@ pub(super) fn carried_edges(
         let mut a = edge.a.try_clone()?;
         let mut b = edge.b.try_clone()?;
         for at_start in [true, false] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:4",
+            );
             loop {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:5",
+                );
                 work.step()?;
                 let at = if at_start { &a } else { &b };
                 if originals.contains(at, work)? {
@@ -301,6 +357,10 @@ pub(super) fn carried_edges(
                 }
                 let (mut low, mut high) = (0, endpoints.len());
                 while low < high {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:6",
+                    );
                     work.step()?;
                     let mid = low + (high - low) / 2;
                     if point_cmp(endpoints[mid].0, at)?.is_lt() {
@@ -312,6 +372,10 @@ pub(super) fn carried_edges(
                 let mut degree = 0;
                 let mut next = None;
                 for &(point, other) in &endpoints[low..] {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "predicates/arrangement_indexed/polygon_boolean.rs::carried_edges:7",
+                    );
                     work.step()?;
                     if point != at || degree == 3 {
                         break;
@@ -374,6 +438,10 @@ fn successor(
     let incoming = edges[current].a.try_sub(at)?;
     let (mut low, mut high) = (0, outgoing.len());
     while low < high {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::successor:1",
+        );
         work.step()?;
         let mid = low + (high - low) / 2;
         if angle_cmp(&edges[outgoing[mid]].b.try_sub(at)?, &incoming)?.is_lt() {
@@ -396,6 +464,8 @@ fn cycle(ids: &[usize], edges: &[Edge], work: &mut Work<'_>) -> Result<Cycle, Pr
     let mut minimum = 0;
     let mut ring = CountedVec::new();
     for (i, &id) in ids.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/polygon_boolean.rs::cycle:1");
         work.step()?;
         if point_cmp(&edges[id].a, &edges[ids[minimum]].a)?.is_lt() {
             minimum = i;
@@ -430,12 +500,18 @@ fn cycles(
 ) -> Result<CountedVec<Cycle>, PredicateError> {
     let mut points = CountedVec::new();
     for edge in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/polygon_boolean.rs::cycles:1");
         work.push(&mut points, &edge.a)?;
     }
     let ids = ordered_ids(&points, |a, b| point_cmp(a, b), work)?;
     let vertex = |p: &P, work: &mut Work<'_>| -> Result<usize, PredicateError> {
         let (mut low, mut high) = (0, ids.len());
         while low < high {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::cycles:2",
+            );
             work.step()?;
             let mid = low + (high - low) / 2;
             match point_cmp(points[ids[mid]], p)? {
@@ -448,13 +524,19 @@ fn cycles(
     };
     let mut outgoing = CountedVec::new();
     for _ in &ids {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/polygon_boolean.rs::cycles:3");
         work.push(&mut outgoing, CountedVec::new())?;
     }
     for (id, edge) in edges.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/polygon_boolean.rs::cycles:4");
         let v = vertex(&edge.a, work)?;
         work.push(&mut outgoing[v], id)?;
     }
     for list in outgoing.iter_mut() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/polygon_boolean.rs::cycles:5");
         crate::noding::sorted(
             list,
             |a, b| {
@@ -468,6 +550,8 @@ fn cycles(
     }
     let mut arcs = CountedVec::new();
     for (id, edge) in edges.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/polygon_boolean.rs::cycles:6");
         let arc = crate::noding::faces::ArcSide {
             from: vertex(&edge.a, work)?,
             to: vertex(&edge.b, work)?,
@@ -503,6 +587,10 @@ fn publish_ring(
     let mut coords = CountedVec::new();
     let mut minimum = 0;
     for edge in &cycle.edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::publish_ring:1",
+        );
         work.nodes(1)?;
         let c = originals.coordinate(&edge.a, work)?;
         if !coords.is_empty() && coordinate_cmp(c, coords[minimum]).is_lt() {
@@ -512,11 +600,19 @@ fn publish_ring(
     }
     let mut rotated = CountedVec::new();
     for i in 0..=coords.len() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::publish_ring:2",
+        );
         work.nodes(1)?;
         work.push(&mut rotated, coords[(minimum + i) % coords.len()])?;
     }
     Ok(LineString::new(rotated.export(work)?))
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "Sonde O-M3 per ciclo, assenti in produzione"
+)]
 fn assemble(
     rings: &[Cycle],
     originals: &Originals,
@@ -524,6 +620,10 @@ fn assemble(
 ) -> Result<Geometry<f64>, PolygonBooleanError> {
     let mut bounds = CountedVec::new();
     for ring in rings {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble:1",
+        );
         let p = &ring.edges[0].a;
         let mut bb = [
             p.x.try_clone()?,
@@ -532,10 +632,18 @@ fn assemble(
             p.y.try_clone()?,
         ];
         for edge in &ring.edges {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::assemble:2",
+            );
             for (i, q) in [&edge.a.x, &edge.a.x, &edge.a.y, &edge.a.y]
                 .into_iter()
                 .enumerate()
             {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_boolean.rs::assemble:3",
+                );
                 work.step()?;
                 let order = q.try_cmp(&bb[i])?;
                 if (i % 2 == 0 && order.is_lt()) || (i % 2 == 1 && order.is_gt()) {
@@ -548,11 +656,19 @@ fn assemble(
     let index = crate::predicates::interval_index::BoxIndex::new(bounds, work)?;
     let mut owners = CountedVec::new();
     for hole in rings {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble:4",
+        );
         work.step()?;
         let mut owner: Option<usize> = None;
         if !hole.shell {
             let p = midpoint(&hole.edges[0])?;
             for id in index.point_candidates(&p, work)? {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_boolean.rs::assemble:5",
+                );
                 let shell = &rings[id];
                 work.step()?;
                 if !shell.shell || !contains(shell, &p, work)? {
@@ -574,15 +690,27 @@ fn assemble(
     }
     let mut assigned = CountedVec::new();
     for _ in rings {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble:6",
+        );
         work.push(&mut assigned, CountedVec::new())?;
     }
     for (id, owner) in owners.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble:7",
+        );
         if let Some(owner) = owner {
             work.push(&mut assigned[*owner], id)?;
         }
     }
     let mut polygons = CountedVec::new();
     for (id, shell) in rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble:8",
+        );
         work.step()?;
         if !shell.shell {
             continue;
@@ -590,6 +718,10 @@ fn assemble(
         let exterior = publish_ring(shell, originals, work)?;
         let mut holes = CountedVec::new();
         for &hole in &assigned[id] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::assemble:9",
+            );
             let ring = publish_ring(&rings[hole], originals, work)?;
             work.push(&mut holes, ring)?;
         }
@@ -692,6 +824,10 @@ fn assemble_result(
     };
     let mut publications = CountedVec::new();
     for (id, edge) in boundary.edges.iter().chain(&boundary.contacts).enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:1",
+        );
         work.step()?;
         let surface = id < boundary.edges.len();
         if filter.is_some_and(|d| d != if surface { 2 } else { 1 }) {
@@ -707,17 +843,29 @@ fn assemble_result(
     }
     let mut candidates = CountedVec::new();
     for p in boundary.sites.iter().chain(&a.points).chain(&b.points) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:2",
+        );
         work.push(&mut candidates, p)?;
     }
     // Tutti i siti nodati sono candidati, compresi gli incroci fra linee.
     let ids = ordered_ids(&candidates, |a, b| point_cmp(a, b), work)?;
     let mut coverage = CountedVec::new();
     for edge in boundary.edges.iter().chain(&boundary.contacts) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:3",
+        );
         work.push(&mut coverage, edge)?;
     }
     let coverage_index = IntervalIndex::new(coverage.iter().map(|e| (&e.a.x, &e.b.x)), work)?;
     let mut points = CountedVec::new();
     for id in ids {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:4",
+        );
         work.step()?;
         let p = candidates[id];
         if !selected(op, a.position(p, work)? != 2, b.position(p, work)? != 2) {
@@ -725,6 +873,10 @@ fn assemble_result(
         }
         let mut covered = false;
         for id in coverage_index.candidates(&p.x, work)? {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:5",
+            );
             work.step()?;
             if coverage[id].contains(p)? {
                 covered = true;
@@ -756,8 +908,16 @@ fn assemble_result(
     if filter.is_none_or(|d| d == 1) {
         let mut lines = CountedVec::new();
         for edge in &boundary.contacts {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:6",
+            );
             let mut coords = CountedVec::new();
             for p in [&edge.a, &edge.b] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "predicates/arrangement_indexed/polygon_boolean.rs::assemble_result:7",
+                );
                 work.nodes(1)?;
                 let c = originals.coordinate(p, work)?;
                 work.push(&mut coords, c)?;
@@ -813,7 +973,15 @@ pub(crate) fn execute_many(
     let mut a = Shape::default();
     let mut b = Shape::default();
     for (geometries, shape) in [(left, &mut a), (right, &mut b)] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::execute_many:1",
+        );
         for geometry in geometries {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "predicates/arrangement_indexed/polygon_boolean.rs::execute_many:2",
+            );
             work.step()?;
             general_supported(geometry, work)?;
             super::relate(geometry, &empty, work)?;
@@ -832,6 +1000,10 @@ pub(super) fn general_supported(
     let mut pending = CountedVec::new();
     work.push(&mut pending, g)?;
     while let Some(g) = pending.pop() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "predicates/arrangement_indexed/polygon_boolean.rs::general_supported:1",
+        );
         work.step()?;
         match g {
             Geometry::Point(_)
@@ -842,6 +1014,10 @@ pub(super) fn general_supported(
             | Geometry::MultiPolygon(_) => {}
             Geometry::GeometryCollection(gs) => {
                 for g in &gs.0 {
+                    #[cfg(test)]
+                    crate::noding::gop028::cycle(
+                        "predicates/arrangement_indexed/polygon_boolean.rs::general_supported:2",
+                    );
                     work.push(&mut pending, g)?;
                 }
             }

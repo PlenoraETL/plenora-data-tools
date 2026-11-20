@@ -93,6 +93,8 @@ fn array(
     super::relate(right, &empty, &mut work)?;
     let mut output = CountedVec::new();
     for left in inputs {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("predicates/arrangement_indexed/general_boolean.rs::array:1");
         let result = polygon_boolean::execute_many(
             std::slice::from_ref(left),
             std::slice::from_ref(right),

@@ -100,6 +100,8 @@ fn center(input: &Geometry, work: &mut BufferWork<'_>) -> Result<Coord, Degenera
                 .ok_or(DegenerateBufferError::UnsupportedProfile)?
                 .0;
             for p in &points.0 {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_buffer/point.rs::center:1");
                 work.coordinate(p.0)?;
                 if p.0 != first {
                     return Err(DegenerateBufferError::UnsupportedProfile);
@@ -140,6 +142,8 @@ fn plan(
     }
     let mut n = 16_u32;
     loop {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/point.rs::plan:1");
         // 4 > pi; n potenza di due, conversione u32 -> f64 esatta.
         let discretization_m = (4.0 * radius / f64::from(n)).next_up();
         // 8 > 2*pi; include lo spostamento di entrambi gli estremi numerici.
@@ -196,6 +200,8 @@ fn ring_shared<E: From<DegenerateBufferError>>(
         return Err(DegenerateBufferError::MemoryLimit.into());
     }
     for k in 0..n {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/point.rs::ring_shared:1");
         checkpoint()?;
         // Azimut da nord in senso orario: il segno meno rende l'esterno antiorario.
         let azimuth = -360.0 * f64::from(k) / f64::from(n);
@@ -225,6 +231,8 @@ fn verify_planar_fan<E: From<DegenerateBufferError>>(
 ) -> Result<(), E> {
     let mut crossings = 0_u32;
     for edge in vertices.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/point.rs::verify_planar_fan:1");
         checkpoint()?;
         let [a, b] = [edge[0], edge[1]];
         if RobustKernel::orient2d(center, a, b) != Orientation::CounterClockwise {
@@ -291,9 +299,17 @@ pub fn geodesic_point_buffer_with_limits<'a>(
     }
     let mut vertices = 0_u64;
     for &radius in radii_m {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:1",
+        );
         work.step()?;
         let (n, _) = plan(radius, tolerance_m, crs)?;
         for input in inputs {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:2",
+            );
             domain(center(input, &mut work)?, radius)?;
             vertices = vertices
                 .checked_add(u64::from(n) + 1)
@@ -321,9 +337,17 @@ pub fn geodesic_point_buffer_with_limits<'a>(
         .try_reserve_exact(items)
         .map_err(|_| DegenerateBufferError::Allocation)?;
     for &radius in radii_m {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:3",
+        );
         work.step()?;
         let (n, certificate) = plan(radius, tolerance_m, crs)?;
         for input in inputs {
+            #[cfg(test)]
+            crate::noding::gop028::cycle(
+                "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:4",
+            );
             let p = center(input, &mut work)?;
             let polygon = ring(p, radius, n, &ellipsoid, || work.step())?;
             work.step()?;
@@ -350,6 +374,10 @@ pub fn geodesic_point_buffer_with_limits<'a>(
         .reserve_export(bytes)
         .map_err(|error| topology_error(&error))?;
     for (index, disk) in disks.iter_mut().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle(
+            "geodesic_buffer/point.rs::geodesic_point_buffer_with_limits:5",
+        );
         let geometry = Geometry::Polygon(std::mem::replace(&mut disk.polygon, Polygon::empty()));
         super::verify_surface(&geometry, &mut topology).map_err(verification_error)?;
         super::verify_coverage(&geometry, &inputs[index % inputs.len()], &mut topology)

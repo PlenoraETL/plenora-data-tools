@@ -72,6 +72,8 @@ pub(crate) fn ring_area(
     let mut margin = 0.0;
     let mut magnitude = 0.0;
     for pair in ring.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::ring_area:1");
         work.step()?;
         let (_, _, _, _, _, _, area, _): (f64, f64, f64, f64, f64, f64, f64, f64) = ellipsoid
             .geodetica()
@@ -82,6 +84,8 @@ pub(crate) fn ring_area(
         magnitude = (magnitude + area.abs()).next_up();
     }
     for point in &ring.0 {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::ring_area:2");
         work.step()?;
         polygon.add_point(point.y, point.x);
         margin += 1.0;
@@ -116,6 +120,8 @@ fn local_orientation(
     let mut perimeter = 0.0;
     let mut strip = 0.0;
     for pair in ring.0.windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::local_orientation:1");
         let length = work.inverse(pair[0], pair[1])?.0 + metric::ROUND_M;
         perimeter = (perimeter + length).next_up();
         strip = (strip + 16.0 * (length / 5.9e6).powi(3)).next_up();
@@ -138,6 +144,8 @@ fn local_orientation(
     let mut rounding = 0.0;
     let mut count = 0.0;
     for pair in ring.0[1..].windows(2) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::local_orientation:2");
         work.step()?;
         let a = normal(pair[0]);
         let b = normal(pair[1]);
@@ -217,7 +225,11 @@ pub(crate) fn validate(
         separate(index.root, index.root, index, work)?;
     }
     for (ri, ring) in index.rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::validate:1");
         for i in ring.begin..ring.end {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_surface.rs::validate:2");
             let next = if i + 1 == ring.end { ring.begin } else { i + 1 };
             adjacent(index.nodes[i], index.nodes[next], work)?;
         }
@@ -230,6 +242,8 @@ pub(crate) fn validate(
                 return Err(GeodesicDistanceError::InvalidGeometry);
             }
             for other in &index.rings[ring.shell + 1..ri] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_surface.rs::validate:3");
                 if in_ring(point, other, &index.nodes, work)?
                     || in_ring(index.nodes[other.begin].centre, ring, &index.nodes, work)?
                 {
@@ -240,11 +254,15 @@ pub(crate) fn validate(
     }
     // Le componenti di MultiPolygon non possono avere interni sovrapposti.
     for (i, ring) in index.rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::validate:4");
         work.step()?;
         if ring.shell != i {
             continue;
         }
         for (j, other) in index.rings.iter().enumerate().skip(i + 1) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_surface.rs::validate:5");
             work.step()?;
             if other.shell != j {
                 continue;
@@ -325,7 +343,11 @@ fn crossing(
         work.at(b.arc, b.arc.hi)?,
     ];
     for x in &endpoints[..2] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::crossing:1");
         for y in &endpoints[2..] {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_surface.rs::crossing:2");
             if x == y {
                 return Ok(true);
             }
@@ -337,6 +359,8 @@ fn crossing(
         (endpoints[2], endpoints[3], endpoints[0]),
         (endpoints[2], endpoints[3], endpoints[1]),
     ] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::crossing:3");
         if (p.x == q.x && p.x == r.x && (p.y.min(q.y)..=p.y.max(q.y)).contains(&r.y))
             || (p.y == 0.0
                 && q.y == 0.0
@@ -352,6 +376,8 @@ fn crossing(
         endpoints.into(),
         (endpoints[2], endpoints[3], endpoints[0], endpoints[1]),
     ] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::crossing:4");
         let (base_length, axis, _, _) = work.inverse(p, q)?;
         let (dr, ar, _, _) = work.inverse(p, r)?;
         let (dt, at, _, _) = work.inverse(p, t)?;
@@ -441,6 +467,8 @@ fn in_ring(
         error: 0.0,
     };
     for &ball in &nodes[ring.begin..ring.end] {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::in_ring:1");
         fan_piece(point, ball, &mut sum, work, 0)?;
     }
     // K<=1/(a^2*(1-f)^2), area totale<=4pi*a^2: la regione minore
@@ -474,6 +502,8 @@ fn in_polygon(
         .skip(shell + 1)
         .take_while(|ring| ring.shell == shell)
     {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::in_polygon:1");
         if in_ring(point, hole, &index.nodes, work)? {
             return Ok(false);
         }
@@ -487,11 +517,15 @@ pub(crate) fn contains_any(
     work: &mut Work<'_>,
 ) -> Result<bool, GeodesicDistanceError> {
     for (i, ring) in surface.rings.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_surface.rs::contains_any:1");
         work.step()?;
         if ring.shell != i {
             continue;
         }
         for &point in &other.representatives {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_surface.rs::contains_any:2");
             work.step()?;
             if in_polygon(point, i, surface, work)? {
                 return Ok(true);

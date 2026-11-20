@@ -39,11 +39,15 @@ fn validate_impl(
     work: &mut Work<'_>,
 ) -> Result<(), UnionBufferError> {
     for polygon in polygons(input) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:1");
         work.step()?;
         if polygon.exterior().0.is_empty() && !polygon.interiors().is_empty() {
             return Err(BufferFailure::InvalidGeometry.into());
         }
         for hole in polygon.interiors() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:2");
             work.step()?;
             if hole.0.is_empty() {
                 return Err(BufferFailure::InvalidGeometry.into());
@@ -54,6 +58,8 @@ fn validate_impl(
     let mut south = f64::INFINITY;
     let mut north = f64::NEG_INFINITY;
     for (ring_id, ring) in parts(input)?.enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:3");
         work.step()?;
         if ring.0.is_empty() {
             continue;
@@ -63,6 +69,8 @@ fn validate_impl(
         }
         let count = ring.0.len() - 1;
         for (index, pair) in ring.0.windows(2).enumerate() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:4");
             work.step()?;
             let a = pair[0];
             let b = pair[1];
@@ -97,6 +105,10 @@ fn validate_impl(
             let (_, forwards, _, _): (f64, f64, f64, f64) =
                 ellipsoid.geodetica().inverse(a.y, a.x, b.y, b.x);
             for (end, azimuth, distance) in [(before, backwards, back), (b, forwards, length)] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle(
+                    "geodesic_buffer/projected/surface.rs::validate_impl:5",
+                );
                 work.step()?;
                 let (lat, lon): (f64, f64) =
                     ellipsoid.geodetica().direct(a.y, a.x, azimuth, distance);
@@ -119,7 +131,11 @@ fn validate_impl(
         return Err(BufferFailure::UnsupportedSurface.into());
     }
     for (i, a) in edges.iter().enumerate() {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:6");
         for b in edges.iter().skip(i + 1) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:7");
             work.step()?;
             if a.ring == b.ring
                 && (b.index == a.index + 1 || (a.index == 0 && b.index + 1 == a.count))
@@ -173,6 +189,8 @@ fn junction(
 ) -> Result<(), UnionBufferError> {
     let mut rays: CountedVec<JunctionRay> = CountedVec::new();
     for edge in edges {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::junction:1");
         work.step()?;
         let endpoints = if edge.a == origin {
             [Some(edge.b), None]
@@ -184,8 +202,12 @@ fn junction(
             [None, None]
         };
         for end in endpoints.into_iter().flatten() {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::junction:2");
             let mut duplicate = false;
             for ray in &rays[..] {
+                #[cfg(test)]
+                crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::junction:3");
                 work.step()?;
                 duplicate |= ray.end == end
                     || axis_contains(origin, ray.end, end)
@@ -222,6 +244,8 @@ fn junction(
     // L'ordine circolare dei raggi qualifica i settori dell'omotopia al
     // contatto. Un duplicato intero e' lo stesso arco geodetico minimo.
     for (index, a) in rays.iter().enumerate().skip(1) {
+        #[cfg(test)]
+        crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::junction:4");
         let plane_a = (a.planar - first.planar).rem_euclid(360.0);
         let geo_a = (a.geodesic - first.geodesic).rem_euclid(360.0);
         if plane_a.min(360.0 - plane_a) <= 1e-8 || geo_a.min(360.0 - geo_a) <= a.error + first.error
@@ -229,6 +253,8 @@ fn junction(
             return Err(BufferFailure::AccuracyUnproven.into());
         }
         for b in rays.iter().skip(index + 1) {
+            #[cfg(test)]
+            crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::junction:5");
             work.step()?;
             let plane_b = (b.planar - first.planar).rem_euclid(360.0);
             let geo_b = (b.geodesic - first.geodesic).rem_euclid(360.0);
