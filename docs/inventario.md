@@ -112,7 +112,7 @@ Funzioni `test_*` dei self-test Python in `scripts/`.
 
 | file | prove |
 | --- | --- |
-| `scripts/test_allineamento_dipendenze.py` | 2 |
+| `scripts/test_allineamento_dipendenze.py` | 8 |
 | `scripts/test_arrow_ingressi.py` | 17 |
 | `scripts/test_avvisi_crate.py` | 18 |
 | `scripts/test_check_cargo_deny.py` | 4 |
