@@ -12,7 +12,7 @@
     reason = "Maggioranti scritti nella forma delle dimostrazioni"
 )]
 
-mod certificate;
+pub(crate) mod certificate;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;

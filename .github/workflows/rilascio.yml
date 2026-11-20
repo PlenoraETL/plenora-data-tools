@@ -72,13 +72,12 @@ jobs:
           -D unsafe-code
           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
           -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
-      # La suite lunga comprende tests/superficie_rust.rs, la mappa degli
+      # La suite ordinaria comprende tests/superficie_rust.rs, la mappa degli
       # export Rust compilata da consumatore.
-      - name: cargo test (suite lunga)
+      - name: cargo test (suite ordinaria)
         if: ${{ !cancelled() }}
-        env:
-          PLENORA_TEST_LUNGHI: '1'
-        run: cargo test --workspace --locked --no-fail-fast
+        # Matrice massiva di round-trip: eseguita dal job manuale suite-lunga.
+        run: cargo test --workspace --locked --no-fail-fast -- --skip matrice_metadati::catalogo_chiavi_trasporti
 
   costruzione:
     name: costruzione (${{ matrix.os }})
@@ -388,7 +387,7 @@ jobs:
             "${artefatti[@]}" \
             --verifica "rilascio.yml costruzione: scripts/verifica_cli_contratti.py sulla CLI di ogni sistema (Linux, Windows)" \
             --verifica "rilascio.yml abi3: scripts/verifica_sdk_python.py sul wheel installato (Python 3.14, Linux e Windows)" \
-            --verifica "rilascio.yml gate: fmt, clippy, PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked --no-fail-fast, superficie Rust compresa (Linux, Windows)" \
+            --verifica "rilascio.yml gate: fmt, clippy, cargo test --workspace --locked --no-fail-fast -- --skip matrice_metadati::catalogo_chiavi_trasporti, superficie Rust compresa (Linux, Windows)" \
             --uscita "dist/plenora-data-tools-${versione}.adoption-manifest.json"
       - name: SBOM verificato prima dell'attestazione
         run: python3 scripts/genera_sbom_rilascio.py --check "dist/plenora-data-tools-${VERSIONE}.sbom.cdx.json" --dist dist

@@ -244,8 +244,23 @@ impl DistanceKey {
     }
 
     pub fn segments(a: &Edge, b: &Edge, work: &mut Work<'_>) -> Result<Self, PredicateError> {
+        Self::segments_impl(a, b, work, true)
+    }
+
+    fn segments_impl(
+        a: &Edge,
+        b: &Edge,
+        work: &mut Work<'_>,
+        point_query: bool,
+    ) -> Result<Self, PredicateError> {
         work.pair()?;
         let direction = a.b.try_sub(&a.a)?;
+        // Una query puntuale ha un solo candidato: la distanza dal punto
+        // al lato; i suoi estremi non possono essere piu' vicini del lato.
+        // La coppia resta contabilizzata come nel percorso generico.
+        if point_query && direction.x.sign().is_eq() && direction.y.sign().is_eq() {
+            return Self::point_segment(&a.a, b, work);
+        }
         let other = b.b.try_sub(&b.a)?;
         let denominator = direction.try_cross(&other)?;
         if !denominator.sign().is_eq() {
@@ -551,6 +566,44 @@ mod tests {
     use super::*;
     use crate::predicates::RelateLimits;
     use proptest::prelude::*;
+
+    #[test]
+    fn point_query_distance_matches_generic_segment_path() {
+        // C1: scorciatoia della query puntuale contro i quattro candidati
+        // generici, anche degeneri e alle scale estreme IEEE.
+        for scale in [f64::from_bits(1), 1e-200, 1.0, 1e200, f64::MAX / 8.0] {
+            let mut work = Work::new(RelateLimits::default(), None);
+            for x in -2..=2 {
+                for y in -2..=2 {
+                    for (ax, ay, bx, by) in [
+                        (-3.0, 0.0, 3.0, 0.0),
+                        (0.0, -3.0, 0.0, 3.0),
+                        (-3.0, -2.0, 3.0, 2.0),
+                        (-3.0, 2.0, 3.0, -2.0),
+                        (1.0, 1.0, 1.0, 1.0),
+                    ] {
+                        let query = Edge {
+                            a: point(f64::from(x) * scale, f64::from(y) * scale, &work),
+                            b: point(f64::from(x) * scale, f64::from(y) * scale, &work),
+                        };
+                        let edge = Edge {
+                            a: point(ax * scale, ay * scale, &work),
+                            b: point(bx * scale, by * scale, &work),
+                        };
+                        let pairs = work.pairs;
+                        let fast = DistanceKey::segments(&query, &edge, &mut work).unwrap();
+                        assert_eq!(work.pairs, pairs + 1);
+                        let generic =
+                            DistanceKey::segments_impl(&query, &edge, &mut work, false).unwrap();
+                        assert_eq!(work.pairs, pairs + 2);
+                        assert_eq!(fast.compare(&generic).unwrap(), std::cmp::Ordering::Equal);
+                        let reversed = DistanceKey::segments(&edge, &query, &mut work).unwrap();
+                        assert_eq!(fast.compare(&reversed).unwrap(), std::cmp::Ordering::Equal);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn metric_rounding_certification_and_nonrepresentable_values() {

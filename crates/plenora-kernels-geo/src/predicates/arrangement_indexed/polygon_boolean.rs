@@ -85,8 +85,9 @@ const fn selected(op: PolygonBooleanOp, a: bool, b: bool) -> bool {
         PolygonBooleanOp::Difference => a && !b,
     }
 }
-fn charge(count: &mut u64, limit: u64, work: &mut Work<'_>) -> Result<(), PredicateError> {
+fn charge(slot: usize, limit: u64, work: &mut Work<'_>) -> Result<(), PredicateError> {
     work.step()?;
+    let count = &mut work.polygon_counts[slot];
     *count = count
         .checked_add(1)
         .filter(|n| *n <= limit)
@@ -166,7 +167,7 @@ fn boundary(
     a: &Shape,
     b: &Shape,
     op: PolygonBooleanOp,
-    limits: &mut PolygonBooleanLimits,
+    limits: &PolygonBooleanLimits,
     work: &mut Work<'_>,
 ) -> Result<Boundary, PredicateError> {
     let mut source = CountedVec::new();
@@ -175,10 +176,9 @@ fn boundary(
     }
     let nodes = crate::noding::node(&source, work)?;
     let mut atomic = CountedVec::new();
-    let mut count = 0;
     for path in &nodes {
         for pair in path.windows(2) {
-            charge(&mut count, limits.max_edges, work)?;
+            charge(0, limits.max_edges, work)?;
             work.nodes(2)?;
             let (a, b) = if point_cmp(&pair[0], &pair[1])?.is_gt() {
                 (&pair[1], &pair[0])
@@ -249,7 +249,6 @@ fn boundary(
         }
     }
     let mut sites = CountedVec::new();
-    limits.max_edges -= count;
     for path in nodes {
         for p in path {
             work.push(&mut sites, p)?;
@@ -426,7 +425,7 @@ fn cycle(ids: &[usize], edges: &[Edge], work: &mut Work<'_>) -> Result<Cycle, Pr
 }
 fn cycles(
     edges: &[Edge],
-    limits: &mut PolygonBooleanLimits,
+    limits: &PolygonBooleanLimits,
     work: &mut Work<'_>,
 ) -> Result<CountedVec<Cycle>, PredicateError> {
     let mut points = CountedVec::new();
@@ -479,20 +478,17 @@ fn cycles(
         work.push(&mut arcs, arc)?;
     }
     let mut result = CountedVec::new();
-    let (mut faces, mut rings) = (0, 0);
     crate::noding::faces::walk(
         &mut arcs,
         ids.len(),
         work,
-        |work| charge(&mut faces, limits.max_faces, work),
+        |work| charge(1, limits.max_faces, work),
         |path, _, work| {
-            charge(&mut rings, limits.max_rings, work)?;
+            charge(2, limits.max_rings, work)?;
             let value = cycle(path, edges, work)?;
             work.push(&mut result, value)
         },
     )?;
-    limits.max_faces -= faces;
-    limits.max_rings -= rings;
     Ok(result)
 }
 
@@ -619,7 +615,7 @@ fn assemble(
 }
 
 #[allow(clippy::too_many_lines)]
-fn execute(
+pub(crate) fn execute(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     op: PolygonBooleanOp,
@@ -627,6 +623,10 @@ fn execute(
     limits: PolygonBooleanLimits,
     work: &mut Work<'_>,
 ) -> Result<Geometry<f64>, PolygonBooleanError> {
+    #[cfg(test)]
+    {
+        work.polygon_active = true;
+    }
     work.step()?;
     if filter.is_some_and(|d| d > 2) {
         return Err(PolygonBooleanError::InvalidOutputDimension);
@@ -646,7 +646,7 @@ fn execute(
     a.build_indices(work)?;
     b.build_indices(work)?;
     let originals = Originals::new(left, right, work)?;
-    assemble_result(&a, &b, op, filter, &mut { limits }, &originals, work)
+    assemble_result(&a, &b, op, filter, &limits, &originals, work)
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -655,7 +655,7 @@ fn assemble_result(
     b: &Shape,
     op: PolygonBooleanOp,
     filter: Option<u8>,
-    limits: &mut PolygonBooleanLimits,
+    limits: &PolygonBooleanLimits,
     originals: &Originals,
     work: &mut Work<'_>,
 ) -> Result<Geometry<f64>, PolygonBooleanError> {
@@ -785,17 +785,26 @@ fn assemble_result(
             }
         }
     }
-    Ok(line_boolean::finish(components, filter, work)?)
+    let result = line_boolean::finish(components, filter, work)?;
+    #[cfg(test)]
+    {
+        work.polygon_active = false;
+    }
+    Ok(result)
 }
 
-pub(super) fn execute_many(
+pub(crate) fn execute_many(
     left: &[Geometry<f64>],
     right: &[Geometry<f64>],
     op: PolygonBooleanOp,
     filter: Option<u8>,
-    limits: &mut PolygonBooleanLimits,
+    limits: &PolygonBooleanLimits,
     work: &mut Work<'_>,
 ) -> Result<Geometry<f64>, PolygonBooleanError> {
+    #[cfg(test)]
+    {
+        work.polygon_active = true;
+    }
     work.step()?;
     if filter.is_some_and(|d| d > 2) {
         return Err(PolygonBooleanError::InvalidOutputDimension);

@@ -2142,3 +2142,40 @@ forme di conversione infallibile censite e nuovi ingressi Parquet fuori
 dal modulo qualificato. E' una guardia sintattica con mutazioni sentinella,
 non un'analisi completa del flusso Rust; la completano lint anti-panic,
 prove limite e revisione della logica critica.
+
+## Buffer geodetico degenere
+
+L'API diretta `geodesic_empty_buffer_with_limits`, nel modulo
+`plenora_kernels_geo::geodesic_buffer`, espone esclusivamente il profilo
+`geodesic_empty_buffer_v1`: punti e linee XY a raggio zero, ingressi vuoti
+con raggio finito, negativo solo per superfici. Restituisce Polygon vuoti
+in ordine distanza/ingresso, oppure un Polygon vuoto per distanza con
+unione. I duplicati conservano la cardinalita'. Non e' esposta nel catalogo.
+
+Il certificato pubblico riferisce il CRS geografico risolto e il datum,
+modello `shortest_geodesic`, metri, errore assoluto e relativo zero:
+trasformazione, discretizzazione ed errore numerico sono tutti zero.
+Questa garanzia riguarda l'output vuoto prescritto da GOP-008, con
+`d_H(vuoto,vuoto)=0`, non la distanza fra vuoto e linea originaria.
+Non sono costruite coordinate; non vi sono anelli da qualificare GOP-005.
+
+L'output e' una sequenza compatta senza allocazioni; `iter()` produce
+un Polygon vuoto per passo senza calcoli geodetici o validazione differita.
+La memoria dinamica della chiamata e' zero; input, CRS, stack costante e
+materializzazione richiesta dal consumatore sono esclusi. Sono limitati
+lavoro effettivo e numero di risultati, incluse le ripetizioni. Deadline
+precede cancel allo stesso checkpoint; al massimo una primitiva inverse
+tra controlli. Nessuna promessa di latenza wall-clock.
+
+**Non disponibile:** buffer positivo non vuoto, superfici non vuote a
+qualsiasi raggio, erosione e collasso, inviluppi, ricomposizione booleana,
+unioni non vuote e taglio al seam. Questi casi restituiscono
+`UnsupportedProfile`, non un'approssimazione. Il dominio geografico e'
+quello terrestre 6e6<=a<=7e6 m, 250<=1/f<=350; linee con archi minimi
+ambigui sono rifiutate. Poli e seam sono ammessi negli ingressi del
+sottoinsieme qualificato. Il buffer planare resta indipendente.
+
+Per qualificare il buffer non degenere servono una costruzione con
+arrotondamento GOP-015A dimostrato, bounds geometrici e topologici GOP-006,
+e prove indipendenti dell'inviluppo dell'intero insieme. Il solo controllo
+inverse dei vertici direct non dimostra queste proprieta'.

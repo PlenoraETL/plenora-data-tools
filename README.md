@@ -35,11 +35,11 @@ portati: la CLI `plenora-data` è nuova, scritta sui contratti pubblici
 
 La CI (`.github/workflows/ci.yml`) esegue i gate di
 [`AGENTS.md`](AGENTS.md) su Linux e Windows a ogni push su `main` e a ogni
-pull request, con la suite lunga, e verifica la CLI contro
+pull request, con la suite ordinaria, e verifica la CLI contro
 `plenora-contracts` al commit fissato; compila i target di fuzz, che
-`.github/workflows/fuzz.yml` fa girare ogni settimana;
+`.github/workflows/fuzz.yml` fa girare su richiesta;
 `.github/workflows/supply-chain.yml` controlla la catena delle dipendenze e
-`.github/workflows/coverage.yml` misura la copertura contro le soglie di
+`.github/workflows/coverage.yml` misura su richiesta la copertura contro le soglie di
 `scripts/coverage_budget.json` ([«Fuzz»](#fuzz), [«Catena delle dipendenze»](#catena-delle-dipendenze),
 [«Copertura»](#copertura)). Non c'è ancora, e si dichiara assente, il
 mutation testing del codice Rust. Non sono in programma l'identità del piano (`plan_hash`,
@@ -106,6 +106,9 @@ scadenza e annullamento, contratti adottati e limiti dichiarati sono nel
 
 ## Costruire e provare
 
+Sono supportati esclusivamente Linux e Windows; il crate condiviso
+`plenora-core` rifiuta gli altri sistemi con `compile_error!`.
+
 Serve `rustup`: la toolchain (1.98.1) è fissata in `rust-toolchain.toml`.
 Il workspace comprende il modulo nativo dell'SDK Python (PyO3), che si
 collega a libpython: `cargo build` e `cargo test` vogliono un Python >= 3.14
@@ -131,8 +134,11 @@ degli stessi casi, scelto perché ogni ramo resti coperto; con
 PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked
 ```
 
-La suite lunga è il gate prima del merge; quella di default serve mentre si
-lavora. Un valore diverso da `0` e `1` ferma i test che la leggono.
+La suite lunga si avvia su decisione del titolare, con `workflow_dispatch`
+in `ci.yml`; le PR e i push eseguono la suite ordinaria, escludendo con
+`--skip matrice_metadati::catalogo_chiavi_trasporti` la matrice massiva di
+round-trip. Questa resta nel job manuale, senza filtri; anche il gate di
+rilascio la esclude. `cargo test` locale resta senza filtri. Un valore diverso da `0` e `1` ferma i test che la leggono.
 
 I gate completi prima di un commit sono in [`AGENTS.md`](AGENTS.md).
 
@@ -148,7 +154,7 @@ cargo clippy --workspace --lib --locked -- -D unsafe-code \
   -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
   -D clippy::unreachable -D clippy::todo -D clippy::unimplemented
 cargo test --workspace --locked
-PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked   # prima del merge
+PLENORA_TEST_LUNGHI=1 cargo test --workspace --locked   # su richiesta del titolare
 ```
 
 Le sonde delle prove dei controlli dell'SDK (feature `sonde-di-prova`,
@@ -213,7 +219,7 @@ CRS, i digest delle copie, le sorgenti delle soglie di copertura e i
 collegamenti dei runner. Soglie, pin storici e oracoli indipendenti non si
 rigenerano dall'output del prodotto.
 
-`interop.yml` esegue su PR le sonde CRS e multigeometria contro il
+`interop.yml` esegue su richiesta (`workflow_dispatch`) le sonde CRS e multigeometria contro il
 produttore IO storico fissato nella provenienza della fixture: verifica
 la compatibilita' con quel produttore, non con tutte le release IO.
 I rapporti restano artefatti anche in caso di fallimento; ogni catena CRS
@@ -254,7 +260,7 @@ uguali in testo, categoria, fase e diagnostica. Poi ognuno ha un oracolo:
 | `argomenti_cli` | grammatica della CLI | rifiuti `InvalidConfiguration`, lettura deterministica |
 | `definizioni_crs` | PROJJSON, WKT1/WKT2 e risoluzione pubblica | corpus dei 169 integrati, rifiuti senza dati, limiti, determinismo e confronto con il CRS da identificatore |
 
-`.github/workflows/fuzz.yml` fa girare ogni target ogni domenica (e a mano)
+`.github/workflows/fuzz.yml` fa girare ogni target solo a mano
 per 10 minuti, e per un minuto sulle PR che toccano `fuzz/`, con i corpus
 iniziali di `scripts/genera_corpus_fuzz.py`; un crash fa fallire il job e i
 reperti restano come artefatto. In locale le
@@ -327,7 +333,7 @@ diventare rossa senza che il codice cambi.
 
 ### Copertura
 
-`.github/workflows/coverage.yml`, a ogni push e PR, misura tre superfici con
+`.github/workflows/coverage.yml`, solo con `workflow_dispatch`, misura tre superfici con
 soglie separate in `scripts/coverage_budget.json`: il prodotto Rust
 (`cargo-llvm-cov`, senza l'SDK), l'SDK Python (coverage.py, righe e rami) e il
 suo binding nativo, misurato dal wheel instrumentato mentre gira la suite
