@@ -1516,6 +1516,19 @@
       "nested_mixed_cutters_have_the_same_cartesian_partition",
       "degenerate_and_nonfinite_lines_identify_the_operand"
     ],
+    "crates/plenora-kernels-geo/src/extended_algorithms/split_limited/tolerances/tests.rs": [
+      "independent_snap_and_merge_inclusive_thresholds",
+      "duplicates_near_cuts_greedy_merge_and_endpoints",
+      "closed_lines_use_path_distance_and_preserve_vertices",
+      "irrational_lengths_and_rational_pythagorean_boundary",
+      "extreme_coordinates_no_translation_slack_and_nearest_even",
+      "typed_failures_empty_and_degenerate",
+      "repeated_segments_are_not_points_and_retraced_paths_are_certified",
+      "cumulative_exact_resource_thresholds",
+      "projected_shared_vertex_belongs_to_preceding_occurrence",
+      "projected_rationals_use_verified_nearest_even",
+      "integer_axis_oracle"
+    ],
     "crates/plenora-kernels-geo/src/extensions.rs": [
       "from_wkt_column_parses_preserves_nulls_and_decodes_back",
       "from_wkt_column_applies_the_on_error_policy",
