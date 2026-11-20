@@ -81,6 +81,17 @@ impl<'a> Work<'a> {
         self.exports.push(lease, &self.budget)
     }
 
+    /// Osserva l'interruzione condivisa senza modificare gli addebiti di lavoro.
+    #[cfg_attr(test, track_caller)]
+    pub(crate) fn checkpoint(&self) -> Result<(), PredicateError> {
+        crate::noding::check_interruption(
+            self.limits.deadline,
+            self.cancelled,
+            PredicateError::DeadlineExceeded,
+            PredicateError::Cancelled,
+        )
+    }
+
     pub fn integer(&self, value: i32) -> Result<Q, PredicateError> {
         Q::int_in(value, &self.budget)
     }

@@ -191,6 +191,7 @@ fn crossings(
     for edge in left.iter().chain(right.iter()) {
         #[cfg(test)]
         crate::noding::gop028::cycle("reshape.rs::crossings:1");
+        work.checkpoint()?;
         work.push(&mut refs, edge)?;
     }
     let mut hits: CountedVec<Crossing> = CountedVec::new();
@@ -239,6 +240,7 @@ fn crossings(
     for hit in &hits {
         #[cfg(test)]
         crate::noding::gop028::cycle("reshape.rs::crossings:3");
+        work.checkpoint()?;
         if !transverse(hit, target, reshaper, work)? {
             return Err(ReshapeError::Unsupported);
         }
@@ -265,6 +267,7 @@ fn execute(
     for point in &target_points[..=start.target.before] {
         #[cfg(test)]
         crate::noding::gop028::cycle("reshape.rs::execute:1");
+        work.checkpoint()?;
         append(&mut output, point, work)?;
     }
     append(&mut output, &start.point, work)?;
@@ -273,12 +276,14 @@ fn execute(
         for i in start.reshaper.after..=end.reshaper.before {
             #[cfg(test)]
             crate::noding::gop028::cycle("reshape.rs::execute:2");
+            work.checkpoint()?;
             append(&mut output, &reshaper_points[i], work)?;
         }
     } else {
         for i in (end.reshaper.after..=start.reshaper.before).rev() {
             #[cfg(test)]
             crate::noding::gop028::cycle("reshape.rs::execute:3");
+            work.checkpoint()?;
             append(&mut output, &reshaper_points[i], work)?;
         }
     }
@@ -286,6 +291,7 @@ fn execute(
     for point in &target_points[end.target.after..] {
         #[cfg(test)]
         crate::noding::gop028::cycle("reshape.rs::execute:4");
+        work.checkpoint()?;
         append(&mut output, point, work)?;
     }
     simple(&output, work)?;

@@ -38,6 +38,7 @@ pub fn sort_ids(
         while root < ids.len() / 2 {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/interval_index.rs::sift:1");
+            work.checkpoint()?;
             let mut child = root * 2 + 1;
             if child + 1 < ids.len() {
                 work.step()?;
@@ -57,6 +58,7 @@ pub fn sort_ids(
     for root in (0..ids.len() / 2).rev() {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/interval_index.rs::sort_ids:1");
+        work.checkpoint()?;
         sift(ids, root, &cmp, work)?;
     }
     for end in (1..ids.len()).rev() {

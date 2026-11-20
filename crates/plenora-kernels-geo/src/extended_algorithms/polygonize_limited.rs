@@ -62,6 +62,7 @@ fn collect(
                     crate::noding::gop028::cycle(
                         "extended_algorithms/polygonize_limited.rs::collect:2",
                     );
+                    work.checkpoint()?;
                     add_line(line, &mut edges, work)?;
                 }
             }
@@ -71,6 +72,7 @@ fn collect(
                     crate::noding::gop028::cycle(
                         "extended_algorithms/polygonize_limited.rs::collect:3",
                     );
+                    work.checkpoint()?;
                     work.push(&mut pending, g)?;
                 }
             }
@@ -127,6 +129,7 @@ fn output_ring(
     for i in 0..ring.atoms.len() {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::output_ring:1");
+        work.checkpoint()?;
         work.push(&mut out, coords[ring.vertices[i]])?;
     }
     work.push(&mut out, coords[ring.vertices[0]])?;
@@ -157,6 +160,7 @@ fn publish_faces(
                 crate::noding::gop028::cycle(
                     "extended_algorithms/polygonize_limited.rs::publish_faces:2",
                 );
+                work.checkpoint()?;
                 work.push(&mut selected, h)?;
             }
         }
@@ -166,11 +170,13 @@ fn publish_faces(
     for _ in points {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:3");
+        work.checkpoint()?;
         work.push(&mut coords, geo::Coord { x: 0.0, y: 0.0 })?;
     }
     for &i in &selected {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:4");
+        work.checkpoint()?;
         let vertices = &rings[i].vertices;
         for j in 0..vertices.len() {
             #[cfg(test)]
@@ -211,6 +217,7 @@ fn publish_faces(
             crate::noding::gop028::cycle(
                 "extended_algorithms/polygonize_limited.rs::publish_faces:7",
             );
+            work.checkpoint()?;
             let line = output_ring(&rings[h], &coords, work)?;
             work.push(&mut interiors, line)?;
         }
@@ -222,6 +229,7 @@ fn publish_faces(
     for (edge, a, b) in &boundary {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:8");
+        work.checkpoint()?;
         let mut certificate = PublishedEdge::new(edge, [coords[*a], coords[*b]], work)?;
         certificate.surface = true;
         work.push(&mut published, certificate)?;
@@ -237,6 +245,7 @@ fn publish_faces(
     for geometry in collection.0 {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::publish_faces:9");
+        work.checkpoint()?;
         let Geometry::Polygon(polygon) = geometry else {
             return Err(PredicateError::CalcoloNonConcluso(
                 "contenitore delle facce",
@@ -257,6 +266,7 @@ fn polygonize(
     for e in &edges {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/polygonize_limited.rs::polygonize:1");
+        work.checkpoint()?;
         work.push(&mut refs, e)?;
     }
     let nodes = crate::noding::node(&refs, work)?;

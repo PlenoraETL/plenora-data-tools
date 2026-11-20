@@ -128,6 +128,7 @@ pub(crate) fn read_path(
     for coord in &line.0 {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::read_path:1");
+        work.checkpoint()?;
         work.nodes(1)?;
         if !coord.x.is_finite() || !coord.y.is_finite() {
             return Err(TrimExtendError::InvalidGeometry);
@@ -146,6 +147,7 @@ pub(crate) fn edges(
     for pair in points.windows(2) {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::edges:1");
+        work.checkpoint()?;
         work.nodes(2)?;
         if pair[0] == pair[1] {
             return Err(TrimExtendError::Unsupported);
@@ -180,6 +182,7 @@ fn simple_path(
     for edge in &edges {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::simple_path:1");
+        work.checkpoint()?;
         work.push(&mut refs, edge)?;
     }
     let mut invalid = false;
@@ -277,6 +280,7 @@ fn degenerate_guide(line: &LineString<f64>, work: &mut Work<'_>) -> Result<bool,
     for pair in line.0.windows(2) {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::degenerate_guide:1");
+        work.checkpoint()?;
         #[cfg(test)]
         crate::noding::gop028::unit();
         work.step()?;
@@ -311,6 +315,7 @@ fn execute(
     for point in &guide_points[2..] {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::execute:1");
+        work.checkpoint()?;
         work.pair()?;
         if !side(point, origin, &direction)?.sign().is_eq() {
             return Err(TrimExtendError::Unsupported);
@@ -320,6 +325,7 @@ fn execute(
     for point in &points {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::execute:2");
+        work.checkpoint()?;
         work.pair()?;
         work.push(&mut sides, side(point, origin, &direction)?)?;
     }
@@ -329,6 +335,7 @@ fn execute(
             for point in &points[..=cut.before] {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("trim_extend.rs::execute:3");
+                work.checkpoint()?;
                 append(&mut output, point, work)?;
             }
             append(&mut output, &cut.point, work)?;
@@ -337,6 +344,7 @@ fn execute(
             for point in &points[cut.after..] {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("trim_extend.rs::execute:4");
+                work.checkpoint()?;
                 append(&mut output, point, work)?;
             }
         }
@@ -426,6 +434,7 @@ pub(crate) fn publish_paths(
     for point in points {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::publish_paths:1");
+        work.checkpoint()?;
         work.nodes(1)?;
         let coord = originals.coordinate(point, work)?;
         work.push(&mut coords, coord)?;
@@ -435,6 +444,7 @@ pub(crate) fn publish_paths(
     for (edge, pair) in edges.iter().zip(coords.windows(2)) {
         #[cfg(test)]
         crate::noding::gop028::cycle("trim_extend.rs::publish_paths:2");
+        work.checkpoint()?;
         let certificate = PublishedEdge::new(edge, [pair[0], pair[1]], work)?;
         work.push(&mut certificates, certificate)?;
     }

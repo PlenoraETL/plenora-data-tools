@@ -133,6 +133,7 @@ fn validate_impl(
     for (i, a) in edges.iter().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:6");
+        work.checkpoint()?;
         for b in edges.iter().skip(i + 1) {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::validate_impl:7");
@@ -204,6 +205,7 @@ fn junction(
         for end in endpoints.into_iter().flatten() {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::junction:2");
+            work.checkpoint()?;
             let mut duplicate = false;
             for ray in &rays[..] {
                 #[cfg(test)]
@@ -246,6 +248,7 @@ fn junction(
     for (index, a) in rays.iter().enumerate().skip(1) {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected/surface.rs::junction:4");
+        work.checkpoint()?;
         let plane_a = (a.planar - first.planar).rem_euclid(360.0);
         let geo_a = (a.geodesic - first.geodesic).rem_euclid(360.0);
         if plane_a.min(360.0 - plane_a) <= 1e-8 || geo_a.min(360.0 - geo_a) <= a.error + first.error

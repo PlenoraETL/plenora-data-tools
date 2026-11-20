@@ -3603,6 +3603,7 @@
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25-diretti.txt",
     "crates/plenora-io/tests/riferimenti/scrittori/requisiti-pyarrow25.txt",
     "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-cycles.json",
+    "crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json",
     "crates/plenora-kernels-geo/tests/fixtures/checkpoint620.txt",
     "crates/plenora-kernels-geo/tests/fixtures/concave_oracolo.json",
     "crates/plenora-kernels-geo/tests/fixtures/geodetica/aree.csv",

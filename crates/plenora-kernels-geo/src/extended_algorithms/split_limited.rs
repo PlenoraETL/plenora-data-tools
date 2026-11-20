@@ -92,6 +92,7 @@ fn line_edges(
     for pair in line.0.windows(2) {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::line_edges:2");
+        work.checkpoint()?;
         let value = edge(pair[0], pair[1], side, work)?;
         work.push(edges, value)?;
     }
@@ -118,6 +119,7 @@ fn cutters(
                 for p in &ps.0 {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::cutters:2");
+                    work.checkpoint()?;
                     let e = edge(p.0, p.0, "right", work)?;
                     work.push(edges, e)?;
                 }
@@ -127,6 +129,7 @@ fn cutters(
                 for l in &ls.0 {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::cutters:3");
+                    work.checkpoint()?;
                     line_edges(l, "right", edges, work)?;
                 }
             }
@@ -134,6 +137,7 @@ fn cutters(
                 for g in gs.0.iter().rev() {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::cutters:4");
+                    work.checkpoint()?;
                     work.push(&mut pending, g)?;
                 }
             }
@@ -151,6 +155,7 @@ fn cutters(
                             crate::noding::gop028::cycle(
                                 "extended_algorithms/split_limited.rs::cutters:5",
                             );
+                            work.checkpoint()?;
                             line_edges(l, "right", edges, work)?;
                         }
                     }
@@ -160,11 +165,13 @@ fn cutters(
                             crate::noding::gop028::cycle(
                                 "extended_algorithms/split_limited.rs::cutters:6",
                             );
+                            work.checkpoint()?;
                             for l in std::iter::once(p.exterior()).chain(p.interiors()) {
                                 #[cfg(test)]
                                 crate::noding::gop028::cycle(
                                     "extended_algorithms/split_limited.rs::cutters:7",
                                 );
+                                work.checkpoint()?;
                                 line_edges(l, "right", edges, work)?;
                             }
                         }
@@ -256,6 +263,7 @@ fn split_nodes(
     for e in &edges[..source_count] {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:1");
+        work.checkpoint()?;
         let mut path = CountedVec::new();
         work.nodes(2)?;
         work.push(&mut path, e.a.try_clone()?)?;
@@ -267,6 +275,7 @@ fn split_nodes(
     for e in edges {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:2");
+        work.checkpoint()?;
         work.push(&mut references, e)?;
     }
     crate::noding::visit(&references, work, |i, j, hits, work| {
@@ -279,6 +288,7 @@ fn split_nodes(
                     crate::noding::gop028::cycle(
                         "extended_algorithms/split_limited.rs::split_nodes:4",
                     );
+                    work.checkpoint()?;
                     work.nodes(1)?;
                     work.push(&mut topology[index], p.try_clone()?)?;
                 }
@@ -294,6 +304,7 @@ fn split_nodes(
         for p in hits.into_iter().flatten() {
             #[cfg(test)]
             crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:5");
+            work.checkpoint()?;
             work.push(&mut cuts[source_index], p)?;
         }
         Ok(())
@@ -301,6 +312,7 @@ fn split_nodes(
     for (e, path) in edges[..source_count].iter().zip(topology.iter_mut()) {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split_nodes:6");
+        work.checkpoint()?;
         let reverse = compare(&e.a, &e.b)?.is_gt();
         sorted(
             path,
@@ -344,6 +356,7 @@ fn split(
     for (index, points) in cuts.iter_mut().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::split:2");
+        work.checkpoint()?;
         let e = &edges[index];
         let reverse = compare(&e.a, &e.b)?.is_gt();
         sorted(
@@ -426,6 +439,7 @@ fn certify_paths(
     for edge in converted {
         #[cfg(test)]
         crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::certify_paths:1");
+        work.checkpoint()?;
         work.push(&mut refs, edge)?;
     }
     let rounded_paths = crate::noding::node(&refs, work)?;
@@ -440,6 +454,7 @@ fn certify_paths(
         for i in 0..exact.len() - 1 {
             #[cfg(test)]
             crate::noding::gop028::cycle("extended_algorithms/split_limited.rs::certify_paths:3");
+            work.checkpoint()?;
             let certificate = PublishedEdge::noded(
                 [exact[i], exact[i + 1]],
                 [&rounded[i], &rounded[i + 1]],

@@ -35,9 +35,11 @@ pub fn enumerate(
     for line in nodes {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::enumerate:1");
+        work.checkpoint()?;
         for p in line {
             #[cfg(test)]
             crate::noding::gop028::cycle("noding/faces.rs::enumerate:2");
+            work.checkpoint()?;
             work.push(&mut points, p.try_clone()?)?;
         }
     }
@@ -49,6 +51,7 @@ pub fn enumerate(
     for _ in &rings {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::enumerate:3");
+        work.checkpoint()?;
         work.push(&mut holes, CountedVec::new())?;
     }
     let mut bounds = CountedVec::new();
@@ -56,11 +59,13 @@ pub fn enumerate(
     for _ in &atoms {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::enumerate:4");
+        work.checkpoint()?;
         work.push(&mut owners, None)?;
     }
     for (id, ring) in rings.iter().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::enumerate:5");
+        work.checkpoint()?;
         let p = &points[ring.vertices[0]];
         let mut bb = [
             p.x.try_clone()?,
@@ -71,6 +76,7 @@ pub fn enumerate(
         for &v in &ring.vertices {
             #[cfg(test)]
             crate::noding::gop028::cycle("noding/faces.rs::enumerate:6");
+            work.checkpoint()?;
             for (i, q) in [&points[v].x, &points[v].x, &points[v].y, &points[v].y]
                 .into_iter()
                 .enumerate()
@@ -106,6 +112,7 @@ pub fn enumerate(
         for i in index.point_candidates(&points[hole.vertices[0]], work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("noding/faces.rs::enumerate:10");
+            work.checkpoint()?;
             let shell = &rings[i];
             work.step()?;
             if !shell.orientation.is_gt() || owners[hole.atoms[0]] == Some(i) {
@@ -193,9 +200,11 @@ fn graph(
     for (source, line) in nodes.iter().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::graph:1");
+        work.checkpoint()?;
         for pair in line.windows(2) {
             #[cfg(test)]
             crate::noding::gop028::cycle("noding/faces.rs::graph:2");
+            work.checkpoint()?;
             let a = vertex(points, &pair[0], work)?;
             let b = vertex(points, &pair[1], work)?;
             work.push(&mut pairs, (a.min(b), a.max(b), source))?;
@@ -208,6 +217,7 @@ fn graph(
     for _ in points {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::graph:3");
+        work.checkpoint()?;
         work.push(&mut outgoing, CountedVec::new())?;
     }
     let mut atoms: CountedVec<FaceAtom> = CountedVec::new();
@@ -253,6 +263,7 @@ fn graph(
     for (v, list) in outgoing.iter_mut().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::graph:6");
+        work.checkpoint()?;
         sorted(
             list,
             |a, b| {
@@ -358,6 +369,7 @@ pub fn walk(
     for _ in 0..vertex_count {
         #[cfg(test)]
         crate::noding::gop028::cycle("noding/faces.rs::walk:1");
+        work.checkpoint()?;
         work.push(&mut positions, None)?;
     }
     for start in 0..arcs.len() {

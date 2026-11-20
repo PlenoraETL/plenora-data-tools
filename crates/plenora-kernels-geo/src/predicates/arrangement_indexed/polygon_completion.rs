@@ -93,6 +93,7 @@ fn occupied_index(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::occupied_index:1",
         );
+        work.checkpoint()?;
         let b = crate::predicates::interval_index::geometry_bounds(g, work)?;
         work.push(&mut bounds, b)?;
     }
@@ -144,6 +145,7 @@ fn validate_polygons(
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:4",
             );
+            work.checkpoint()?;
             let hole = copy_line(hole, work)?;
             work.push(&mut holes, hole)?;
         }
@@ -157,6 +159,7 @@ fn validate_polygons(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::validate_polygons:5",
         );
+        work.checkpoint()?;
         for j in index.candidates(index.at(i), work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle(
@@ -184,6 +187,7 @@ fn validate_lines(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed/polygon_completion.rs::validate_lines:1",
                 );
+                work.checkpoint()?;
                 work.push(&mut parts, line)?;
             }
         }
@@ -198,6 +202,7 @@ fn validate_lines(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::validate_lines:2",
         );
+        work.checkpoint()?;
         let mut segment = 0_usize;
         for pair in line.0.windows(2) {
             #[cfg(test)]
@@ -220,6 +225,7 @@ fn validate_lines(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::validate_lines:4",
         );
+        work.checkpoint()?;
         work.push(&mut refs, edge)?;
     }
     let mut unsupported = false;
@@ -360,6 +366,7 @@ fn select(
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::select:5",
             );
+            work.checkpoint()?;
             let (hn, ho) = roles(&graph.rings[h], graph, roles_by_source, work)?;
             new |= hn;
             old |= ho;
@@ -389,6 +396,7 @@ fn compare_areas(
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::compare_areas:2",
             );
+            work.checkpoint()?;
             let vertices = &graph.rings[id].vertices;
             for i in 0..vertices.len() {
                 #[cfg(test)]
@@ -447,6 +455,7 @@ fn canonicalize(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:1",
         );
+        work.checkpoint()?;
         let mut min = 0;
         for i in 1..ring.vertices.len() {
             #[cfg(test)]
@@ -484,6 +493,7 @@ fn canonicalize(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:5",
         );
+        work.checkpoint()?;
         crate::noding::sorted_with_work(
             &mut face.holes,
             |a, b, work| ring_cmp(*a, *b, graph, coords, (&[*b], &[*a]), work),
@@ -507,6 +517,7 @@ fn canonicalize(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:6",
                 );
+                work.checkpoint()?;
                 work.push(&mut aa, id)?;
             }
             for &id in std::iter::once(&b.shell).chain(&b.holes) {
@@ -514,6 +525,7 @@ fn canonicalize(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed/polygon_completion.rs::canonicalize:7",
                 );
+                work.checkpoint()?;
                 work.push(&mut bb, id)?;
             }
             ring_cmp(a.shell, b.shell, graph, coords, (&aa, &bb), work)
@@ -534,6 +546,7 @@ fn output_ring(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::output_ring:1",
         );
+        work.checkpoint()?;
         work.nodes(1)?;
         work.push(&mut values, coords[id])?;
     }
@@ -554,11 +567,13 @@ fn simplify_selected_rings(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:1",
         );
+        work.checkpoint()?;
         for &id in std::iter::once(&face.shell).chain(&face.holes) {
             #[cfg(test)]
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:2",
             );
+            work.checkpoint()?;
             work.push(&mut selected, id)?;
         }
     }
@@ -568,6 +583,7 @@ fn simplify_selected_rings(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:3",
         );
+        work.checkpoint()?;
         work.push(&mut degree, 0_u8)?;
     }
     for &id in &selected {
@@ -575,6 +591,7 @@ fn simplify_selected_rings(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:4",
         );
+        work.checkpoint()?;
         for &v in &graph.rings[id].vertices {
             #[cfg(test)]
             crate::noding::gop028::cycle(
@@ -589,6 +606,7 @@ fn simplify_selected_rings(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::simplify_selected_rings:6",
         );
+        work.checkpoint()?;
         let ring = &graph.rings[id];
         let mut vertices = CountedVec::new();
         let mut atoms = CountedVec::new();
@@ -635,6 +653,7 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:1",
         );
+        work.checkpoint()?;
         shape.polygon(polygon, work)?;
     }
     shape.build_indices(work)?;
@@ -645,11 +664,13 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:2",
         );
+        work.checkpoint()?;
         for edge in rings.iter().flatten() {
             #[cfg(test)]
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::execute:3",
             );
+            work.checkpoint()?;
             work.push(&mut sources, edge)?;
             work.push(&mut roles, Some(id))?;
         }
@@ -659,6 +680,7 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:4",
         );
+        work.checkpoint()?;
         work.push(&mut sources, edge)?;
         work.push(&mut roles, None)?;
     }
@@ -687,6 +709,7 @@ fn execute(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed/polygon_completion.rs::execute:7",
                 );
+                work.checkpoint()?;
                 work.nodes(1)?;
                 work.push(&mut input_coords, coord)?;
             }
@@ -699,6 +722,7 @@ fn execute(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed/polygon_completion.rs::execute:8",
                 );
+                work.checkpoint()?;
                 work.nodes(1)?;
                 work.push(&mut input_coords, coord)?;
             }
@@ -715,6 +739,7 @@ fn execute(
                     crate::noding::gop028::cycle(
                         "predicates/arrangement_indexed/polygon_completion.rs::execute:10",
                     );
+                    work.checkpoint()?;
                     work.nodes(1)?;
                     work.push(&mut input_coords, coord)?;
                 }
@@ -730,6 +755,7 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:11",
         );
+        work.checkpoint()?;
         work.nodes(1)?;
         let c = originals.coordinate(p, work)?;
         work.push(&mut coords, c)?;
@@ -743,6 +769,7 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:12",
         );
+        work.checkpoint()?;
         work.push(&mut selected_points, false)?;
     }
     // Una ricevuta orientata per ogni lato serializzato, anche se due facce
@@ -752,11 +779,13 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:13",
         );
+        work.checkpoint()?;
         for &ring_id in std::iter::once(&face.shell).chain(&face.holes) {
             #[cfg(test)]
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::execute:14",
             );
+            work.checkpoint()?;
             let ring = &graph.rings[ring_id];
             for (i, &atom_id) in ring.atoms.iter().enumerate() {
                 #[cfg(test)]
@@ -854,6 +883,7 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:19",
         );
+        work.checkpoint()?;
         let mut published = PublishedEdge::new(edge, coords, work)?;
         published.support = support.map(|id| sources[id]);
         published.surface = id < surface_count;
@@ -867,6 +897,7 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:20",
         );
+        work.checkpoint()?;
         let shell = output_ring(&graph.rings[face.shell], &coords, work)?;
         let mut holes = CountedVec::new();
         for h in face.holes {
@@ -874,6 +905,7 @@ fn execute(
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::execute:21",
             );
+            work.checkpoint()?;
             let ring = output_ring(&graph.rings[h], &coords, work)?;
             work.push(&mut holes, ring)?;
         }
@@ -892,6 +924,7 @@ fn execute(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/polygon_completion.rs::execute:22",
         );
+        work.checkpoint()?;
         // L'area occupata non e' un output modificabile del completamento.
         // GOP-020 richiede disgiunzione anche dopo il rounding dei nodi nuovi.
         let bounds = crate::predicates::interval_index::geometry_bounds(&geometry, work)?;
@@ -900,6 +933,7 @@ fn execute(
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/polygon_completion.rs::execute:23",
             );
+            work.checkpoint()?;
             if super::relate(&geometry, &copies[id], work)?.cells()[0] == b'2' {
                 return Err(PolygonCompletionError::InvalidRoundedTopology);
             }

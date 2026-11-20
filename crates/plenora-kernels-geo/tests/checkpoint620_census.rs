@@ -104,6 +104,22 @@ fn literal_range_bound(expression: &syn::Expr) -> Option<u128> {
 // Lotti chiusi: ogni ciclo deve avere una prova locale, anche rigenerando
 // il censimento. La chiusura locale NON e' il maggiorante composto di un'API.
 const CLOSED_MODULES: &[&str] = &[
+    "offset.rs",
+    "reshape.rs",
+    "trim_extend.rs",
+    "extended_algorithms/polygonize_limited.rs",
+    "extended_algorithms/split_limited.rs",
+    "geodesic_buffer/projected/erosion.rs",
+    "geodesic_buffer/projected/surface.rs",
+    "geodesic_buffer/projected.rs",
+    "predicates/interval_index.rs",
+    "noding/faces.rs",
+    "predicates/arrangement_indexed.rs",
+    "predicates/arrangement_indexed/point_boolean.rs",
+    "predicates/arrangement_indexed/general_boolean.rs",
+    "predicates/arrangement_indexed/line_boolean.rs",
+    "predicates/arrangement_indexed/polygon_boolean.rs",
+    "predicates/arrangement_indexed/polygon_completion.rs",
     "coordinate_mgrs.rs",
     "geodesic_buffer/point/union.rs",
     "geodesic_densify.rs",
@@ -125,10 +141,27 @@ fn checkpoint_method(file: &str) -> Option<&'static str> {
     let relative = file.strip_prefix("crates/plenora-kernels-geo/src/")?;
     match relative {
         "geodesic_densify.rs" | "geodesic_densify/geometry.rs" => Some("checkpoint"),
-        "geodesic_surface.rs" | "geodesic_surface/metric.rs" => Some("metric"),
         "geodesic_buffer/point/union.rs" | "noding/storage.rs" | "offset/enclosure.rs" => {
             Some("step")
         }
+        "geodesic_surface.rs"
+        | "geodesic_surface/metric.rs"
+        | "offset.rs"
+        | "reshape.rs"
+        | "trim_extend.rs"
+        | "extended_algorithms/polygonize_limited.rs"
+        | "extended_algorithms/split_limited.rs"
+        | "geodesic_buffer/projected/erosion.rs"
+        | "geodesic_buffer/projected/surface.rs"
+        | "geodesic_buffer/projected.rs"
+        | "predicates/interval_index.rs"
+        | "noding/faces.rs"
+        | "predicates/arrangement_indexed.rs"
+        | "predicates/arrangement_indexed/point_boolean.rs"
+        | "predicates/arrangement_indexed/general_boolean.rs"
+        | "predicates/arrangement_indexed/line_boolean.rs"
+        | "predicates/arrangement_indexed/polygon_boolean.rs"
+        | "predicates/arrangement_indexed/polygon_completion.rs" => Some("metric"),
         _ => None,
     }
 }
@@ -681,29 +714,34 @@ fn checkpoint620_literal_bounds_are_structural() {
 
 #[test]
 fn checkpoint620_entry_requires_unconditional_shared_call() {
-    let file = "crates/plenora-kernels-geo/src/geodesic_surface.rs";
-    for source in [
-        "{ work.step()?; }",
-        "{ work.checkpoint()?; }",
-        "{ #[cfg(test)] crate::noding::gop028::cycle(\"a\"); work.step()?; }",
-    ] {
-        let body = syn::parse_str(source).unwrap();
-        assert!(entry_checkpoint(file, &body).is_some());
-        assert!(entry_checkpoint("unknown.rs", &body).is_none());
-    }
-    for source in [
-        "{ if skip { continue; } work.step()?; }",
-        "{ #[cfg(test)] work.step()?; }",
-        "{ #[cfg(feature = \"optional\")] work.step()?; }",
-        "{ if condition { work.step()?; } }",
-        "{ let _ = work.step(); }",
-        "{ work.step(); }",
-        "{ other.step()?; }",
-        "{ work.step(1)?; }",
-        "{ work.step::<Other>()?; }",
-        "{ loop {} work.step()?; }",
-    ] {
-        assert!(entry_checkpoint(file, &syn::parse_str(source).unwrap()).is_none());
+    for module in CLOSED_MODULES {
+        let file = format!("crates/plenora-kernels-geo/src/{module}");
+        if checkpoint_method(&file) != Some("metric") {
+            continue;
+        }
+        for source in [
+            "{ work.step()?; }",
+            "{ work.checkpoint()?; }",
+            "{ #[cfg(test)] crate::noding::gop028::cycle(\"a\"); work.step()?; }",
+        ] {
+            let body = syn::parse_str(source).unwrap();
+            assert!(entry_checkpoint(&file, &body).is_some());
+            assert!(entry_checkpoint("unknown.rs", &body).is_none());
+        }
+        for source in [
+            "{ if skip { continue; } work.step()?; }",
+            "{ #[cfg(test)] work.step()?; }",
+            "{ #[cfg(feature = \"optional\")] work.step()?; }",
+            "{ if condition { work.step()?; } }",
+            "{ let _ = work.step(); }",
+            "{ work.step(); }",
+            "{ other.step()?; }",
+            "{ work.step(1)?; }",
+            "{ work.step::<Other>()?; }",
+            "{ loop {} work.step()?; }",
+        ] {
+            assert!(entry_checkpoint(&file, &syn::parse_str(source).unwrap()).is_none());
+        }
     }
 }
 

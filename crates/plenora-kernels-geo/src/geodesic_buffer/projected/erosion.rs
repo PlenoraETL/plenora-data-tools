@@ -148,6 +148,7 @@ pub(super) fn clearance(
     for edge in line.0.windows(2) {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected/erosion.rs::clearance:1");
+        work.checkpoint()?;
         let mut pending = CountedVec::new();
         work.push(&mut pending, (0.0_f64, 1.0_f64, 0_u32))?;
         while let Some((lo, hi, depth)) = pending.pop() {

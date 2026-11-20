@@ -95,6 +95,7 @@ fn array(
     for left in inputs {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed/general_boolean.rs::array:1");
+        work.checkpoint()?;
         let result = polygon_boolean::execute_many(
             std::slice::from_ref(left),
             std::slice::from_ref(right),

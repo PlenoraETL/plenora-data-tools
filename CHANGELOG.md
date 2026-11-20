@@ -45,6 +45,13 @@ la cui versione non ha qui una voce datata.
   Registrati anche i limiti degli array letterali e separato il debito dei
   cicli ancora aperti: rigenerare la fixture non aggiorna questo debito.
 
+- Secondo lotto di sedici moduli con copertura locale completa: buffer
+  proiettato, polygonize/split con limiti, facce del noder, indice degli
+  intervalli, relazioni e operazioni booleane, offset e trim/extend/reshape.
+  I nuovi checkpoint osservano il controllo condiviso senza addebiti
+  aggiuntivi; il censimento protegge ogni ciclo dei moduli chiusi.
+  Restano da completare gli altri moduli e i maggioranti composti delle API.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

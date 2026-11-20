@@ -317,7 +317,7 @@ fn vertex(
     Ok(())
 }
 
-fn divisions(length: f64, maximum: f64) -> Result<u32, UnionBufferError> {
+fn divisions(length: f64, maximum: f64, work: &Work<'_>) -> Result<u32, UnionBufferError> {
     if !length.is_finite() || length < 0.0 {
         return Err(BufferFailure::AccuracyUnproven.into());
     }
@@ -325,6 +325,7 @@ fn divisions(length: f64, maximum: f64) -> Result<u32, UnionBufferError> {
     loop {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected.rs::divisions:1");
+        work.checkpoint()?;
         if (length / f64::from(n)).next_up() <= maximum {
             break;
         }
@@ -374,7 +375,7 @@ fn projected_line(
         if !residual.is_finite() || residual > 1e-6 {
             return Err(BufferFailure::AccuracyUnproven.into());
         }
-        let n = divisions((length + 2e-6).next_up(), maximum)?;
+        let n = divisions((length + 2e-6).next_up(), maximum, work)?;
         let h = ((length / f64::from(n)).next_up() + 8e-6).next_up();
         for i in 1..=n {
             #[cfg(test)]
@@ -473,6 +474,7 @@ fn build_local<'a>(
         for line in parts(input)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::build_local:3");
+            work.checkpoint()?;
             let (projected, error) =
                 projected_line(line, local, tolerance.min(0.5), limits, vertices, work)?;
             certificate.input_model_m = certificate.input_model_m.max(error);
@@ -558,6 +560,7 @@ fn build_local<'a>(
     loop {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected.rs::build_local:5");
+        work.checkpoint()?;
         certificate.arcs_m =
             ((radius / (2.0 * f64::from(n).powi(2))).next_up() * maximum).next_up();
         if certificate.arcs_m <= arc_budget {
@@ -574,6 +577,7 @@ fn build_local<'a>(
         for &p in &line.0 {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::build_local:7");
+            work.checkpoint()?;
             let disk = disk(p, radius, n, limits, vertices, work)?;
             unite(
                 &mut accumulated,
@@ -614,10 +618,12 @@ fn build_local<'a>(
         for polygon in polygons(input) {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::build_local:10");
+            work.checkpoint()?;
             let mut rings = CountedVec::new();
             for _ in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("geodesic_buffer/projected.rs::build_local:11");
+                work.checkpoint()?;
                 let ring = copy_ring(&lines[index], limits, vertices, work)?;
                 work.push(&mut rings, ring)?;
                 index += 1;
@@ -658,12 +664,14 @@ fn build_local<'a>(
         for operand in &accumulated[source_begin..] {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::build_local:12");
+            work.checkpoint()?;
             super::verify_coverage(&planar, operand, work)?;
         }
         let margin = topology_margin(&certificate)?;
         for line in &lines[..] {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::build_local:13");
+            work.checkpoint()?;
             erosion::clearance(line, &planar, margin, work)?;
         }
     }
@@ -723,6 +731,7 @@ fn difference(
     for ring in parts(&result)? {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected.rs::difference:1");
+        work.checkpoint()?;
         erosion::clearance(ring, operand, margin, work)?;
     }
     Ok(result)
@@ -822,6 +831,7 @@ fn rings_polygon(
     for hole in rings {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected.rs::rings_polygon:1");
+        work.checkpoint()?;
         work.push(&mut holes, hole)?;
     }
     Ok(Polygon::new(shell, holes.export(work)?))
@@ -854,6 +864,7 @@ fn zero_surface<'a>(
             for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("geodesic_buffer/projected.rs::zero_surface:3");
+                work.checkpoint()?;
                 let ring = copy_ring(ring, limits, vertices, work)?;
                 work.push(&mut rings, ring)?;
             }
@@ -877,6 +888,7 @@ fn zero_surface<'a>(
             {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("geodesic_buffer/projected.rs::zero_surface:4");
+                work.checkpoint()?;
                 let mut copied = copy_ring(ring, limits, vertices, work)?;
                 let expected = if index == 0 {
                     std::cmp::Ordering::Greater
@@ -901,6 +913,7 @@ fn zero_surface<'a>(
             for previous in &result[..] {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("geodesic_buffer/projected.rs::zero_surface:6");
+                work.checkpoint()?;
                 if same_polygon(previous, &polygon, work)? {
                     duplicate = true;
                     break;
@@ -943,10 +956,12 @@ fn zero_union(
     for polygon in polygons(geometry) {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected.rs::zero_union:1");
+        work.checkpoint()?;
         let mut rings = CountedVec::new();
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::zero_union:2");
+            work.checkpoint()?;
             let copied = copy_ring(ring, limits, vertices, work)?;
             work.push(&mut rings, copied)?;
         }
@@ -963,6 +978,7 @@ fn zero_union(
         for edge in ring.0.windows(2) {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::zero_union:4");
+            work.checkpoint()?;
             let mut found = false;
             for original in parts(geometry)? {
                 #[cfg(test)]
@@ -1203,10 +1219,12 @@ fn publish(
     for polygon in single.into_iter().chain(multiple) {
         #[cfg(test)]
         crate::noding::gop028::cycle("geodesic_buffer/projected.rs::publish:1");
+        work.checkpoint()?;
         let mut rings = CountedVec::new();
         for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::publish:2");
+            work.checkpoint()?;
             let mut points = CountedVec::new();
             for pair in ring.0.windows(2) {
                 #[cfg(test)]
@@ -1215,10 +1233,11 @@ fn publish(
                 let a = pair[0];
                 let b = pair[1];
                 let length = ((a.x - b.x).abs().next_up() + (a.y - b.y).abs().next_up()).next_up();
-                let n = divisions(length, (model / 1e-6).sqrt().next_down())?;
+                let n = divisions(length, (model / 1e-6).sqrt().next_down(), work)?;
                 for i in 0..n {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("geodesic_buffer/projected.rs::publish:4");
+                    work.checkpoint()?;
                     let fraction = f64::from(i) / f64::from(n);
                     let p = Coord {
                         x: (b.x - a.x).mul_add(fraction, a.x),
@@ -1240,6 +1259,7 @@ fn publish(
         for hole in rings {
             #[cfg(test)]
             crate::noding::gop028::cycle("geodesic_buffer/projected.rs::publish:5");
+            work.checkpoint()?;
             work.push(&mut holes, hole)?;
         }
         let interiors = holes.export(work)?;

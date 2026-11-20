@@ -76,6 +76,7 @@ impl Shape {
         for rings in &self.polygons {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::build_indices:1");
+            work.checkpoint()?;
             let mut bb = [
                 work.integer(0)?,
                 work.integer(0)?,
@@ -96,6 +97,7 @@ impl Shape {
                     crate::noding::gop028::cycle(
                         "predicates/arrangement_indexed.rs::build_indices:3",
                     );
+                    work.checkpoint()?;
                     if i == 0
                         || (j % 2 == 0 && q.try_cmp(&bb[j])?.is_lt())
                         || (j % 2 == 1 && q.try_cmp(&bb[j])?.is_gt())
@@ -110,10 +112,12 @@ impl Shape {
         for rings in &self.polygons {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::build_indices:4");
+            work.checkpoint()?;
             let mut indices = CountedVec::new();
             for ring in rings {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::build_indices:5");
+                work.checkpoint()?;
                 let index = IntervalIndex::new(ring.iter().map(|e| (&e.a.y, &e.b.y)), work)?;
                 work.push(&mut indices, index)?;
             }
@@ -133,6 +137,7 @@ impl Shape {
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed.rs::boundary_candidates:1",
             );
+            work.checkpoint()?;
             let (rings, indices) = (&self.polygons[id], &self.ring_indices[id]);
             for (ring, index) in rings.iter().zip(indices) {
                 #[cfg(test)]
@@ -145,6 +150,7 @@ impl Shape {
                     crate::noding::gop028::cycle(
                         "predicates/arrangement_indexed.rs::boundary_candidates:3",
                     );
+                    work.checkpoint()?;
                     work.push(&mut edges, &ring[id])?;
                 }
             }
@@ -171,6 +177,7 @@ impl Shape {
             for edge in ring {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::validate_rings:2");
+                work.checkpoint()?;
                 work.push(&mut edges, edge)?;
             }
             crate::noding::visit(&edges, work, |i, j, hits, _work| {
@@ -200,11 +207,13 @@ impl Shape {
         for polygon_index in self.polygon_index.point_candidates(p, work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::validate_cell:1");
+            work.checkpoint()?;
             let rings = &self.polygons[polygon_index];
             let mut statuses = CountedVec::new();
             for (ring, index) in rings.iter().zip(&self.ring_indices[polygon_index]) {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::validate_cell:2");
+                work.checkpoint()?;
                 let mut boundary = false;
                 for id in index.candidates(&p.y, work)? {
                     #[cfg(test)]
@@ -331,6 +340,7 @@ impl Shape {
         for index in 0..rings.len() {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::add_polygon:1");
+            work.checkpoint()?;
             work.push(&mut parents, index)?;
         }
         work.push(&mut self.connected, parents)?;
@@ -366,6 +376,7 @@ impl Shape {
         for e in ring(&line.0, work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::line:1");
+            work.checkpoint()?;
             work.push(&mut self.lines, e)?;
         }
         if let (Some(a), Some(b)) = (line.0.first(), line.0.last()) {
@@ -396,6 +407,7 @@ impl Shape {
                         crate::noding::gop028::cycle(
                             "predicates/arrangement_indexed.rs::geometry:2",
                         );
+                        work.checkpoint()?;
                         push_point(&mut self.points, p.0, work)?;
                     }
                 }
@@ -405,6 +417,7 @@ impl Shape {
                         crate::noding::gop028::cycle(
                             "predicates/arrangement_indexed.rs::geometry:3",
                         );
+                        work.checkpoint()?;
                         self.line(l, work)?;
                     }
                 }
@@ -415,6 +428,7 @@ impl Shape {
                         crate::noding::gop028::cycle(
                             "predicates/arrangement_indexed.rs::geometry:4",
                         );
+                        work.checkpoint()?;
                         let before = self.polygons.len();
                         self.polygon(p, work)?;
                         if self.polygons.len() != before {
@@ -428,6 +442,7 @@ impl Shape {
                         crate::noding::gop028::cycle(
                             "predicates/arrangement_indexed.rs::geometry:5",
                         );
+                        work.checkpoint()?;
                         work.push(&mut pending, g)?;
                     }
                 }
@@ -472,6 +487,7 @@ impl Shape {
         for id in self.polygon_index.point_candidates(p, work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::area_contains:1");
+            work.checkpoint()?;
             let (rings, indices) = (&self.polygons[id], &self.ring_indices[id]);
             work.step()?;
             if let Some(exterior) = rings.first() {
@@ -482,6 +498,7 @@ impl Shape {
                         crate::noding::gop028::cycle(
                             "predicates/arrangement_indexed.rs::area_contains:2",
                         );
+                        work.checkpoint()?;
                         if ring_contains(r, index, p, direction, work)? {
                             hole = true;
                             break;
@@ -543,6 +560,7 @@ impl Shape {
             for (a, b) in rays.iter().zip(rays.iter().cycle().skip(1)) {
                 #[cfg(test)]
                 crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::position:5");
+                work.checkpoint()?;
                 if !self.area_contains(p, Some(&a.try_add(b)?), work)? {
                     return Ok(1);
                 }
@@ -555,6 +573,7 @@ impl Shape {
         for id in self.line_index.candidates(&p.x, work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::position:6");
+            work.checkpoint()?;
             let e = &self.lines[id];
             work.step()?;
             if e.contains(p)? {
@@ -562,6 +581,7 @@ impl Shape {
                 for id in self.end_index.candidates(&p.x, work)? {
                     #[cfg(test)]
                     crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::position:7");
+                    work.checkpoint()?;
                     let q = &self.ends[id];
                     work.step()?;
                     if q == p {
@@ -574,6 +594,7 @@ impl Shape {
         for id in self.point_index.candidates(&p.x, work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::position:8");
+            work.checkpoint()?;
             let q = &self.points[id];
             work.step()?;
             if q == p {
@@ -620,6 +641,7 @@ fn ring_contains(
     for id in index.candidates(&p.y, work)? {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::ring_contains:1");
+        work.checkpoint()?;
         let e = &ring[id];
         work.step()?;
         let above = |y: &Q| -> Result<bool, PredicateError> {
@@ -666,6 +688,7 @@ fn finite_geometry(
         for ring in std::iter::once(p.exterior()).chain(p.interiors()) {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::polygon:2");
+            work.checkpoint()?;
             finite(ring.coords_iter(), side, work)?;
         }
         Ok(())
@@ -678,6 +701,7 @@ fn finite_geometry(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed.rs::finite_geometry:1",
                 );
+                work.checkpoint()?;
                 polygon(p, side, work)?;
             }
         }
@@ -687,6 +711,7 @@ fn finite_geometry(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed.rs::finite_geometry:2",
                 );
+                work.checkpoint()?;
                 finite(l.coords_iter(), side, work)?;
             }
         }
@@ -716,6 +741,7 @@ fn validate_structure(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed.rs::validate_structure:2",
                 );
+                work.checkpoint()?;
                 work.push(&mut pending, g)?;
             }
             continue;
@@ -779,6 +805,7 @@ fn validate_structure(
                     crate::noding::gop028::cycle(
                         "predicates/arrangement_indexed.rs::validate_structure:6",
                     );
+                    work.checkpoint()?;
                     line_valid(l, work)?;
                 }
             }
@@ -789,6 +816,7 @@ fn validate_structure(
                     crate::noding::gop028::cycle(
                         "predicates/arrangement_indexed.rs::validate_structure:7",
                     );
+                    work.checkpoint()?;
                     polygon_valid(p, work)?;
                 }
             }
@@ -820,6 +848,7 @@ fn samples(
     for (i, value) in values.iter().enumerate() {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::samples:1");
+        work.checkpoint()?;
         work.push(&mut result, (value.try_clone()?, true))?;
         if let Some(next) = values.get(i + 1) {
             work.push(&mut result, (value.try_midpoint(next)?, false))?;
@@ -882,12 +911,14 @@ fn relate_impl(
     for e in a.edges().chain(b.edges()) {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::relate_impl:1");
+        work.checkpoint()?;
         work.push(&mut edges, e)?;
     }
     let mut points = CountedVec::new();
     for p in a.points.iter().chain(&b.points) {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::relate_impl:2");
+        work.checkpoint()?;
         work.push(&mut points, p)?;
     }
     let mut xs = CountedVec::new();
@@ -898,12 +929,14 @@ fn relate_impl(
     {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::relate_impl:3");
+        work.checkpoint()?;
         work.push(&mut xs, x.try_clone()?)?;
     }
     crate::noding::visit(&edges, work, |_, _, hits, work| {
         for point in hits.into_iter().flatten() {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::relate_impl:4");
+            work.checkpoint()?;
             work.push(&mut xs, point.x)?;
         }
         Ok(())
@@ -920,6 +953,7 @@ fn relate_impl(
         for id in edge_index.candidates(&x, work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::relate_impl:6");
+            work.checkpoint()?;
             let e = edges[id];
             work.step()?;
             if between(&x, &e.a.x, &e.b.x)? {
@@ -934,6 +968,7 @@ fn relate_impl(
         for id in point_index.candidates(&x, work)? {
             #[cfg(test)]
             crate::noding::gop028::cycle("predicates/arrangement_indexed.rs::relate_impl:7");
+            work.checkpoint()?;
             let p = points[id];
             work.step()?;
             if p.x == x {

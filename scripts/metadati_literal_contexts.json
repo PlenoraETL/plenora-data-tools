@@ -1356,7 +1356,7 @@
     "[[\"token\",\",\"],[\"token\",\"p\"],[\"token\",\".\"],[\"token\",\"0\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"],[\"token\",\"?\"],[\"token\",\";\"]]",
     "[[\"token\",\";\"],[\"token\",\"line_edges\"],[\"token\",\"(\"],[\"token\",\"source\"],[\"token\",\",\"],[\"string\",\"left\"],[\"token\",\",\"],[\"token\",\"&\"],[\"token\",\"mut\"],[\"token\",\"edges\"],[\"token\",\",\"]]",
     "[[\"token\",\">\"],[\"token\",\"line_edges\"],[\"token\",\"(\"],[\"token\",\"l\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"edges\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"]]",
-    "[[\"token\",\"{\"],[\"token\",\"line_edges\"],[\"token\",\"(\"],[\"token\",\"l\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"edges\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"]]"
+    "[[\"token\",\";\"],[\"token\",\"line_edges\"],[\"token\",\"(\"],[\"token\",\"l\"],[\"token\",\",\"],[\"string\",\"right\"],[\"token\",\",\"],[\"token\",\"edges\"],[\"token\",\",\"],[\"token\",\"work\"],[\"token\",\")\"]]"
   ],
   "crates/plenora-kernels-geo/src/extended_algorithms/split_limited/tests.rs": [
     "[[\"token\",\")\"],[\"token\",\")\"],[\"token\",\".\"],[\"token\",\"expect\"],[\"token\",\"(\"],[\"string\",\"decimo\"],[\"token\",\")\"],[\"token\",\";\"],[\"token\",\"let\"],[\"token\",\"point\"],[\"token\",\"=\"]]",

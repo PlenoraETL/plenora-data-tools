@@ -62,6 +62,8 @@ funzioni chiamate. Gli array scritti nel `for` hanno un analogo limite
 locale (`array_iteration_bound`); le espressioni degli elementi sono
 visitate separatamente. `entry_checkpoint` registra un controllo condiviso
 incondizionato come prima istruzione di produzione nei moduli verificati.
+Il controllo `noding::Work::checkpoint` osserva deadline e cancellazione
+con la stessa precedenza di `step`, senza aumentare gli addebiti di lavoro.
 I moduli chiusi sono elencati in `CLOSED_MODULES` nel test: ogni loro ciclo
 deve superare una di queste verifiche, anche rigenerando la fixture.
 Il [debito esplicito](../crates/plenora-kernels-geo/tests/fixtures/checkpoint620-open-cycles.json)

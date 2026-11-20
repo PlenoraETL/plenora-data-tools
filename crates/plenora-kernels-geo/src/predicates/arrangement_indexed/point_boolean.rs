@@ -117,6 +117,7 @@ fn execute(
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/point_boolean.rs::execute:1",
             );
+            work.checkpoint()?;
             work.nodes(1)?;
             work.push(&mut other_ids, other_points.len())?;
             work.push(&mut other_points, canonical(c))?;
@@ -134,6 +135,7 @@ fn execute(
     for c in geo::CoordsIter::coords_iter(sites) {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed/point_boolean.rs::execute:2");
+        work.checkpoint()?;
         let covered = if ld == 0 && rd == 0 {
             work.nodes(1)?;
             let site = canonical(c);
@@ -174,6 +176,7 @@ fn execute(
             crate::noding::gop028::cycle(
                 "predicates/arrangement_indexed/point_boolean.rs::execute:4",
             );
+            work.checkpoint()?;
             work.nodes(1)?;
             work.push(&mut selected, canonical(c))?;
         }
@@ -182,6 +185,7 @@ fn execute(
     for id in 0..selected.len() {
         #[cfg(test)]
         crate::noding::gop028::cycle("predicates/arrangement_indexed/point_boolean.rs::execute:5");
+        work.checkpoint()?;
         work.push(&mut ids, id)?;
     }
     crate::predicates::interval_index::sort_ids(
@@ -266,6 +270,7 @@ pub(super) fn copy_line(
         crate::noding::gop028::cycle(
             "predicates/arrangement_indexed/point_boolean.rs::copy_line:1",
         );
+        work.checkpoint()?;
         work.nodes(1)?;
         work.push(&mut coords, *c)?;
     }
@@ -293,6 +298,7 @@ pub(super) fn copy_higher(
                 crate::noding::gop028::cycle(
                     "predicates/arrangement_indexed/point_boolean.rs::copy_higher:1",
                 );
+                work.checkpoint()?;
                 let h = copy_line(h, work)?;
                 work.push(&mut holes, h)?;
             }
