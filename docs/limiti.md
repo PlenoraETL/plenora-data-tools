@@ -2203,3 +2203,61 @@ Per qualificare il buffer non degenere servono una costruzione con
 arrotondamento GOP-015A dimostrato, bounds geometrici e topologici GOP-006,
 e prove indipendenti dell'inviluppo dell'intero insieme. Il solo controllo
 inverse dei vertici direct non dimostra queste proprieta'.
+
+## Chiamate dirette con CRS
+
+Gli ingressi Rust `with_crs` aggiungono `CrsContext` alle famiglie
+operations, topology, predicates, analysis, spatial_join, construction,
+extended, extended_algorithms, extensions, extensions2, extensions3,
+advanced, cluster, rust_backend, offset, reshape, trim_extend e alle
+booleane dimensionali. Le trasformazioni centroid/convex_hull/envelope
+sono in `plenora_kernels_geo::with_crs`. Un contesto contiene un CRS per
+operando, anche quando l'operando e' una colonna o collezione omogenea.
+Una cardinalita' diversa da quella della firma e' un errore tipizzato.
+
+`CrsContext::new(&[&crs])` applica il requisito del catalogo: un'area su
+EPSG:4326 e' rifiutata con `DirectError::Crs(ProjectedRequired)`.
+`CrsContext::planar_coordinates(&[&crs])` dichiara invece il consenso al
+piano delle coordinate. Un quadrato di lato 2 gradi ha area 4 gradi
+quadrati, non metri quadrati. Il segmento da -179 a +179 ha lunghezza
+planare 358 gradi; non attraversa automaticamente il seam corto. Ai poli
+il piano conserva le ascisse distinte: non identifica tutti i meridiani.
+Nessuna coordinata cambia per adattarsi a un requisito CRS.
+
+La regola vive in `plenora_core::crs::validate_requirement_with_mode`;
+`validate_requirement`, usata da analisi e pipeline, delega alla stessa
+regola senza consenso planare. Le famiglie Geographic e Reprojection
+rifiutano il consenso planare: l'opzione non converte operazioni
+geodetiche in operazioni XY. Le famiglie Known conservano il loro
+requisito, senza imporre un SR proiettato alle operazioni di struttura.
+L'identita' semantica degli SR resta obbligatoria per SameProjected;
+le misure geodetiche binarie richiedono lo stesso datum/CRS nei wrapper.
+
+I parametri di precisione dei wrapper derivano da `Precision::from_crs`;
+le misure geodetiche ricavano l'ellissoide dal contesto. Tolleranze,
+distanze, filtri dimensionali, limiti di lavoro e prenotazioni restano
+quelli del kernel. Non cambiano l'arrotondamento GOP-015A o la contabilita'
+GOP-027. `DirectError::Kernel` conserva l'errore originale, inclusi
+scadenza e cancellazione. La pipeline continua a tradurre la scadenza in
+Timeout. Queste API non aggiungono visite alle coordinate o allocazioni
+geometriche; assi XY normalizzati e dominio delle coordinate restano
+precondizioni del chiamante, da verificare al confine di ingresso.
+
+### Rimozione delle API storiche senza SR
+
+Dalla release 7.0.0, i 138 ingressi diretti con equivalente `with_crs` non
+sono piu' pubblici. La convenzione unica conserva il modulo `with_crs`:
+`operations::area` si sostituisce con `operations::with_crs::area(context, geometry)`.
+Il criterio e' il requisito dichiarato nel catalogo, incluso `Known`:
+anche operazioni non metriche gia' coperte dal contratto richiedono SR.
+Precisione ed ellissoide derivano dal contesto; gli errori originali sono
+in `DirectError::Kernel`, i rifiuti del contratto in `DirectError::Crs`.
+
+Restano le funzioni senza equivalente `with_crs` fuori dal contratto:
+trasporto e decodifica WKB, validazione strutturale/OGC e confronto
+strutturale delle coordinate (`equality::geo_equals_with_tolerance`).
+Le API che gia' ricevono SR restano. Gli adapter Arrow ricevono SR dai
+metadati e conservano firme e limiti propri, compresa la precisione esplicita.
+Il censimento rifiuta la riesposizione degli ingressi diretti senza SR;
+non equipara ogni utilita' interna a un'operazione del catalogo.
+L'elenco delle sostituzioni e' nel [changelog](../CHANGELOG.md).

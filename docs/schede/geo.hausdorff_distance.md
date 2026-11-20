@@ -29,7 +29,7 @@ contratto (`sorted_by`, `row_count`).
 
 ### Righe
 
-1:1: una distanza per riga, dal kernel `extended::hausdorff_distance`
+1:1: una distanza per riga, dal kernel `extended::with_crs::hausdorff_distance`
 (riga, `other_wkb`). Una geometria nulla dà una distanza nulla, e anche
 una geometria senza coordinate, da una parte o dall'altra (il kernel
 rende «nessun valore»).
@@ -68,7 +68,7 @@ riga. Prima del kernel, per ogni cella non nulla della colonna geometria:
 - `Schema`: il contratto d'ingresso dichiara i tipi geometrici con un
   elenco e la cella è di un altro tipo.
 
-Dal kernel (`extended::hausdorff_distance`, `ExtendedError`), per riga:
+Dal kernel (`extended::with_crs::hausdorff_distance`, `ExtendedError`), per riga:
 
 - `InvalidPlan`: `InvalidInput` (coordinate non finite o geometria della
   riga non valida OGC; `other_wkb` è già validata in analisi),

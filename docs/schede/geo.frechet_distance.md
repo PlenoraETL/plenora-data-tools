@@ -39,7 +39,7 @@ geometria resta com'è. Metadati di schema e proprietà del contratto
 1:1: una distanza per riga, nelle unità del CRS. Per il contratto
 `other_wkb` è il secondo operando; la distanza discreta è simmetrica, quindi
 l'ordine non cambia il valore. Il kernel
-(`extended_algorithms::frechet_distance`) riceve due `LineString`. Una
+(`extended_algorithms::with_crs::frechet_distance`) riceve due `LineString`. Una
 geometria nulla dà una distanza nulla, e anche una linea vuota, da una
 parte o dall'altra (il kernel non rende un valore); una riga che non è una
 `LineString` ferma il passo con un errore (vedi «Errori»).

@@ -23,7 +23,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 | `y_origin` | numero | `0` | finito | y dell'origine fissa |
 
 `x_origin` e `y_origin` sono facoltativi, anche uno solo: il kernel
-(`extended::scale_about`) riceve l'origine sempre esplicita, e il runner
+(`extended::with_crs::scale_about`) riceve l'origine sempre esplicita, e il runner
 mette `0` al posto di ciascuna che manca. Senza entrambe si scala attorno
 a `(0, 0)` del CRS, non attorno alla geometria.
 
@@ -36,7 +36,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1: il runner chiama il kernel (`extended::scale_about`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::scale_about`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 

@@ -1975,6 +1975,12 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn validate_requirement( requirement: CrsRequirement, inputs: &[&ResolvedCrs], ) -> Result<(), CrsError>"
     },
+    "crates/plenora-core/src/crs.rs::validate_requirement_with_mode": {
+      "signature": "pub fn validate_requirement_with_mode( requirement: CrsRequirement, inputs: &[&ResolvedCrs], mode: CrsMode, ) -> Result<(), CrsError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo CRS risolti e scelta esplicita del modello; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
     "crates/plenora-core/src/crs.rs::validity_domain": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -2148,6 +2154,30 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn trasforma_dettagli( &self, percorso: usize, x: f64, y: f64, ) -> Result<Option<PuntoRiproiettato>, CrsError>"
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::forward": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "signature": "pub fn forward(&self, longitude: f64, latitude: f64) -> Result<(f64, f64), CrsError>"
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::inverse": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "signature": "pub fn inverse(&self, x: f64, y: f64) -> Result<(f64, f64), CrsError>"
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::inverse_shape_bounds": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "signature": "pub const fn inverse_shape_bounds(&self) -> TransverseShapeBounds"
+    },
+    "crates/plenora-core/src/crs/riproiezione/locale.rs::new": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "signature": "pub fn new(crs: &ResolvedCrs, longitude: f64) -> Result<Self, CrsError>"
     },
     "crates/plenora-core/src/crs/riproiezione/ntv2.rs::da_byte": {
       "arrow_arguments": [],
@@ -2796,6 +2826,12 @@
       "reason": "Nessun buffer Arrow: timeout float validato nel modulo temporale checked.",
       "signature": "pub fn timeout_secondi_f64(adesso: Instant, secondi: f64) -> Result<Instant>"
     },
+    "crates/plenora-core/src/tempo.rs::verifica_interruzione": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Controllo GOP-028 condiviso: clock monotono, token atomico e costruttori di errori; nessun dato Arrow.",
+      "signature": "pub fn verifica_interruzione<E>( scadenza: Option<Instant>, annullamento: Option<&std::sync::atomic::AtomicBool>, errore_scadenza: impl FnOnce() -> E, errore_annullamento: impl FnOnce() -> E, ) -> std::result::Result<(), E>"
+    },
     "crates/plenora-core/src/tipo_arrow.rs::descrivi_tipo": {
       "arrow_arguments": [
         "DataType"
@@ -3275,32 +3311,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn envelope(&self) -> Self::Envelope"
     },
-    "crates/plenora-kernels-geo/src/advanced.rs::voronoi_cells": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn voronoi_cells( geometries: &[Geometry<f64>], max_points: usize, precision: Precision, ) -> Result<Vec<Geometry<f64>>, AdvancedError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::count_points_in_polygons": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn count_points_in_polygons( polygons: &[Option<Geometry<f64>>], points: &[Option<Geometry<f64>>], max_pairs: u64, ) -> Result<Vec<u64>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::count_points_in_polygons_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn count_points_in_polygons_validated( polygons: &[Option<Geometry<f64>>], points: &[Option<Geometry<f64>>], max_pairs: u64, ) -> Result<Vec<u64>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::count_points_in_polygons_validated_con_margine": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn count_points_in_polygons_validated_con_margine( polygons: &[Option<Geometry<f64>>], points: &[Option<Geometry<f64>>], max_pairs: u64, margine: MargineMemoria, ) -> Result<Vec<u64>, AnalysisError>"
-    },
     "crates/plenora-kernels-geo/src/analysis.rs::distance_2": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -3312,54 +3322,6 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn envelope(&self) -> Self::Envelope"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::minimum_distances": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn minimum_distances( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_comparisons: u64, ) -> Result<Vec<Option<f64>>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::minimum_distances_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn minimum_distances_validated( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_comparisons: u64, ) -> Result<Vec<Option<f64>>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::nearest_matches": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn nearest_matches( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_distance: Option<f64>, max_comparisons: u64, max_results: u64, ) -> Result<Vec<NearestMatch>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::nearest_matches_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn nearest_matches_validated( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_distance: Option<f64>, max_comparisons: u64, max_results: u64, ) -> Result<Vec<NearestMatch>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::nearest_matches_validated_con_margine": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn nearest_matches_validated_con_margine( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_distance: Option<f64>, (max_comparisons, max_results): (u64, u64), margine: MargineMemoria, ) -> Result<Vec<NearestMatch>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::within_indexes": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn within_indexes( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_pairs: u64, ) -> Result<Vec<u64>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::within_indexes_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn within_indexes_validated( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_pairs: u64, ) -> Result<Vec<u64>, AnalysisError>"
-    },
-    "crates/plenora-kernels-geo/src/analysis.rs::within_indexes_validated_con_margine": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn within_indexes_validated_con_margine( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], max_pairs: u64, margine: MargineMemoria, ) -> Result<Vec<u64>, AnalysisError>"
     },
     "crates/plenora-kernels-geo/src/analyze/config.rs::column_index": {
       "arrow_arguments": [],
@@ -3447,29 +3409,6 @@
       "reason": "Validazione completa dei dati Arrow prima del primo uso.",
       "signature": "pub fn map_nullable<T: Send>( cells: &BinaryArray, f: impl Fn(&[u8]) -> Result<Option<T>, PlenoraError> + Sync, ) -> Result<Vec<Option<T>>, PlenoraError>"
     },
-    "crates/plenora-kernels-geo/src/cluster.rs::dbscan": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn dbscan( points: &[Point<f64>], eps: f64, min_points: usize, ) -> Result<Vec<Option<u64>>, ClusterError>"
-    },
-    "crates/plenora-kernels-geo/src/cluster.rs::dbscan_column": {
-      "checks": [
-        {
-          "function": "crates/plenora-kernels-geo/src/cluster.rs::dbscan_column",
-          "contains": "plenora_core::valida_arrow::array(cells)?;"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn dbscan_column( cells: &BinaryArray, eps: f64, min_points: usize, ) -> Result<Vec<Option<u64>>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/cluster.rs::dbscan_nullable": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn dbscan_nullable( geometries: &[Option<Geometry<f64>>], eps: f64, min_points: usize, ) -> Result<Vec<Option<u64>>, ClusterError>"
-    },
     "crates/plenora-kernels-geo/src/cluster.rs::distance_2": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -3481,30 +3420,6 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn envelope(&self) -> Self::Envelope"
-    },
-    "crates/plenora-kernels-geo/src/construction.rs::geometry_from_wkt": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError>"
-    },
-    "crates/plenora-kernels-geo/src/construction.rs::line_from_ordered_points": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn line_from_ordered_points( geometries: &[Option<Geometry<f64>>], ) -> Result<Option<Geometry<f64>>, ConstructionError>"
-    },
-    "crates/plenora-kernels-geo/src/construction.rs::point_from_lon_lat": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, ConstructionError>"
-    },
-    "crates/plenora-kernels-geo/src/construction.rs::polygon_from_ordered_points": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygon_from_ordered_points( geometries: &[Option<Geometry<f64>>], ) -> Result<Option<Geometry<f64>>, ConstructionError>"
     },
     "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinate": {
       "signature": "pub fn decode_coordinate( request: CoordinateRequest<'_>, text: &str, ) -> Result<DecodedCoordinate, CoordinateApiError>",
@@ -3518,6 +3433,18 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinates_with_limits": {
+      "signature": "pub fn decode_coordinates_with_limits( request: CoordinateRequest<'_>, texts: &[&str], limits: CoordinateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<DecodedCoordinate>, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::default": {
+      "signature": "fn default() -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
     "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinate": {
       "signature": "pub fn encode_coordinate( request: CoordinateRequest<'_>, point: CoordinatePoint, ) -> Result<String, CoordinateApiError>",
       "classification": "non riceve dati esterni",
@@ -3526,6 +3453,12 @@
     },
     "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinates": {
       "signature": "pub fn encode_coordinates( request: CoordinateRequest<'_>, points: &[CoordinatePoint], ) -> Result<Vec<String>, CoordinateApiError>",
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinates_with_limits": {
+      "signature": "pub fn encode_coordinates_with_limits( request: CoordinateRequest<'_>, points: &[CoordinatePoint], limits: CoordinateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<String>, CoordinateApiError>",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -3662,6 +3595,24 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
+    "crates/plenora-kernels-geo/src/crs.rs::from": {
+      "classification": "non riceve dati esterni",
+      "reason": "Adattamento tipizzato di errori CRS/kernel; nessun buffer o dato Arrow in ingresso.",
+      "signature": "fn from(error: DirectError<Self>) -> Self",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/crs.rs::new": {
+      "signature": "pub const fn new(inputs: &'a [&'a ResolvedCrs]) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo CRS risolti e scelta esplicita del modello; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
+    "crates/plenora-kernels-geo/src/crs.rs::planar_coordinates": {
+      "signature": "pub const fn planar_coordinates(inputs: &'a [&'a ResolvedCrs]) -> Self",
+      "classification": "non riceve dati esterni",
+      "reason": "Solo CRS risolti e scelta esplicita del modello; nessun buffer o cella Arrow.",
+      "arrow_arguments": []
+    },
     "crates/plenora-kernels-geo/src/crs.rs::validate_geometry_domain": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -3704,167 +3655,11 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn with_normalization(mut self, normalize: bool) -> Self"
     },
-    "crates/plenora-kernels-geo/src/extended.rs::affine_transform": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn affine_transform( geometry: &Geometry<f64>, coefficients: [f64; 6], ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::affine_transform_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn affine_transform_validated( geometry: &Geometry<f64>, coefficients: [f64; 6], ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::concave_hull": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn concave_hull( geometry: &Geometry<f64>, concavity: f64, length_threshold: f64, max_coordinates: u64, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::concave_hull_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn concave_hull_validated( geometry: &Geometry<f64>, concavity: f64, length_threshold: f64, max_coordinates: u64, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::geodesic_distance_m": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geodesic_distance_m( left: Point<f64>, right: Point<f64>, ellissoide: &EllissoideGeodetico, ) -> Result<f64, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::geodesic_line_length_m": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geodesic_line_length_m( line: &geo::LineString<f64>, ellissoide: &EllissoideGeodetico, ) -> Result<f64, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::hausdorff_distance": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn hausdorff_distance( left: &Geometry<f64>, right: &Geometry<f64>, max_coordinate_pairs: u64, ) -> Result<Option<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::hausdorff_distance_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn hausdorff_distance_validated( left: &Geometry<f64>, right: &Geometry<f64>, max_coordinate_pairs: u64, ) -> Result<Option<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::haversine_distance_m": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn haversine_distance_m( left: Point<f64>, right: Point<f64>, ellissoide: &EllissoideGeodetico, ) -> Result<f64, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::rotate_about": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn rotate_about( geometry: &Geometry<f64>, degrees: f64, origin: Point<f64>, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::rotate_about_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn rotate_about_validated( geometry: &Geometry<f64>, degrees: f64, origin: Point<f64>, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::scale_about": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn scale_about( geometry: &Geometry<f64>, x_factor: f64, y_factor: f64, origin: Point<f64>, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::scale_about_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn scale_about_validated( geometry: &Geometry<f64>, x_factor: f64, y_factor: f64, origin: Point<f64>, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::translate": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn translate( geometry: &Geometry<f64>, x_offset: f64, y_offset: f64, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended.rs::translate_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn translate_validated( geometry: &Geometry<f64>, x_offset: f64, y_offset: f64, ) -> Result<Geometry<f64>, ExtendedError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::delaunay": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn delaunay( geometry: &Geometry<f64>, max_input_coordinates: u64, max_triangles: u64, ) -> Result<Vec<Polygon<f64>>, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::densify": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn densify( geometry: &Geometry<f64>, max_segment_length: f64, max_output_coordinates: u64, ) -> Result<Geometry<f64>, ExtendedAlgorithmError>"
-    },
     "crates/plenora-kernels-geo/src/extended_algorithms.rs::envelope": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn envelope(&self) -> Self::Envelope"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::frechet_distance": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn frechet_distance( left: &LineString<f64>, right: &LineString<f64>, max_coordinate_pairs: u64, ) -> Result<Option<f64>, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::geodesic_area_m2": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geodesic_area_m2( geometry: &Geometry<f64>, ellissoide: &EllissoideGeodetico, ) -> Result<f64, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::geodesic_bearing_degrees": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geodesic_bearing_degrees( origin: Point<f64>, destination: Point<f64>, ellissoide: &EllissoideGeodetico, ) -> Result<f64, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::geometry_diagnostics": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geometry_diagnostics( geometry: &Geometry<f64>, ) -> Result<GeometryDiagnostics, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::line_interpolate_point": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn line_interpolate_point( line: &LineString<f64>, ratio: f64, ) -> Result<Option<Point<f64>>, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::line_merge": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn line_merge( geometry: &Geometry<f64>, max_input_coordinates: u64, max_output_lines: u64, ) -> Result<Vec<LineString<f64>>, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::line_substring": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn line_substring( line: &LineString<f64>, start_ratio: f64, end_ratio: f64, ) -> Result<Option<Geometry<f64>>, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::snap_to_grid": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn snap_to_grid( geometry: &Geometry<f64>, grid_size: f64, ) -> Result<Geometry<f64>, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms.rs::split_line": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn split_line( source: &LineString<f64>, splitter: &Geometry<f64>, tolerance: f64, max_input_coordinates: u64, max_intersection_tests: u64, max_output_parts: u64, max_output_coordinates: u64, ) -> Result<Vec<LineString<f64>>, ExtendedAlgorithmError>"
     },
     "crates/plenora-kernels-geo/src/extended_algorithms/baseline_600.rs::envelope": {
       "arrow_arguments": [],
@@ -3883,24 +3678,6 @@
       "classification": "non riceve dati esterni",
       "reason": "Copia letterale delle API pubblicate nella 6.0.0, usata come riferimento: nessun dato Arrow ricevuto.",
       "signature": "pub fn split_line( source: &LineString<f64>, splitter: &Geometry<f64>, tolerance: f64, max_input_coordinates: u64, max_intersection_tests: u64, max_output_parts: u64, max_output_coordinates: u64, ) -> Result<Vec<LineString<f64>>, ExtendedAlgorithmError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms/polygonize_limited.rs::polygonize_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygonize_with_limits( linework: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<Polygon<f64>>, PredicateError>"
-    },
-    "crates/plenora-kernels-geo/src/extended_algorithms/split_limited.rs::split_line_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn split_line_with_limits( source: &LineString<f64>, splitter: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<LineString<f64>>, PredicateError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions.rs::collect_geometries": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn collect_geometries( geometries: &[Option<Geometry<f64>>], ) -> Result<Option<Geometry<f64>>, ExtensionError>"
     },
     "crates/plenora-kernels-geo/src/extensions.rs::del_passo": {
       "arrow_arguments": [],
@@ -3926,142 +3703,11 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn from(_: crate::rust_backend::griglia::PrecisioneInsufficiente) -> Self"
     },
-    "crates/plenora-kernels-geo/src/extensions.rs::from_wkt_column": {
-      "checks": [
-        {
-          "function": "crates/plenora-kernels-geo/src/extensions.rs::from_wkt_column",
-          "contains": "plenora_core::valida_arrow::array(values)?;"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn from_wkt_column( values: &StringArray, on_error: OnWktError, ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions.rs::from_wkt_column_named": {
-      "checks": [
-        {
-          "function": "crates/plenora-kernels-geo/src/extensions.rs::from_wkt_column_named",
-          "contains": "plenora_core::valida_arrow::array(values)?;"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn from_wkt_column_named( values: &StringArray, _on_error: OnWktError, column: Option<&str>, ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions.rs::geometry_accessors": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geometry_accessors(geometry: &Geometry<f64>) -> Result<GeometryAccessors, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions.rs::line_locate_point": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn line_locate_point( geometry: &Geometry<f64>, point: &Point<f64>, ) -> Result<Option<f64>, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions2.rs::generate_grid": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn generate_grid( extent: &GridExtent, cell_size: f64, shape: GridShape, ) -> Result<Vec<GridCell>, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions2.rs::generate_grid_rows": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn generate_grid_rows( extent: &GridExtent, cell_size: f64, shape: GridShape, ) -> Result<Vec<GridRow>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions2.rs::grid_cell_count": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn grid_cell_count( extent: &GridExtent, cell_size: f64, shape: GridShape, ) -> Result<u64, ExtensionError>"
-    },
     "crates/plenora-kernels-geo/src/extensions2.rs::new": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn new(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Result<Self, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions2.rs::snap": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn snap( geometry: &Geometry<f64>, reference: &Geometry<f64>, tolerance: f64, ) -> Result<Geometry<f64>, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions2.rs::snap_column": {
-      "checks": [
-        {
-          "function": "crates/plenora-kernels-geo/src/extensions2.rs::snap_column",
-          "contains": "plenora_core::valida_arrow::array(cells)?;"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn snap_column( cells: &BinaryArray, reference: &Geometry<f64>, tolerance: f64, ) -> Result<Vec<Option<Vec<u8>>>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions2.rs::subdivide": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn subdivide( geometry: &Geometry<f64>, max_vertices: usize, precision: Precision, ) -> Result<Vec<Geometry<f64>>, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions2.rs::subdivide_wkb": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn subdivide_wkb( payload: &[u8], max_vertices: usize, precision: Precision, ) -> Result<Vec<Vec<u8>>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions3.rs::coverage_validate": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn coverage_validate( geometries: &[Geometry<f64>], tolerance: f64, max_issues: usize, precision: Precision, ) -> Result<Vec<CoverageIssue>, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions3.rs::coverage_validate_nullable": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn coverage_validate_nullable( geometries: &[Option<Geometry<f64>>], tolerance: f64, max_issues: usize, precision: Precision, ) -> Result<Vec<CoverageIssue>, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions3.rs::coverage_validate_nullable_con_margine": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn coverage_validate_nullable_con_margine( geometries: &[Option<Geometry<f64>>], tolerance: f64, max_issues: usize, precision: Precision, margine: MargineMemoria, ) -> Result<Vec<CoverageIssue>, ExtensionError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions3.rs::coverage_validate_rows": {
-      "checks": [
-        {
-          "function": "crates/plenora-kernels-geo/src/extensions3.rs::coverage_validate_rows",
-          "contains": "plenora_core::valida_arrow::array(cells)?;"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn coverage_validate_rows( cells: &BinaryArray, tolerance: f64, max_issues: usize, precision: Precision, ) -> Result<Vec<CoverageIssueRow>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/extensions3.rs::coverage_validate_rows_con_margine": {
-      "checks": [
-        {
-          "function": "crates/plenora-kernels-geo/src/extensions3.rs::coverage_validate_rows_con_margine",
-          "contains": "plenora_core::valida_arrow::array(cells)?;"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn coverage_validate_rows_con_margine( cells: &BinaryArray, tolerance: f64, max_issues: usize, precision: Precision, margine: MargineMemoria, ) -> Result<Vec<CoverageIssueRow>, PlenoraError>"
     },
     "crates/plenora-kernels-geo/src/extensions3.rs::envelope": {
       "arrow_arguments": [],
@@ -4075,28 +3721,53 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn name(self) -> &'static str"
     },
-    "crates/plenora-kernels-geo/src/extensions3.rs::shared_paths": {
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::geodesic_empty_buffer_with_limits": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn shared_paths( geometries: &[Geometry<f64>], tolerance: f64, min_length: f64, ) -> Result<Vec<SharedPath>, ExtensionError>"
+      "signature": "pub fn geodesic_empty_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], union_results: bool, limits: DegenerateBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<DegenerateBufferResult<'a>, DegenerateBufferError>"
     },
-    "crates/plenora-kernels-geo/src/extensions3.rs::shared_paths_nullable": {
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::is_empty": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn shared_paths_nullable( geometries: &[Option<Geometry<f64>>], tolerance: f64, min_length: f64, ) -> Result<Vec<SharedPath>, ExtensionError>"
+      "signature": "pub const fn is_empty(&self) -> bool"
     },
-    "crates/plenora-kernels-geo/src/extensions3.rs::shared_paths_rows": {
-      "checks": [
-        {
-          "function": "crates/plenora-kernels-geo/src/extensions3.rs::shared_paths_rows",
-          "contains": "plenora_core::valida_arrow::array(cells)?;"
-        }
-      ],
-      "classification": "ingresso guardato",
-      "reason": "Validazione completa dei dati Arrow prima del primo uso.",
-      "signature": "pub fn shared_paths_rows( cells: &BinaryArray, tolerance: f64, min_length: f64, ) -> Result<Vec<SharedPathRow>, PlenoraError>"
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::iter": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "signature": "pub fn iter(&self) -> impl ExactSizeIterator<Item = Polygon> + '_"
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::len": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "signature": "pub const fn len(&self) -> usize"
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs::geodesic_point_buffer_with_limits": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "signature": "pub fn geodesic_point_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, limits: PointBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<PointBufferResult<'a>, DegenerateBufferError>"
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs::from": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "signature": "fn from(error: PredicateError) -> Self"
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs::geodesic_multipoint_buffer_with_limits": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "signature": "pub fn geodesic_multipoint_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, union_per_distance: bool, limits: UnionBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<UnionBufferResult<'a>, UnionBufferError>"
+    },
+    "crates/plenora-kernels-geo/src/geodesic_buffer/projected.rs::geodesic_line_buffer_with_limits": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
+      "signature": "pub fn geodesic_line_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, union_per_distance: bool, limits: UnionBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<ProjectedBufferResult<'a>, UnionBufferError>"
     },
     "crates/plenora-kernels-geo/src/geodesic_densify.rs::geodesic_densify_with_limits": {
       "arrow_arguments": [],
@@ -4253,18 +3924,6 @@
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn name(self) -> &'static str"
-    },
-    "crates/plenora-kernels-geo/src/lib.rs::transform_geometry": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn transform_geometry( operation: Operation, geometry: &Geometry<f64>, ) -> Result<Geometry<f64>, PlenoraError>"
-    },
-    "crates/plenora-kernels-geo/src/lib.rs::transform_wkb": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, PlenoraError>"
     },
     "crates/plenora-kernels-geo/src/lib.rs::validate_wkb_contract": {
       "arrow_arguments": [],
@@ -4535,6 +4194,12 @@
       "classification": "non riceve dati esterni",
       "reason": "Noder geometrico interno e contabilità della memoria: coordinate razionali e contenitori propri, nessun dato Arrow ricevuto.",
       "signature": "pub fn push<T>(&mut self, vector: &mut CountedVec<T>, value: T) -> Result<(), PredicateError>"
+    },
+    "crates/plenora-kernels-geo/src/noding.rs::reserve_export": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
+      "signature": "pub fn reserve_export(&mut self, bytes: u64) -> Result<(), PredicateError>"
     },
     "crates/plenora-kernels-geo/src/noding.rs::sorted": {
       "arrow_arguments": [
@@ -4834,12 +4499,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
-    "crates/plenora-kernels-geo/src/offset.rs::offset_with_limits": {
-      "signature": "pub fn offset_with_limits( input: &Geometry<f64>, options: OffsetOptions, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<OffsetResult, OffsetError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
     "crates/plenora-kernels-geo/src/offset/enclosure.rs::add": {
       "signature": "pub fn add(&self, b: &Self) -> Result<Self, OffsetError>",
       "classification": "non riceve dati esterni",
@@ -4942,107 +4601,11 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
-    "crates/plenora-kernels-geo/src/operations.rs::area": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::boundary": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn boundary(geometry: &Geometry<f64>) -> Result<Geometry<f64>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::bounds": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::buffer": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn buffer( geometry: &Geometry<f64>, distance: f64, precision: Precision, ) -> Result<Geometry<f64>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::buffer_with_cap": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn buffer_with_cap( geometry: &Geometry<f64>, distance: f64, cap_style: BufferCapStyle, precision: Precision, ) -> Result<Geometry<f64>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::buffer_with_cap_con_margine": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn buffer_with_cap_con_margine( geometry: &Geometry<f64>, distance: f64, cap_style: BufferCapStyle, precision: Precision, margine: MargineMemoria, ) -> Result<Geometry<f64>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::distance": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn distance( left: &Geometry<f64>, right: &Geometry<f64>, ) -> Result<Option<f64>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::explode": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, OperationError>"
-    },
     "crates/plenora-kernels-geo/src/operations.rs::from": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn from(_: griglia::PrecisioneInsufficiente) -> Self"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::length": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn length(geometry: &Geometry<f64>) -> Result<f64, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::perimeter": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn perimeter(geometry: &Geometry<f64>) -> Result<f64, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::point_on_surface": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::simplify": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::simplify_with_policy": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn simplify_with_policy( geometry: &Geometry<f64>, tolerance: f64, policy: SimplifyPolicy, ) -> Result<Geometry<f64>, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::to_wkt": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError>"
-    },
-    "crates/plenora-kernels-geo/src/operations.rs::vertex_count": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError>"
     },
     "crates/plenora-kernels-geo/src/predicates.rs::cells": {
       "arrow_arguments": [],
@@ -5062,18 +4625,6 @@
       "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
       "signature": "pub fn evaluate(&self, predicate: SpatialPredicate) -> bool"
     },
-    "crates/plenora-kernels-geo/src/predicates.rs::evaluate#2": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
-      "signature": "pub fn evaluate( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates.rs::evaluate_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
-      "signature": "pub fn evaluate_validated( left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate, ) -> Result<bool, PredicateError>"
-    },
     "crates/plenora-kernels-geo/src/predicates.rs::fmt": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -5091,18 +4642,6 @@
       "classification": "non riceve dati esterni",
       "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
       "signature": "pub fn matches(&self, pattern: De9imPattern) -> bool"
-    },
-    "crates/plenora-kernels-geo/src/predicates.rs::relate_matrix": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "API su geometrie Rust, matrici DE-9IM, pattern ASCII o formatter; non riceve buffer o celle Arrow.",
-      "signature": "pub fn relate_matrix( left: &Geometry<f64>, right: &Geometry<f64>, ) -> Result<De9imMatrix, PredicateError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates.rs::relate_matrix_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "API geometrica o confronto razionale interno: nessun dato Arrow ricevuto.",
-      "signature": "pub fn relate_matrix_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<De9imMatrix, PredicateError>"
     },
     "crates/plenora-kernels-geo/src/predicates/arrangement.rs::cmp": {
       "arrow_arguments": [],
@@ -5128,92 +4667,8 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn relate( left: &Geometry<f64>, right: &Geometry<f64>, work: &mut Work<'_>, ) -> Result<De9imMatrix, PredicateError>"
     },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::boolean_with_limits": {
-      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: GeneralBooleanOp, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, GeneralBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::difference_with_limits": {
-      "signature": "pub fn difference_with_limits( inputs: &[Geometry<f64>], right: &Geometry<f64>, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<Geometry<f64>>, GeneralBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::intersection_with_limits": {
-      "signature": "pub fn intersection_with_limits( inputs: &[Geometry<f64>], right: &Geometry<f64>, output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<Geometry<f64>>, GeneralBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/general_boolean.rs::union_with_limits": {
-      "signature": "pub fn union_with_limits( inputs: &[Geometry<f64>], output_dimension: Option<u8>, limits: GeneralBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, GeneralBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Valori Rust, geometrie geo e contatori interni; nessun buffer o schema Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean.rs::boolean_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: LineBooleanOp, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, LineBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean.rs::difference_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn difference_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, LineBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean.rs::intersection_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn intersection_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, LineBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/line_boolean.rs::union_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn union_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, LineBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::boolean_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: PointBooleanOp, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::difference_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn difference_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::intersection_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn intersection_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/point_boolean.rs::union_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn union_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PointBooleanError>"
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::boolean_with_limits": {
-      "signature": "pub fn boolean_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, operation: PolygonBooleanOp, output_dimension: Option<u8>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::default": {
       "signature": "fn default() -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::difference_with_limits": {
-      "signature": "pub fn difference_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -5224,26 +4679,8 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
     },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::intersection_with_limits": {
-      "signature": "pub fn intersection_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_boolean.rs::union_with_limits": {
-      "signature": "pub fn union_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>, ) -> Result<Geometry<f64>, PolygonBooleanError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
     "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion.rs::from": {
       "signature": "fn from(error: LineBooleanError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/predicates/arrangement_indexed/polygon_completion.rs::polygon_completion_with_limits": {
-      "signature": "pub fn polygon_completion_with_limits( polygons: &[Polygon<f64>], linework: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<Vec<Polygon<f64>>, PolygonCompletionError>",
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "arrow_arguments": []
@@ -5330,12 +4767,6 @@
     },
     "crates/plenora-kernels-geo/src/reshape.rs::from": {
       "signature": "fn from(error: TrimExtendError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Costruzione geometrica esatta su valori Rust XY, senza buffer o celle Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/reshape.rs::reshape_with_limits": {
-      "signature": "pub fn reshape_with_limits( target: &Geometry<f64>, reshaper: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<LineString<f64>, ReshapeError>",
       "classification": "non riceve dati esterni",
       "reason": "Costruzione geometrica esatta su valori Rust XY, senza buffer o celle Arrow.",
       "arrow_arguments": []
@@ -5600,24 +5031,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn is_fully_bounded(self) -> bool"
     },
-    "crates/plenora-kernels-geo/src/rust_backend/make_valid.rs::make_valid_geometry_rust": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn make_valid_geometry_rust( geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, precision: f64, ) -> Result<Geometry<f64>, MakeValidError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/make_valid.rs::make_valid_geometry_rust_bounded": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn make_valid_geometry_rust_bounded( geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits, precision: f64, ) -> Result<Geometry<f64>, MakeValidError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/make_valid.rs::make_valid_geometry_rust_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn make_valid_geometry_rust_with_limits( geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits, precision: f64, ) -> Result<Geometry<f64>, MakeValidError>"
-    },
     "crates/plenora-kernels-geo/src/rust_backend/make_valid.rs::unlimited": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -5636,38 +5049,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn from(result: polygonize::PolygonizeResult) -> Self"
     },
-    "crates/plenora-kernels-geo/src/rust_backend/mod.rs::make_valid_geometry": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn make_valid_geometry( geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, precision: Precision, ) -> Result<Geometry<f64>, RustBackendError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/mod.rs::make_valid_wkb": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn make_valid_wkb( payload: &[u8], method: RepairMethod, keep_collapsed: bool, precision: Precision, ) -> Result<Vec<u8>, RustBackendError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/mod.rs::make_valid_wkb_with_limits": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn make_valid_wkb_with_limits( payload: &[u8], method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits, precision: Precision, ) -> Result<Vec<u8>, RustBackendError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/mod.rs::polygonize_linework": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygonize_linework( linework: &Geometry<f64>, node_input: bool, require_complete: bool, max_input_coordinates: u64, max_noding_work: u64, max_output_geometries: u64, max_output_coordinates: u64, precision: Precision, ) -> Result<PolygonizeResult, RustBackendError>"
-    },
     "crates/plenora-kernels-geo/src/rust_backend/mod.rs::residual_classes": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -5680,37 +5061,11 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn residual_count(&self) -> usize"
     },
-    "crates/plenora-kernels-geo/src/rust_backend/mod.rs::split_polygon_by_linework": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn split_polygon_by_linework( source: &Geometry<f64>, splitter: &Geometry<f64>, max_input_coordinates: u64, max_noding_work: u64, max_output_parts: u64, max_output_coordinates: u64, precision: Precision, ) -> Result<Vec<Polygon<f64>>, RustBackendError>"
-    },
     "crates/plenora-kernels-geo/src/rust_backend/polygonize.rs::is_fully_bounded": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn is_fully_bounded(self) -> bool"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/polygonize.rs::polygonize_linework_rust": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygonize_linework_rust( linework: &Geometry<f64>, options: PolygonizeOptions, ) -> Result<PolygonizeResult, PolygonizeError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/polygonize.rs::polygonize_linework_rust_bounded": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygonize_linework_rust_bounded( linework: &Geometry<f64>, options: PolygonizeOptions, ) -> Result<PolygonizeResult, PolygonizeError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/polygonize.rs::polygonize_linework_rust_with_rounded": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygonize_linework_rust_with_rounded( linework: &Geometry<f64>, options: PolygonizeOptions, ) -> Result<(PolygonizeResult, Vec<Coord<f64>>), PolygonizeError>"
     },
     "crates/plenora-kernels-geo/src/rust_backend/polygonize.rs::residual_count": {
       "arrow_arguments": [],
@@ -5772,18 +5127,6 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn is_fully_bounded(self) -> bool"
     },
-    "crates/plenora-kernels-geo/src/rust_backend/split.rs::split_polygon_by_linework_rust": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn split_polygon_by_linework_rust( source: &Geometry<f64>, splitter: &Geometry<f64>, limits: SplitLimits, precision: f64, ) -> Result<Vec<Polygon<f64>>, SplitError>"
-    },
-    "crates/plenora-kernels-geo/src/rust_backend/split.rs::split_polygon_by_linework_rust_bounded": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn split_polygon_by_linework_rust_bounded( source: &Geometry<f64>, splitter: &Geometry<f64>, limits: SplitLimits, precision: f64, ) -> Result<Vec<Polygon<f64>>, SplitError>"
-    },
     "crates/plenora-kernels-geo/src/rust_backend/split.rs::unlimited": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
@@ -5802,135 +5145,11 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn envelope(&self) -> Self::Envelope"
     },
-    "crates/plenora-kernels-geo/src/spatial_join.rs::spatial_join": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn spatial_join( left: &[Geometry<f64>], right: &[Geometry<f64>], predicate: JoinPredicate, max_pairs: u64, ) -> Result<Vec<JoinPair>, SpatialJoinError>"
-    },
-    "crates/plenora-kernels-geo/src/spatial_join.rs::spatial_join_nullable": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn spatial_join_nullable( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], predicate: JoinPredicate, max_pairs: u64, ) -> Result<Vec<JoinPair>, SpatialJoinError>"
-    },
-    "crates/plenora-kernels-geo/src/spatial_join.rs::spatial_join_nullable_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn spatial_join_nullable_validated( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], predicate: JoinPredicate, max_pairs: u64, ) -> Result<Vec<JoinPair>, SpatialJoinError>"
-    },
-    "crates/plenora-kernels-geo/src/spatial_join.rs::spatial_join_nullable_validated_con_margine": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn spatial_join_nullable_validated_con_margine( left: &[Option<Geometry<f64>>], right: &[Option<Geometry<f64>>], predicate: JoinPredicate, max_pairs: u64, margine: MargineMemoria, ) -> Result<Vec<JoinPair>, SpatialJoinError>"
-    },
-    "crates/plenora-kernels-geo/src/spatial_join.rs::spatial_join_validated": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn spatial_join_validated( left: &[Geometry<f64>], right: &[Geometry<f64>], predicate: JoinPredicate, max_pairs: u64, ) -> Result<Vec<JoinPair>, SpatialJoinError>"
-    },
-    "crates/plenora-kernels-geo/src/spatial_join.rs::spatial_join_validated_con_margine": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn spatial_join_validated_con_margine( left: &[Geometry<f64>], right: &[Geometry<f64>], predicate: JoinPredicate, max_pairs: u64, margine: MargineMemoria, ) -> Result<Vec<JoinPair>, SpatialJoinError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::boolean_operation": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn boolean_operation( left: &Geometry<f64>, right: &Geometry<f64>, operation: BooleanOperation, precision: Precision, ) -> Result<Geometry<f64>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::boolean_operation_validated": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn boolean_operation_validated( left: &Geometry<f64>, right: &Geometry<f64>, operation: BooleanOperation, precision: Precision, ) -> Result<Geometry<f64>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::clean_valid_polygon_topology": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn clean_valid_polygon_topology( geometries: &[Geometry<f64>], snap_tolerance: f64, remove_overlaps: bool, fill_gaps: bool, max_geometries: u64, max_vertices: u64, precision: Precision, ) -> Result<Vec<Option<Geometry<f64>>>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::clean_valid_polygon_topology_validated": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn clean_valid_polygon_topology_validated( geometries: &[Geometry<f64>], snap_tolerance: f64, remove_overlaps: bool, fill_gaps: bool, max_geometries: u64, max_vertices: u64, precision: Precision, ) -> Result<Vec<Option<Geometry<f64>>>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::clip_to_mask": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn clip_to_mask( geometries: &[Geometry<f64>], masks: &[Geometry<f64>], precision: Precision, ) -> Result<Vec<Option<Geometry<f64>>>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::clip_to_mask_validated": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn clip_to_mask_validated( geometries: &[Geometry<f64>], masks: &[Geometry<f64>], precision: Precision, ) -> Result<Vec<Option<Geometry<f64>>>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::dissolve": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn dissolve( geometries: &[Geometry<f64>], precision: Precision, ) -> Result<Geometry<f64>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::dissolve_validated": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn dissolve_validated( geometries: &[Geometry<f64>], precision: Precision, ) -> Result<Geometry<f64>, TopologyError>"
-    },
     "crates/plenora-kernels-geo/src/topology.rs::from": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn from(_: PrecisioneInsufficiente) -> Self"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::polygon_overlay": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygon_overlay( left: &[Geometry<f64>], right: &[Geometry<f64>], mode: OverlayMode, max_candidate_pairs: u64, max_results: u64, precision: Precision, ) -> Result<Vec<OverlayPiece>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::polygon_overlay_validated": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygon_overlay_validated( left: &[Geometry<f64>], right: &[Geometry<f64>], mode: OverlayMode, max_candidate_pairs: u64, max_results: u64, precision: Precision, ) -> Result<Vec<OverlayPiece>, TopologyError>"
-    },
-    "crates/plenora-kernels-geo/src/topology.rs::polygon_overlay_validated_con_margine": {
-      "arrow_arguments": [
-        "Precision"
-      ],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn polygon_overlay_validated_con_margine( left: &[Geometry<f64>], right: &[Geometry<f64>], mode: OverlayMode, (max_candidate_pairs, max_results): (u64, u64), precision: Precision, margine: MargineMemoria, ) -> Result<Vec<OverlayPiece>, TopologyError>"
     },
     "crates/plenora-kernels-geo/src/triangolazione.rs::position": {
       "arrow_arguments": [],
@@ -5952,12 +5171,6 @@
     },
     "crates/plenora-kernels-geo/src/trim_extend.rs::from": {
       "signature": "fn from(error: LineBooleanError) -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Costruzione geometrica o aritmetica interna su valori Rust, senza buffer o celle Arrow.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/trim_extend.rs::trim_extend_with_limits": {
-      "signature": "pub fn trim_extend_with_limits( target: &Geometry<f64>, guide: &Geometry<f64>, options: TrimExtendOptions, limits: RelateLimits, cancelled: Option<&AtomicBool>, ) -> Result<LineString<f64>, TrimExtendError>",
       "classification": "non riceve dati esterni",
       "reason": "Costruzione geometrica o aritmetica interna su valori Rust, senza buffer o celle Arrow.",
       "arrow_arguments": []
@@ -9182,11 +8395,77 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn classe(&self) -> Classe"
     },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#13": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#14": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#15": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#16": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#17": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#18": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#19": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
     "crates/plenora-pipeline/src/geo/errori.rs::classe#2": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#20": {
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "arrow_arguments": [],
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#21": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#22": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
+      "signature": "fn classe(&self) -> Classe"
+    },
+    "crates/plenora-pipeline/src/geo/errori.rs::classe#23": {
+      "classification": "non riceve dati esterni",
+      "reason": "Adattamento tipizzato di errori CRS/kernel; nessun buffer o dato Arrow in ingresso.",
+      "signature": "fn classe(&self) -> Classe",
+      "arrow_arguments": []
     },
     "crates/plenora-pipeline/src/geo/errori.rs::classe#3": {
       "arrow_arguments": [],
@@ -9360,168 +8639,6 @@
       "classification": "non riceve dati esterni",
       "reason": "Solo schema/metadati o dati prodotti in uscita; nessun buffer Arrow in ingresso.",
       "signature": "pub fn validate(&self, schemas: &[(&str, SchemaRef)]) -> Result<PipelineValidata>"
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::decode_coordinates_with_limits": {
-      "signature": "pub fn decode_coordinates_with_limits( request: CoordinateRequest<'_>, texts: &[&str], limits: CoordinateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<DecodedCoordinate>, CoordinateApiError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::encode_coordinates_with_limits": {
-      "signature": "pub fn encode_coordinates_with_limits( request: CoordinateRequest<'_>, points: &[CoordinatePoint], limits: CoordinateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Vec<String>, CoordinateApiError>",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-kernels-geo/src/coordinate_api.rs::default": {
-      "signature": "fn default() -> Self",
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "arrow_arguments": []
-    },
-    "crates/plenora-core/src/tempo.rs::verifica_interruzione": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Controllo GOP-028 condiviso: clock monotono, token atomico e costruttori di errori; nessun dato Arrow.",
-      "signature": "pub fn verifica_interruzione<E>( scadenza: Option<Instant>, annullamento: Option<&std::sync::atomic::AtomicBool>, errore_scadenza: impl FnOnce() -> E, errore_annullamento: impl FnOnce() -> E, ) -> std::result::Result<(), E>"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#13": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#14": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#15": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#16": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#17": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#18": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#19": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#20": {
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "arrow_arguments": [],
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-core/src/crs/riproiezione/locale.rs::forward": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
-      "signature": "pub fn forward(&self, longitude: f64, latitude: f64) -> Result<(f64, f64), CrsError>"
-    },
-    "crates/plenora-core/src/crs/riproiezione/locale.rs::inverse": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
-      "signature": "pub fn inverse(&self, x: f64, y: f64) -> Result<(f64, f64), CrsError>"
-    },
-    "crates/plenora-core/src/crs/riproiezione/locale.rs::inverse_shape_bounds": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
-      "signature": "pub const fn inverse_shape_bounds(&self) -> TransverseShapeBounds"
-    },
-    "crates/plenora-core/src/crs/riproiezione/locale.rs::new": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
-      "signature": "pub fn new(crs: &ResolvedCrs, longitude: f64) -> Result<Self, CrsError>"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::geodesic_empty_buffer_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geodesic_empty_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], union_results: bool, limits: DegenerateBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<DegenerateBufferResult<'a>, DegenerateBufferError>"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::is_empty": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub const fn is_empty(&self) -> bool"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::iter": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn iter(&self) -> impl ExactSizeIterator<Item = Polygon> + '_"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer.rs::len": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub const fn len(&self) -> usize"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer/point.rs::geodesic_point_buffer_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geodesic_point_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, limits: PointBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<PointBufferResult<'a>, DegenerateBufferError>"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs::from": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "fn from(error: PredicateError) -> Self"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer/point/union.rs::geodesic_multipoint_buffer_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn geodesic_multipoint_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, union_per_distance: bool, limits: UnionBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<UnionBufferResult<'a>, UnionBufferError>"
-    },
-    "crates/plenora-kernels-geo/src/geodesic_buffer/projected.rs::geodesic_line_buffer_with_limits": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Coordinate scalari o geometrie Rust e controlli; nessun buffer Arrow esterno.",
-      "signature": "pub fn geodesic_line_buffer_with_limits<'a>( inputs: &[Geometry], crs: &'a ResolvedCrs, radii_m: &[f64], tolerance_m: f64, union_per_distance: bool, limits: UnionBufferLimits, cancelled: Option<&AtomicBool>, ) -> Result<ProjectedBufferResult<'a>, UnionBufferError>"
-    },
-    "crates/plenora-kernels-geo/src/noding.rs::reserve_export": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
-      "signature": "pub fn reserve_export(&mut self, bytes: u64) -> Result<(), PredicateError>"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#21": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "signature": "fn classe(&self) -> Classe"
-    },
-    "crates/plenora-pipeline/src/geo/errori.rs::classe#22": {
-      "arrow_arguments": [],
-      "classification": "non riceve dati esterni",
-      "reason": "Classificazione di errori kernel tipizzati, nessun dato Arrow.",
-      "signature": "fn classe(&self) -> Classe"
     }
   },
   "rust_variants": {

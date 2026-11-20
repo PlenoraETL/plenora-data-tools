@@ -5,7 +5,7 @@ numero di parti, il numero di anelli interni, il primo e l'ultimo punto di
 una linea aperta e se la geometria è chiusa. Si sceglie quali colonne con
 `fields`; la geometria non cambia.
 
-Il calcolo per geometria è `extensions::geometry_accessors`, che il
+Il calcolo per geometria è `extensions::with_crs::geometry_accessors`, che il
 runner chiama su ogni riga non nulla.
 
 ### Parametri

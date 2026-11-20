@@ -1,6 +1,7 @@
 //! Regressione dello scavo: oracolo razionale esterno e invarianti del bordo.
 use geo::{ConcaveHull, Geometry, MultiPoint};
-use plenora_kernels_geo::extended::concave_hull;
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::extended::with_crs::concave_hull;
 
 fn canonical(mut ids: Vec<usize>) -> Vec<usize> {
     let mut variants = Vec::new();
@@ -25,9 +26,17 @@ fn divergenza_dodici_punti() {
         })
         .collect::<Vec<_>>()
         .into();
-    let Geometry::Polygon(hull) =
-        concave_hull(&Geometry::MultiPoint(points.clone()), 2.0, 0.0, 100).unwrap()
-    else {
+    let Geometry::Polygon(hull) = concave_hull(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &Geometry::MultiPoint(points.clone()),
+        2.0,
+        0.0,
+        100,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap() else {
         panic!("tipo inatteso")
     };
     let ids = hull
@@ -69,11 +78,14 @@ fn oracolo_razionale_enumerativo() {
                 .collect::<Vec<_>>()
                 .into();
             let result = concave_hull(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
                 &Geometry::MultiPoint(points),
                 case.concavity,
                 case.threshold,
                 100,
-            );
+            )
+            .map_err(kernel_error_fixture);
             if case.allowed.is_empty() {
                 assert!(matches!(
                     result,
@@ -218,5 +230,13 @@ fn bordi_semplici_e_copertura_deterministici() {
                 })
             );
         }
+    }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
     }
 }

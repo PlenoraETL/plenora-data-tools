@@ -17,6 +17,7 @@
 // `mul_add` cambierebbe l'arrotondamento e quindi il caso generato.
 #![allow(clippy::suboptimal_flops)]
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::sync::Arc;
 
 use geo::{
@@ -31,9 +32,11 @@ use plenora_kernels_geo::rust_backend::arrow::{
     make_valid_batches, polygonize_batches, split_batches, PolygonizeParams,
 };
 use plenora_kernels_geo::rust_backend::precision::Precision;
-use plenora_kernels_geo::rust_backend::{
-    make_valid_wkb, polygonize_linework, split_polygon_by_linework, PolygonizeResult, RepairMethod,
-};
+use plenora_kernels_geo::rust_backend::with_crs::make_valid_wkb;
+use plenora_kernels_geo::rust_backend::with_crs::polygonize_linework;
+use plenora_kernels_geo::rust_backend::with_crs::split_polygon_by_linework;
+use plenora_kernels_geo::rust_backend::PolygonizeResult;
+use plenora_kernels_geo::rust_backend::RepairMethod;
 
 const LIMIT: u64 = 1_000_000;
 
@@ -45,6 +48,7 @@ fn precisione() -> Precision {
 
 fn polygonize(linework: &Geometry<f64>, node_input: bool) -> PolygonizeResult {
     polygonize_linework(
+        CrsContext::new(&[&crs_fixture_precision(precisione())]),
         linework,
         node_input,
         false,
@@ -52,8 +56,8 @@ fn polygonize(linework: &Geometry<f64>, node_input: bool) -> PolygonizeResult {
         LIMIT,
         LIMIT,
         LIMIT,
-        precisione(),
     )
+    .map_err(kernel_error_fixture)
     .expect("polygonize")
 }
 
@@ -820,14 +824,18 @@ fn split_lines() -> Vec<LineString<f64>> {
 
 fn split(source: &Geometry<f64>, lines: Vec<LineString<f64>>) -> Vec<Polygon<f64>> {
     split_polygon_by_linework(
+        CrsContext::new(&[
+            &crs_fixture_precision(precisione()),
+            &crs_fixture_precision(precisione()),
+        ]),
         source,
         &multi(lines),
         LIMIT,
         LIMIT,
         LIMIT,
         LIMIT,
-        precisione(),
     )
+    .map_err(kernel_error_fixture)
     .expect("split")
 }
 
@@ -882,14 +890,26 @@ fn make_valid_deterministico() {
     for (bowtie, payload) in [(true, bow_tie_wkb()), (false, crossing_hole)] {
         for method in [RepairMethod::Linework, RepairMethod::Structure] {
             for keep_collapsed in [false, true] {
-                let first = make_valid_wkb(&payload, method, keep_collapsed, precisione())
-                    .expect("riparata");
+                let first = make_valid_wkb(
+                    CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                    &payload,
+                    method,
+                    keep_collapsed,
+                )
+                .map_err(kernel_error_fixture)
+                .expect("riparata");
                 assert_faces(
                     &polygons(plenora_kernels_geo::geometry_from_wkb(&first).expect("WKB valido")),
                     &repaired_faces(bowtie, method),
                 );
-                let second = make_valid_wkb(&payload, method, keep_collapsed, precisione())
-                    .expect("riparata");
+                let second = make_valid_wkb(
+                    CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                    &payload,
+                    method,
+                    keep_collapsed,
+                )
+                .map_err(kernel_error_fixture)
+                .expect("riparata");
                 assert_eq!(first, second, "{method:?} keep_collapsed={keep_collapsed}");
             }
         }
@@ -1133,4 +1153,30 @@ fn make_valid_e_split_arrow_deterministici() {
         }
         assert_faces(&actual, &split_faces());
     }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

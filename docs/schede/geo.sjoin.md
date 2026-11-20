@@ -3,7 +3,7 @@
 Join spaziale interno: abbina ogni riga della sinistra alle righe della
 destra la cui geometria soddisfa `predicate` con la sua, e dà una riga per
 coppia, con la posizione della riga destra in `__right_index` (kernel
-`spatial_join::spatial_join_nullable_validated`, [Runner, «Operazioni
+`spatial_join::with_crs::spatial_join_nullable_validated`, [Runner, «Operazioni
 geo»](runner.md#operazioni-geo)).
 
 ### Parametri
@@ -81,7 +81,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   validazione non conclude, `ResourceLimit` per una cella oltre il limite
   di byte).
 
-Dal kernel (`spatial_join::spatial_join_nullable_validated`, errore
+Dal kernel (`spatial_join::with_crs::spatial_join_nullable_validated`, errore
 `SpatialJoinError`, sulle geometrie già validate), nella categoria del
 passo geo indicata fra parentesi:
 

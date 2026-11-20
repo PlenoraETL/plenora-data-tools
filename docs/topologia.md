@@ -27,8 +27,8 @@ dipendenza nuova: `geo`, `geozero`, `thiserror` erano già nel lock.
 
 ### Split e polygonize con limiti: pubblicazione GOP-015A
 
-Le API Rust `extended_algorithms::split_line_with_limits` e
-`extended_algorithms::polygonize_with_limits`, additive nella 6.1.0,
+Le API Rust `extended_algorithms::with_crs::split_line_with_limits` e
+`extended_algorithms::with_crs::polygonize_with_limits`, additive nella 6.1.0,
 usano noding razionale esatto e `RelateLimits`. Le coordinate costruite
 sono pubblicate al binary64 piu' vicino, meta' al pari: errore massimo
 mezza ulp per ordinata, nelle unita' del CRS planare dichiarato.
@@ -357,7 +357,7 @@ scorciatoie `union_with_limits`, `intersection_with_limits`,
 finiti nello stesso CRS e ordine degli assi. Le parti di ciascun MultiPolygon
 sono disgiunte anche sul confine; contatti che richiedono normalizzazione,
 GeometryCollection in ingresso, array, molti-a-uno, clip e dissolve sono esclusi.
-Non modifica `topology::boolean_operation` e non introduce semantica Esri.
+Non modifica `topology::with_crs::boolean_operation` e non introduce semantica Esri.
 
 Il filtro `output_dimension` di `boolean_with_limits` conserva soltanto le
 componenti richieste (0/1/2), senza estrarre confini. Intersezioni di soli lati

@@ -10,6 +10,62 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
+## [7.0.0] - non rilasciata
+
+### Cambiamenti incompatibili
+
+- Contratto 5, opzione A: tolti gli ingressi pubblici diretti senza SR
+  elencati sotto. Convenzione unica: inserire `with_crs::` prima del nome
+  della funzione e passare `CrsContext` come primo argomento. Precisione ed
+  ellissoide non si passano piu': derivano dallo SR; `PolygonizeOptions.precision`
+  viene sostituita dal valore derivato. Gli errori sono `DirectError<E>`.
+- Il criterio e' il requisito del catalogo (anche `Known`); le utilita'
+  senza equivalente verificato, il trasporto WKB e la validazione restano.
+  Vedi [chiamate dirette con CRS](docs/limiti.md#chiamate-dirette-con-crs).
+
+Le seguenti API sono relative a `plenora_kernels_geo`; per ogni riga,
+`modulo::{nomi}` diventa `modulo::with_crs::{nomi}`:
+
+- `advanced`: `voronoi_cells`.
+- `analysis`: `minimum_distances`, `minimum_distances_validated`, `nearest_matches`, `nearest_matches_validated`, `nearest_matches_validated_con_margine`, `within_indexes`, `within_indexes_validated`, `within_indexes_validated_con_margine`, `count_points_in_polygons`, `count_points_in_polygons_validated`, `count_points_in_polygons_validated_con_margine`.
+- `cluster`: `dbscan_nullable`, `dbscan`, `dbscan_column`.
+- `construction`: `point_from_lon_lat`, `geometry_from_wkt`, `line_from_ordered_points`, `polygon_from_ordered_points`.
+- `extended`: `affine_transform`, `affine_transform_validated`, `translate`, `translate_validated`, `scale_about`, `scale_about_validated`, `rotate_about`, `rotate_about_validated`, `concave_hull`, `concave_hull_validated`, `hausdorff_distance`, `hausdorff_distance_validated`, `haversine_distance_m`, `geodesic_distance_m`, `geodesic_line_length_m`.
+- `extended_algorithms`: `densify`, `snap_to_grid`, `delaunay`, `line_interpolate_point`, `line_substring`, `frechet_distance`, `geodesic_bearing_degrees`, `geodesic_area_m2`, `geometry_diagnostics`, `line_merge`, `split_line`, `polygonize_with_limits`, `split_line_with_limits`.
+- `extensions`: `from_wkt_column`, `from_wkt_column_named`, `geometry_accessors`, `collect_geometries`, `line_locate_point`.
+- `extensions2`: `grid_cell_count`, `generate_grid`, `generate_grid_rows`, `subdivide`, `subdivide_wkb`, `snap`, `snap_column`.
+- `extensions3`: `coverage_validate`, `coverage_validate_nullable`, `coverage_validate_nullable_con_margine`, `coverage_validate_rows`, `coverage_validate_rows_con_margine`, `shared_paths`, `shared_paths_nullable`, `shared_paths_rows`.
+- Radice: `transform_geometry` -> `with_crs::transform_geometry`; `transform_wkb` -> `with_crs::transform_wkb`.
+- `offset`: `offset_with_limits`.
+- `operations`: `area`, `length`, `perimeter`, `distance`, `bounds`, `vertex_count`, `point_on_surface`, `to_wkt`, `buffer`, `buffer_with_cap`, `buffer_with_cap_con_margine`, `simplify`, `simplify_with_policy`, `explode`, `boundary`.
+- `predicates`: `relate_matrix_with_limits`, `relate_matrix`, `evaluate`, `evaluate_validated`.
+- `reshape`: `reshape_with_limits`.
+- `spatial_join`: `spatial_join`, `spatial_join_validated`, `spatial_join_nullable`, `spatial_join_nullable_validated`, `spatial_join_nullable_validated_con_margine`, `spatial_join_validated_con_margine`.
+- `topology`: `boolean_operation`, `boolean_operation_validated`, `dissolve`, `dissolve_validated`, `clip_to_mask`, `clip_to_mask_validated`, `polygon_overlay`, `polygon_overlay_validated`, `polygon_overlay_validated_con_margine`, `clean_valid_polygon_topology`, `clean_valid_polygon_topology_validated`.
+- `trim_extend`: `trim_extend_with_limits`.
+- `general_boolean`: `boolean_with_limits`, `union_with_limits`, `intersection_with_limits`, `difference_with_limits`.
+- `line_boolean`: `boolean_with_limits`, `union_with_limits`, `intersection_with_limits`, `difference_with_limits`.
+- `point_boolean`: `boolean_with_limits`, `union_with_limits`, `intersection_with_limits`, `difference_with_limits`.
+- `polygon_boolean`: `boolean_with_limits`, `union_with_limits`, `intersection_with_limits`, `difference_with_limits`.
+- `polygon_completion`: `polygon_completion_with_limits`.
+- `rust_backend::make_valid`: `make_valid_geometry_rust`, `make_valid_geometry_rust_with_limits`, `make_valid_geometry_rust_bounded`.
+- `rust_backend`: `make_valid_wkb`, `make_valid_wkb_with_limits`, `make_valid_geometry`, `polygonize_linework`, `split_polygon_by_linework`.
+- `rust_backend::polygonize`: `polygonize_linework_rust`, `polygonize_linework_rust_with_rounded`, `polygonize_linework_rust_bounded`.
+- `rust_backend::split`: `split_polygon_by_linework_rust`, `split_polygon_by_linework_rust_bounded`.
+- Alias di radice `polygon_completion_with_limits` → `with_crs::polygon_completion_with_limits`. I percorsi completi `predicates::arrangement_indexed::{point_boolean,line_boolean,polygon_boolean,general_boolean,polygon_completion}` usano anch'essi `with_crs` nel rispettivo modulo.
+
+### Aggiunte
+
+- Contratto 5, ingressi Rust `with_crs`: `CrsContext` applica il requisito
+  del catalogo prima della chiamata diretta; `planar_coordinates` autorizza
+  esplicitamente il piano XY nelle unita' dello SR geografico, senza
+  riproiezione o geodetica implicita. `SameProjected` conserva il controllo
+  di identita' dello SR anche in modalita' planare. Errori CRS e del kernel
+  restano distinti e tipizzati; precisione ed ellissoide derivano dal CRS.
+- Censimento dei wrapper e del catalogo, oracoli analitici XY su seam e poli,
+  ed estensione della tabella GOP-028 ai nuovi ingressi con limiti.
+  Gli ingressi storici corrispondenti senza SR non sono piu' pubblici.
+
 ## [6.1.0] - 2026-11-19
 
 ### Correzioni

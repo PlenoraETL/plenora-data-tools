@@ -1860,7 +1860,7 @@ fn make_valid_geometry_rust_impl(
 /// non decidibile; [`MakeValidError::PrecisionInsufficient`] (vedi la
 /// variante); [`MakeValidError::Polygonize`] per un polygonize interno
 /// fallito; [`MakeValidError::InvalidOutput`] se l'uscita resta invalida.
-pub fn make_valid_geometry_rust(
+pub(crate) fn make_valid_geometry_rust(
     geometry: &Geometry<f64>,
     method: RepairMethod,
     keep_collapsed: bool,
@@ -1887,7 +1887,7 @@ pub fn make_valid_geometry_rust(
 /// Oltre agli errori della riparazione, restituisce un errore prima del
 /// kernel se coordinate o lavoro eccedono i limiti e dopo il kernel se
 /// geometrie o coordinate di output eccedono i limiti dichiarati.
-pub fn make_valid_geometry_rust_with_limits(
+pub(crate) fn make_valid_geometry_rust_with_limits(
     geometry: &Geometry<f64>,
     method: RepairMethod,
     keep_collapsed: bool,
@@ -1908,7 +1908,7 @@ pub fn make_valid_geometry_rust_with_limits(
 /// Restituisce [`MakeValidError::UnboundedLimitConfiguration`] se almeno un
 /// limite e' lasciato a [`u64::MAX`]; altrimenti propaga gli errori di
 /// [`make_valid_geometry_rust_with_limits`].
-pub fn make_valid_geometry_rust_bounded(
+pub(crate) fn make_valid_geometry_rust_bounded(
     geometry: &Geometry<f64>,
     method: RepairMethod,
     keep_collapsed: bool,
@@ -2258,4 +2258,19 @@ mod tests {
         }
         Ok(())
     }
+}
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Geometry, MakeValidError, MakeValidLimits, RepairMethod};
+
+    crate::crs::checked_kernel!(make_valid_geometry_rust, "geo.make_valid", 1,
+        (geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool) -> (Geometry<f64>, MakeValidError),
+        |context| { let precision = context.precision()?.value(); super::make_valid_geometry_rust(geometry, method, keep_collapsed, precision) });
+    crate::crs::checked_kernel!(make_valid_geometry_rust_with_limits, "geo.make_valid", 1,
+        (geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits) -> (Geometry<f64>, MakeValidError),
+        |context| { let precision = context.precision()?.value(); super::make_valid_geometry_rust_with_limits(geometry, method, keep_collapsed, limits, precision) });
+    crate::crs::checked_kernel!(make_valid_geometry_rust_bounded, "geo.make_valid", 1,
+        (geometry: &Geometry<f64>, method: RepairMethod, keep_collapsed: bool, limits: MakeValidLimits) -> (Geometry<f64>, MakeValidError),
+        |context| { let precision = context.precision()?.value(); super::make_valid_geometry_rust_bounded(geometry, method, keep_collapsed, limits, precision) });
 }

@@ -22,7 +22,7 @@ i propri metadati e byte, seguendo la stessa lineage delle altre colonne.
 | `y_origin` | numero | `0` | finito | y del centro di rotazione |
 
 `x_origin` e `y_origin` sono facoltativi, anche uno solo: il kernel
-(`extended::rotate_about`) riceve il centro sempre esplicito, e il runner
+(`extended::with_crs::rotate_about`) riceve il centro sempre esplicito, e il runner
 mette `0` al posto di ciascuno che manca. Senza entrambi si ruota attorno
 a `(0, 0)` del CRS, non attorno alla geometria.
 
@@ -35,7 +35,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1: il runner chiama il kernel (`extended::rotate_about`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::rotate_about`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 

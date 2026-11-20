@@ -1,10 +1,12 @@
 //! GOP-015A/020, raccolta indipendente: attese generate con Python Fraction.
 #![deny(clippy::disallowed_methods)]
 use geo::{Geometry, GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon};
-use plenora_kernels_geo::{
-    general_boolean as gb, line_boolean as lb, polygon_boolean as pb,
-    polygon_completion_with_limits, predicates::RelateLimits,
-};
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::general_boolean as gb;
+use plenora_kernels_geo::line_boolean as lb;
+use plenora_kernels_geo::polygon_boolean as pb;
+use plenora_kernels_geo::predicates::RelateLimits;
+use plenora_kernels_geo::with_crs::polygon_completion_with_limits;
 
 fn polygon(coords: &[(f64, f64)]) -> Polygon<f64> {
     Polygon::new(LineString::from(coords.to_vec()), vec![])
@@ -35,11 +37,21 @@ fn p3b_fraction_two_hundred_unions_and_eleven_completion_faces() {
             ])])),
         ]));
         assert_eq!(
-            lb::union_with_limits(&tri, &line, None, RelateLimits::default(), None).unwrap(),
+            lb::with_crs::union_with_limits(
+                CrsContext::new(&[crs_fixture_metrico(); 2]),
+                &tri,
+                &line,
+                None,
+                RelateLimits::default(),
+                None
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap(),
             expected
         );
         assert_eq!(
-            gb::boolean_with_limits(
+            gb::with_crs::boolean_with_limits(
+                CrsContext::new(&[crs_fixture_metrico(); 2]),
                 &tri,
                 &line,
                 gb::GeneralBooleanOp::Union,
@@ -47,12 +59,19 @@ fn p3b_fraction_two_hundred_unions_and_eleven_completion_faces() {
                 gb::GeneralBooleanLimits::default(),
                 None
             )
+            .map_err(kernel_error_fixture)
             .unwrap(),
             expected
         );
         let pocket = Geometry::LineString(LineString::from(vec![(0., 6.5), (2., 8.), (v[6], 2.)]));
-        let result =
-            polygon_completion_with_limits(&[triangle()], &pocket, RelateLimits::default(), None);
+        let result = polygon_completion_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
+            &[triangle()],
+            &pocket,
+            RelateLimits::default(),
+            None,
+        )
+        .map_err(kernel_error_fixture);
         if v[12].to_bits() == 1_f64.to_bits() {
             // Fraction: il nodo arrotondato entra nell'area occupata immutabile.
             assert!(matches!(
@@ -92,7 +111,8 @@ fn carried_surfaces_and_lines_have_no_constructed_kinks() {
         (gb::GeneralBooleanOp::Union, Some(2)),
     ] {
         assert_eq!(
-            gb::boolean_with_limits(
+            gb::with_crs::boolean_with_limits(
+                CrsContext::new(&[crs_fixture_metrico(); 2]),
                 &tri,
                 &line,
                 op,
@@ -100,12 +120,22 @@ fn carried_surfaces_and_lines_have_no_constructed_kinks() {
                 gb::GeneralBooleanLimits::default(),
                 None
             )
+            .map_err(kernel_error_fixture)
             .unwrap(),
             expected
         );
         assert_eq!(
-            lb::boolean_with_limits(&tri, &line, op, filter, RelateLimits::default(), None)
-                .unwrap(),
+            lb::with_crs::boolean_with_limits(
+                CrsContext::new(&[crs_fixture_metrico(); 2]),
+                &tri,
+                &line,
+                op,
+                filter,
+                RelateLimits::default(),
+                None
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap(),
             expected
         );
     }
@@ -117,7 +147,8 @@ fn carried_surfaces_and_lines_have_no_constructed_kinks() {
         _ => unreachable!(),
     }]));
     assert_eq!(
-        gb::boolean_with_limits(
+        gb::with_crs::boolean_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
             &a,
             &b,
             gb::GeneralBooleanOp::Difference,
@@ -125,11 +156,13 @@ fn carried_surfaces_and_lines_have_no_constructed_kinks() {
             gb::GeneralBooleanLimits::default(),
             None
         )
+        .map_err(kernel_error_fixture)
         .unwrap(),
         expected
     );
     assert_eq!(
-        lb::boolean_with_limits(
+        lb::with_crs::boolean_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
             &a,
             &b,
             lb::LineBooleanOp::Difference,
@@ -137,13 +170,15 @@ fn carried_surfaces_and_lines_have_no_constructed_kinks() {
             RelateLimits::default(),
             None
         )
+        .map_err(kernel_error_fixture)
         .unwrap(),
         expected
     );
     // Un triangolo esterno tangente al lato obliquo in un nodo costruito
     // non cambia la superficie della differenza ne' le ordinate originali.
     let touching = Geometry::Polygon(polygon(&[(0., 7.), (3., 7.), (3., 0.), (0., 7.)]));
-    let actual = pb::boolean_with_limits(
+    let actual = pb::with_crs::boolean_with_limits(
+        CrsContext::new(&[crs_fixture_metrico(); 2]),
         &tri,
         &touching,
         pb::PolygonBooleanOp::Difference,
@@ -151,6 +186,7 @@ fn carried_surfaces_and_lines_have_no_constructed_kinks() {
         pb::PolygonBooleanLimits::default(),
         None,
     )
+    .map_err(kernel_error_fixture)
     .unwrap();
     assert_eq!(
         actual,
@@ -170,7 +206,8 @@ fn duplicate_sources_do_not_make_a_node_necessary() {
         (1., 1.),
     ])]));
     assert_eq!(
-        lb::boolean_with_limits(
+        lb::with_crs::boolean_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
             &a,
             &b,
             lb::LineBooleanOp::Difference,
@@ -178,11 +215,13 @@ fn duplicate_sources_do_not_make_a_node_necessary() {
             RelateLimits::default(),
             None
         )
+        .map_err(kernel_error_fixture)
         .unwrap(),
         expected
     );
     assert_eq!(
-        gb::boolean_with_limits(
+        gb::with_crs::boolean_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
             &a,
             &b,
             gb::GeneralBooleanOp::Difference,
@@ -190,6 +229,7 @@ fn duplicate_sources_do_not_make_a_node_necessary() {
             gb::GeneralBooleanLimits::default(),
             None
         )
+        .map_err(kernel_error_fixture)
         .unwrap(),
         expected
     );
@@ -211,8 +251,29 @@ fn completion_dangling_crossing_does_not_bend_carried_boundary() {
         (0., 7.),
     ])];
     assert_eq!(
-        polygon_completion_with_limits(&[triangle()], &lines, RelateLimits::default(), None)
-            .unwrap(),
+        polygon_completion_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
+            &[triangle()],
+            &lines,
+            RelateLimits::default(),
+            None
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap(),
         expected
     );
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
 }

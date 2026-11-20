@@ -1,8 +1,8 @@
 //! Superficie Geometry di GOP-007; i ruoli degli anelli vengono da Polygon.
 
 use super::{
-    coordinate, edge, emit_part, validation, AtomicBool, Coord, CrsKind, DensifyWork,
-    EllissoideGeodetico, GeodesicDensifyError, GeodesicDensifyLimits, LineString, ResolvedCrs,
+    coordinate, edge, emit_part, validation, AtomicBool, Coord, DensifyWork, EllissoideGeodetico,
+    GeodesicDensifyError, GeodesicDensifyLimits, LineString, ResolvedCrs,
 };
 use geo::{Geometry, MultiLineString, MultiPolygon, Polygon};
 
@@ -134,7 +134,12 @@ pub fn geodesic_densify_geometry_with_limits(
     ) {
         return Err(GeodesicDensifyError::UnsupportedGeometry);
     }
-    if crs.kind() != CrsKind::Geographic {
+    if plenora_core::crs::validate_requirement(
+        plenora_core::catalog::CrsRequirement::Geographic,
+        &[crs],
+    )
+    .is_err()
+    {
         return Err(GeodesicDensifyError::GeographicRequired);
     }
     if !(maximum_m.is_finite() && maximum_m > 0.0) {

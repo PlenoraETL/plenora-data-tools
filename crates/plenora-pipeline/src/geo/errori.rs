@@ -683,3 +683,38 @@ fn buffer_deadline_maps_to_timeout() {
         );
     }
 }
+
+impl<E: ErroreKernel> ErroreKernel for plenora_kernels_geo::crs::DirectError<E> {
+    fn classe(&self) -> Classe {
+        match self {
+            Self::Crs(_) => Classe::Crs,
+            Self::Kernel(error) => error.classe(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod direct_crs_tests {
+    use super::*;
+    use plenora_kernels_geo::crs::{CrsError, DirectError};
+
+    #[test]
+    fn direct_gate_preserves_deadline_and_cancellation_categories() {
+        let deadline = DirectError::Kernel(PredicateError::DeadlineExceeded);
+        let cancelled = DirectError::Kernel(PredicateError::Cancelled);
+        assert!(matches!(
+            del_kernel("geo.buffer", &deadline),
+            PlenoraError::Timeout(_)
+        ));
+        assert!(matches!(
+            del_kernel("geo.buffer", &cancelled),
+            PlenoraError::Cancelled(_)
+        ));
+        let crs: DirectError<PredicateError> = DirectError::Crs(CrsError::Mismatch);
+        assert!(matches!(
+            del_kernel("geo.buffer", &crs),
+            PlenoraError::Crs(_)
+        ));
+    }
+}

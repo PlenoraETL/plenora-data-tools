@@ -118,7 +118,7 @@ fn reverse(edge: &Edge) -> Result<Edge, PredicateError> {
 /// # Errors
 /// Tipi esclusi, input invalido, filtro errato, pubblicazione non certificabile,
 /// esaurimento di risorse, allocazione fallita, cancellazione o deadline.
-pub fn boolean_with_limits(
+pub(crate) fn boolean_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     operation: PolygonBooleanOp,
@@ -854,7 +854,7 @@ pub(super) fn general_supported(
 /// Unione binaria; contratto e limiti di [`boolean_with_limits`].
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn union_with_limits(
+pub(crate) fn union_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     limits: PolygonBooleanLimits,
@@ -872,7 +872,7 @@ pub fn union_with_limits(
 /// Intersezione binaria, inclusi contatti di dimensione inferiore.
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn intersection_with_limits(
+pub(crate) fn intersection_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     limits: PolygonBooleanLimits,
@@ -890,7 +890,7 @@ pub fn intersection_with_limits(
 /// Differenza direzionale con chiusura del residuo.
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn difference_with_limits(
+pub(crate) fn difference_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     limits: PolygonBooleanLimits,
@@ -909,3 +909,23 @@ pub fn difference_with_limits(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{
+        AtomicBool, Geometry, PolygonBooleanError, PolygonBooleanLimits, PolygonBooleanOp,
+    };
+
+    crate::crs::checked_kernel!(boolean_with_limits, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, operation: PolygonBooleanOp, output_dimension: Option<u8>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PolygonBooleanError),
+        |context| {  super::boolean_with_limits(left, right, operation, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(union_with_limits, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PolygonBooleanError),
+        |context| {  super::union_with_limits(left, right, limits, cancelled) });
+    crate::crs::checked_kernel!(intersection_with_limits, "geo.intersection", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PolygonBooleanError),
+        |context| {  super::intersection_with_limits(left, right, limits, cancelled) });
+    crate::crs::checked_kernel!(difference_with_limits, "geo.difference", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, limits: PolygonBooleanLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PolygonBooleanError),
+        |context| {  super::difference_with_limits(left, right, limits, cancelled) });
+}

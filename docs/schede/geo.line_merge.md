@@ -29,7 +29,7 @@ contratto (`sorted_by`, `row_count`) cadono.
 ### Righe
 
 Aggregazione: per il contratto l'uscita ha solo la colonna geometria, una
-riga per percorso fuso. Il kernel (`extended_algorithms::line_merge`) fonde
+riga per percorso fuso. Il kernel (`extended_algorithms::with_crs::line_merge`) fonde
 le linee di una geometria (`LineString`, `MultiLineString` o una
 `GeometryCollection` di sole linee, anche annidata) e riceve come
 argomenti il massimo di coordinate d'ingresso e di linee d'uscita. Il

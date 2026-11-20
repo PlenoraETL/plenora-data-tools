@@ -31,7 +31,7 @@ del contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1. Il kernel (`extended_algorithms::line_substring`) riceve una
+1:1. Il kernel (`extended_algorithms::with_crs::line_substring`) riceve una
 `LineString`, rende una `LineString`, un `Point` se `start_ratio` e
 `end_ratio` sono uguali (confronto numerico `==`: `-0.0` e `0.0` sono
 uguali), e nessuna geometria se la linea

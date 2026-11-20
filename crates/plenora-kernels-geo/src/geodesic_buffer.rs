@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use geo::{Coord, Geometry, LineString, Polygon};
 use geographiclib_rs::InverseGeodesic;
-use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::crs::ResolvedCrs;
 use thiserror::Error;
 
 use crate::geodetica::EllissoideGeodetico;
@@ -335,7 +335,12 @@ pub fn geodesic_empty_buffer_with_limits<'a>(
 ) -> Result<DegenerateBufferResult<'a>, DegenerateBufferError> {
     let mut work = BufferWork::new(limits, cancelled);
     work.checkpoint()?;
-    if crs.kind() != CrsKind::Geographic {
+    if plenora_core::crs::validate_requirement(
+        plenora_core::catalog::CrsRequirement::Geographic,
+        &[crs],
+    )
+    .is_err()
+    {
         return Err(DegenerateBufferError::GeographicRequired);
     }
     let ellipsoid = EllissoideGeodetico::da_crs(crs)

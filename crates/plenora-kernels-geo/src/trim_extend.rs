@@ -99,7 +99,7 @@ impl From<LineBooleanError> for TrimExtendError {
 /// # Errors
 /// Geometria malformata, dominio escluso GOP-018, topologia alterata dal rounding,
 /// coordinate fuori dominio, risorse, cancellazione o deadline.
-pub fn trim_extend_with_limits(
+pub(crate) fn trim_extend_with_limits(
     target: &Geometry<f64>,
     guide: &Geometry<f64>,
     options: TrimExtendOptions,
@@ -403,3 +403,14 @@ pub(crate) fn publish_paths(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{
+        AtomicBool, Geometry, LineString, RelateLimits, TrimExtendError, TrimExtendOptions,
+    };
+
+    crate::crs::checked_kernel!(trim_extend_with_limits, "geo.split", 2,
+        (target: &Geometry<f64>, guide: &Geometry<f64>, options: TrimExtendOptions, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (LineString<f64>, TrimExtendError),
+        |context| {  super::trim_extend_with_limits(target, guide, options, limits, cancelled) });
+}

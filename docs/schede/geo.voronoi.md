@@ -30,7 +30,7 @@ Le altre colonne, i metadati di schema e le proprietà del contratto
 ### Righe
 
 1:1: una cella per riga, ma ogni cella dipende da tutte le righe (il kernel
-`advanced::voronoi_cells` riceve tutti i punti insieme, e il limite
+`advanced::with_crs::voronoi_cells` riceve tutti i punti insieme, e il limite
 `max_points` come argomento). A ogni punto va la prima cella, in ordine di
 prima comparsa del sito, che lo interseca. Il kernel non conosce i
 null: il runner gli passa solo le geometrie non nulle, nell'ordine delle

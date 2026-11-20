@@ -753,7 +753,7 @@ fn checked_output(
 /// interno ([`SplitError::Polygonize`]); [`SplitError::AreaMismatch`] e
 /// [`SplitError::CoverageMismatch`] se area o copertura non sono
 /// conservate.
-pub fn split_polygon_by_linework_rust(
+pub(crate) fn split_polygon_by_linework_rust(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
     limits: SplitLimits,
@@ -841,7 +841,7 @@ pub fn split_polygon_by_linework_rust(
 /// Restituisce [`SplitError::UnboundedLimitConfiguration`] se almeno un
 /// limite e' lasciato a [`u64::MAX`]; altrimenti propaga gli errori di
 /// [`split_polygon_by_linework_rust`].
-pub fn split_polygon_by_linework_rust_bounded(
+pub(crate) fn split_polygon_by_linework_rust_bounded(
     source: &Geometry<f64>,
     splitter: &Geometry<f64>,
     limits: SplitLimits,
@@ -1277,4 +1277,16 @@ mod tests {
             }
         }
     }
+}
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Geometry, Polygon, SplitError, SplitLimits};
+
+    crate::crs::checked_kernel!(split_polygon_by_linework_rust, "geo.split", 2,
+        (source: &Geometry<f64>, splitter: &Geometry<f64>, limits: SplitLimits) -> (Vec<Polygon<f64>>, SplitError),
+        |context| { let precision = context.precision()?.value(); super::split_polygon_by_linework_rust(source, splitter, limits, precision) });
+    crate::crs::checked_kernel!(split_polygon_by_linework_rust_bounded, "geo.split", 2,
+        (source: &Geometry<f64>, splitter: &Geometry<f64>, limits: SplitLimits) -> (Vec<Polygon<f64>>, SplitError),
+        |context| { let precision = context.precision()?.value(); super::split_polygon_by_linework_rust_bounded(source, splitter, limits, precision) });
 }

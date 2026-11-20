@@ -71,7 +71,8 @@ mod validazione_ogc;
 pub mod valori_arrow;
 pub mod wkb_decoder;
 
-pub use polygon_completion::polygon_completion_with_limits;
+#[cfg(test)]
+pub(crate) use polygon_completion::polygon_completion_with_limits;
 pub use predicates::arrangement_indexed::{
     general_boolean, line_boolean, point_boolean, polygon_boolean, polygon_completion,
 };
@@ -1096,7 +1097,7 @@ fn robust_convex_hull(geometry: &Geometry<f64>) -> Result<Geometry<f64>, Plenora
 /// - `PlenoraError::Internal` se la validazione OGC o il calcolo di `geo`
 ///   vanno in panico dentro la barriera: il messaggio porta la sola forma
 ///   del payload.
-pub fn transform_geometry(
+pub(crate) fn transform_geometry(
     operation: Operation,
     geometry: &Geometry<f64>,
 ) -> Result<Geometry<f64>, PlenoraError> {
@@ -1134,7 +1135,7 @@ fn transform_geometry_validated(
 /// `PlenoraError::Unsupported` se il payload in ingresso porta dimensioni
 /// Z/M o SRID non preservabili nel protocollo 2D;
 /// `PlenoraError::Internal` come in [`transform_geometry`].
-pub fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, PlenoraError> {
+pub(crate) fn transform_wkb(operation: Operation, payload: &[u8]) -> Result<Vec<u8>, PlenoraError> {
     let geometry = geometry_from_wkb(payload)?;
     let transformed = transform_geometry_validated(operation, &geometry)?;
     // Lo stesso encoder di ogni cella d'uscita: il poligono vuoto (l'inviluppo
@@ -2526,4 +2527,16 @@ mod tests {
             println!("verdetto={esito:?}");
         }
     }
+}
+
+/// Trasformazioni dirette con requisito CRS verificato dal catalogo.
+pub mod with_crs {
+    use super::{Geometry, Operation, PlenoraError};
+    pub use crate::polygon_completion::with_crs::polygon_completion_with_limits;
+    crate::crs::checked_kernel!(transform_geometry, "geo.centroid", 1,
+        (operation: Operation, geometry: &Geometry<f64>) -> (Geometry<f64>, PlenoraError),
+        |context| { super::transform_geometry(operation, geometry) });
+    crate::crs::checked_kernel!(transform_wkb, "geo.centroid", 1,
+        (operation: Operation, payload: &[u8]) -> (Vec<u8>, PlenoraError),
+        |context| { super::transform_wkb(operation, payload) });
 }

@@ -32,7 +32,7 @@ del contratto resta `sorted_by`, cade `row_count`.
 Espansione 1:N: ogni riga dà i suoi triangoli, con le altre colonne copiate
 e `__parent_index` alla riga d'origine; meno di tre punti distinti, o punti
 tutti collineari, danno zero righe. Il kernel
-(`extended_algorithms::delaunay`) triangola una geometria alla volta e
+(`extended_algorithms::with_crs::delaunay`) triangola una geometria alla volta e
 riceve come argomenti il massimo di coordinate d'ingresso e di triangoli.
 Il runner lo chiama su ogni cella non nulla, con `MAX_CELL_COORDINATES`
 come massimo di coordinate e il limite di righe dell'arco d'uscita (`max_output_rows` per un output del

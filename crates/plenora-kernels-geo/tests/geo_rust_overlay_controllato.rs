@@ -18,15 +18,18 @@
 
 use geo::{Area, BoundingRect, Geometry, LineString, MultiPolygon, Polygon};
 use geozero::{CoordDimensions, ToWkb};
+use plenora_kernels_geo::crs::CrsContext;
 use plenora_kernels_geo::geometry_from_wkb;
-use plenora_kernels_geo::rust_backend::make_valid::{
-    make_valid_geometry_rust, make_valid_geometry_rust_bounded,
-    make_valid_geometry_rust_with_limits, MakeValidError, MakeValidLimits, RepairMethod,
-};
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust;
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust_bounded;
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust_with_limits;
+use plenora_kernels_geo::rust_backend::make_valid::MakeValidError;
+use plenora_kernels_geo::rust_backend::make_valid::MakeValidLimits;
+use plenora_kernels_geo::rust_backend::make_valid::RepairMethod;
 use plenora_kernels_geo::rust_backend::precision::Precision;
-use plenora_kernels_geo::rust_backend::{
-    make_valid_wkb, RepairMethod as MetodoAdapter, RustBackendError,
-};
+use plenora_kernels_geo::rust_backend::with_crs::make_valid_wkb;
+use plenora_kernels_geo::rust_backend::RepairMethod as MetodoAdapter;
+use plenora_kernels_geo::rust_backend::RustBackendError;
 
 /// 1 cm in metri.
 const CENTIMETRO: f64 = 0.01;
@@ -76,21 +79,38 @@ fn cornice_fuori_dominio_e_un_errore_esplicito() {
     for method in [RepairMethod::Structure, RepairMethod::Linework] {
         for keep_collapsed in [false, true] {
             let esiti = [
-                make_valid_geometry_rust(&input, method, keep_collapsed, CENTIMETRO),
+                make_valid_geometry_rust(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                            .expect("precisione fixture"),
+                    )]),
+                    &input,
+                    method,
+                    keep_collapsed,
+                )
+                .map_err(kernel_error_fixture),
                 make_valid_geometry_rust_with_limits(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                            .expect("precisione fixture"),
+                    )]),
                     &input,
                     method,
                     keep_collapsed,
                     LIMITI,
-                    CENTIMETRO,
-                ),
+                )
+                .map_err(kernel_error_fixture),
                 make_valid_geometry_rust_bounded(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                            .expect("precisione fixture"),
+                    )]),
                     &input,
                     method,
                     keep_collapsed,
                     LIMITI,
-                    CENTIMETRO,
-                ),
+                )
+                .map_err(kernel_error_fixture),
             ];
             for esito in esiti {
                 assert!(
@@ -160,7 +180,16 @@ fn cornice_sottile_segue_la_politica_del_centimetro() {
         let sopra = margine >= 0.04;
         for method in [RepairMethod::Structure, RepairMethod::Linework] {
             for keep_collapsed in [false, true] {
-                let esito = make_valid_geometry_rust(&input, method, keep_collapsed, CENTIMETRO);
+                let esito = make_valid_geometry_rust(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                            .expect("precisione fixture"),
+                    )]),
+                    &input,
+                    method,
+                    keep_collapsed,
+                )
+                .map_err(kernel_error_fixture);
                 if sopra {
                     let output = esito.unwrap_or_else(|errore| {
                         panic!("{margine} m {method:?}: errore inatteso {errore}")
@@ -179,7 +208,13 @@ fn cornice_sottile_segue_la_politica_del_centimetro() {
         }
         let payload = input.to_wkb(CoordDimensions::xy()).expect("wkb");
         for method in [MetodoAdapter::Structure, MetodoAdapter::Linework] {
-            let esito = make_valid_wkb(&payload, method, true, precisione());
+            let esito = make_valid_wkb(
+                CrsContext::new(&[&crs_fixture_precision(precisione())]),
+                &payload,
+                method,
+                true,
+            )
+            .map_err(kernel_error_fixture);
             if sopra {
                 let output = esito.unwrap_or_else(|errore| {
                     panic!("{margine} m adapter {method:?}: errore inatteso {errore}")
@@ -208,8 +243,17 @@ fn buco_sotto_la_precisione_puo_sparire_il_resto_resta() {
     let quadrato = Polygon::new(rettangolo(0.0, 0.0, 1.0, 1.0), vec![buco]);
     let input = Geometry::MultiPolygon(MultiPolygon::new(vec![quadrato.clone(), farfalla()]));
     for method in [RepairMethod::Structure, RepairMethod::Linework] {
-        let output = make_valid_geometry_rust(&input, method, false, CENTIMETRO)
-            .unwrap_or_else(|errore| panic!("{method:?}: {errore}"));
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            method,
+            false,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("{method:?}: {errore}"));
         let area = poligoni_della_cornice(&output)
             .iter()
             .map(Area::unsigned_area)
@@ -228,6 +272,7 @@ fn buco_sotto_la_precisione_puo_sparire_il_resto_resta() {
 /// overlay e ripara entrambi: l'area e' quella di GEOS, la shell meno la
 /// parte del buco dentro piu' quella fuori, `L^2`.
 #[test]
+#[allow(clippy::too_many_lines)] // Matrice degli oracoli con contesti CRS espliciti.
 fn griglia_oltre_il_centimetro_e_l_unico_rifiuto() {
     let spostato = |lato: f64, origine: f64| {
         // Buco che esce dalla shell: la riparazione passa da un overlay.
@@ -243,9 +288,17 @@ fn griglia_oltre_il_centimetro_e_l_unico_rifiuto() {
     };
     let invalido = |lato: f64| spostato(lato, 0.0);
     for lato in [20_000_000.0, 1_300_000.0] {
-        let output =
-            make_valid_geometry_rust(&invalido(lato), RepairMethod::Structure, false, CENTIMETRO)
-                .unwrap_or_else(|errore| panic!("{lato}: {errore}"));
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &invalido(lato),
+            RepairMethod::Structure,
+            false,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("{lato}: {errore}"));
         // La shell meno la parte del buco dentro: `L^2 - L^2 / 8`.
         let attesa = lato * lato * 0.875;
         assert!(
@@ -256,17 +309,29 @@ fn griglia_oltre_il_centimetro_e_l_unico_rifiuto() {
     }
     assert!(matches!(
         make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture")
+            )]),
             &spostato(10.0, 2_f64.powi(45)),
             RepairMethod::Structure,
-            false,
-            CENTIMETRO
-        ),
+            false
+        )
+        .map_err(kernel_error_fixture),
         Err(MakeValidError::PrecisionInsufficient)
     ));
     for lato in [20_000_000.0, 1_300_000.0] {
-        let output =
-            make_valid_geometry_rust(&invalido(lato), RepairMethod::Linework, false, CENTIMETRO)
-                .unwrap_or_else(|errore| panic!("{lato}: {errore}"));
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &invalido(lato),
+            RepairMethod::Linework,
+            false,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("{lato}: {errore}"));
         let attesa = lato * lato;
         assert!(
             (output.unsigned_area() - attesa).abs() <= 1e-12 * attesa,
@@ -281,18 +346,40 @@ fn griglia_oltre_il_centimetro_e_l_unico_rifiuto() {
         (MetodoAdapter::Structure, RepairMethod::Structure),
         (MetodoAdapter::Linework, RepairMethod::Linework),
     ] {
-        let bytes = make_valid_wkb(&payload, adapter, true, precisione()).expect("adapter");
+        let bytes = make_valid_wkb(
+            CrsContext::new(&[&crs_fixture_precision(precisione())]),
+            &payload,
+            adapter,
+            true,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("adapter");
         assert_eq!(
             geometry_from_wkb(&bytes).expect("WKB uscita"),
-            make_valid_geometry_rust(&invalido(20_000_000.0), method, true, CENTIMETRO)
-                .expect("percorso geometria")
+            make_valid_geometry_rust(
+                CrsContext::new(&[&crs_fixture_precision(
+                    plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                        .expect("precisione fixture")
+                )]),
+                &invalido(20_000_000.0),
+                method,
+                true
+            )
+            .map_err(kernel_error_fixture)
+            .expect("percorso geometria")
         );
     }
     let lontano = spostato(10.0, 2_f64.powi(45))
         .to_wkb(CoordDimensions::xy())
         .expect("wkb");
     assert!(matches!(
-        make_valid_wkb(&lontano, MetodoAdapter::Structure, true, precisione()),
+        make_valid_wkb(
+            CrsContext::new(&[&crs_fixture_precision(precisione())]),
+            &lontano,
+            MetodoAdapter::Structure,
+            true
+        )
+        .map_err(kernel_error_fixture),
         Err(RustBackendError::PrecisionInsufficient)
     ));
 }
@@ -303,7 +390,17 @@ fn cornice_larga_resta_riparata() {
     let larga = cornice(10.0, 2.5);
     let input = Geometry::MultiPolygon(MultiPolygon::new(vec![larga.clone(), farfalla()]));
     for method in [RepairMethod::Structure, RepairMethod::Linework] {
-        let output = make_valid_geometry_rust(&input, method, false, CENTIMETRO).expect("riparata");
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            method,
+            false,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("riparata");
         assert!(cornice_conservata(&output, &larga), "{method:?}");
     }
 }
@@ -371,14 +468,28 @@ fn linework_conserva_le_linee_sopra_la_precisione_a_2_alla_30() {
         );
     };
     for keep_collapsed in [false, true] {
-        let output =
-            make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed, CENTIMETRO)
-                .expect("riparata");
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            RepairMethod::Linework,
+            keep_collapsed,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("riparata");
         verifica(&output);
     }
     let payload = input.to_wkb(CoordDimensions::xy()).expect("wkb");
-    let output =
-        make_valid_wkb(&payload, MetodoAdapter::Linework, true, precisione()).expect("adapter");
+    let output = make_valid_wkb(
+        CrsContext::new(&[&crs_fixture_precision(precisione())]),
+        &payload,
+        MetodoAdapter::Linework,
+        true,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("adapter");
     verifica(&geometry_from_wkb(&output).expect("valida"));
 }
 
@@ -425,17 +536,33 @@ fn caso_92_in_metri_a_6000_km_structure_e_linework_rispondono() {
     ];
     attese.sort_unstable();
     for keep_collapsed in [false, true] {
-        let strutturale =
-            make_valid_geometry_rust(&input, RepairMethod::Structure, keep_collapsed, CENTIMETRO)
-                .expect("STRUCTURE entro la precisione");
+        let strutturale = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            RepairMethod::Structure,
+            keep_collapsed,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("STRUCTURE entro la precisione");
         let area = strutturale.unsigned_area();
         assert!(
             (area - shell.unsigned_area()).abs() <= perimetro(&shell) * CENTIMETRO,
             "area {area}"
         );
-        let output =
-            make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed, CENTIMETRO)
-                .expect("LINEWORK senza overlay");
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            RepairMethod::Linework,
+            keep_collapsed,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("LINEWORK senza overlay");
         let Geometry::GeometryCollection(parti) = &output else {
             panic!("attesa una collezione: {output:?}");
         };
@@ -463,9 +590,17 @@ fn caso_92_in_metri_a_6000_km_structure_e_linework_rispondono() {
 fn caso_92_in_metri_e_entro_la_precisione() {
     let (input, shell) = caso_92(1_072_741_824.0, 4_000_000.0);
     for keep_collapsed in [false, true] {
-        let output =
-            make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed, CENTIMETRO)
-                .expect("entro la precisione");
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            RepairMethod::Linework,
+            keep_collapsed,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("entro la precisione");
         let area = output.unsigned_area();
         assert!(
             (area - shell.unsigned_area()).abs() <= perimetro(&shell) * CENTIMETRO,
@@ -500,9 +635,18 @@ fn scala_di_epsilon_del_laboratorio_entro_la_precisione() {
             Vec::new(),
         ));
         for method in [RepairMethod::Structure, RepairMethod::Linework] {
-            let area = make_valid_geometry_rust(&farfalla, method, false, CENTIMETRO)
-                .unwrap_or_else(|errore| panic!("farfalla {epsilon} {method:?}: {errore}"))
-                .unsigned_area();
+            let area = make_valid_geometry_rust(
+                CrsContext::new(&[&crs_fixture_precision(
+                    plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                        .expect("precisione fixture"),
+                )]),
+                &farfalla,
+                method,
+                false,
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap_or_else(|errore| panic!("farfalla {epsilon} {method:?}: {errore}"))
+            .unsigned_area();
             assert!(
                 (area - attesa_farfalla).abs() <= 50.0 * CENTIMETRO,
                 "farfalla {epsilon} {method:?}: {area} contro {attesa_farfalla}"
@@ -528,11 +672,18 @@ fn scala_di_epsilon_del_laboratorio_entro_la_precisione() {
                     5.0f64.mul_add(-(9.0 - x), 84.0) + 2.0 * sovrapposizione,
                 ),
             ] {
-                let area = make_valid_geometry_rust(&buchi, method, false, CENTIMETRO)
-                    .unwrap_or_else(|errore| {
-                        panic!("buchi {epsilon} {direzione} {method:?}: {errore}")
-                    })
-                    .unsigned_area();
+                let area = make_valid_geometry_rust(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                            .expect("precisione fixture"),
+                    )]),
+                    &buchi,
+                    method,
+                    false,
+                )
+                .map_err(kernel_error_fixture)
+                .unwrap_or_else(|errore| panic!("buchi {epsilon} {direzione} {method:?}: {errore}"))
+                .unsigned_area();
                 assert!(
                     (area - attesa).abs() <= 80.0 * CENTIMETRO,
                     "buchi {epsilon} {direzione} {method:?}: {area} contro {attesa}"
@@ -561,8 +712,17 @@ fn il_bilancio_conta_solo_gli_overlay_eseguiti() {
         vec![],
     ));
     let input = Geometry::MultiPolygon(MultiPolygon::new(parti));
-    let output = make_valid_geometry_rust(&input, RepairMethod::Structure, false, CENTIMETRO)
-        .expect("un solo overlay entro la precisione");
+    let output = make_valid_geometry_rust(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                .expect("precisione fixture"),
+        )]),
+        &input,
+        RepairMethod::Structure,
+        false,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("un solo overlay entro la precisione");
     // 2.000 quadrati da 100 m2 piu' 75 m2 del quadrato che ne copre un quarto.
     let attesa = 2_000.0 * 100.0 + 75.0;
     assert!(
@@ -570,4 +730,30 @@ fn il_bilancio_conta_solo_gli_overlay_eseguiti() {
         "area {}",
         output.unsigned_area()
     );
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

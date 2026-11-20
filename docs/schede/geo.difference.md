@@ -2,7 +2,7 @@
 
 Sostituisce la geometria della sinistra con la parte che non sta nella
 geometria della destra, `sinistra \ destra`, calcolata dal kernel
-`topology::boolean_operation_validated` ([Runner, «Operazioni
+`topology::with_crs::boolean_operation_validated` ([Runner, «Operazioni
 geo»](runner.md#operazioni-geo)). Lavora solo su `Polygon` e
 `MultiPolygon` e rende sempre un `MultiPolygon`.
 
@@ -69,7 +69,7 @@ In esecuzione, prima del kernel, su ogni cella non nulla dei due lati
   di byte);
 - `InvalidPlan`: le due tabelle hanno un numero di righe diverso.
 
-Dal kernel (`topology::boolean_operation_validated`, errore
+Dal kernel (`topology::with_crs::boolean_operation_validated`, errore
 `TopologyError`, sulle geometrie già validate: resta la validazione OGC
 del risultato), nella categoria del passo geo indicata fra parentesi:
 

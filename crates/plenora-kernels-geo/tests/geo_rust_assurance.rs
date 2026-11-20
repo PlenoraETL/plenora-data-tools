@@ -31,17 +31,22 @@ use geo::{
     MultiLineString, Point, Polygon,
 };
 use geozero::{wkb::Wkb, CoordDimensions, ToGeo, ToWkb};
-use plenora_kernels_geo::rust_backend::make_valid::{
-    make_valid_geometry_rust_bounded, make_valid_geometry_rust_with_limits, MakeValidError,
-    MakeValidLimits, RepairMethod,
-};
-use plenora_kernels_geo::rust_backend::polygonize::{
-    polygonize_linework_rust, polygonize_linework_rust_bounded, PolygonizeError, PolygonizeLimits,
-    PolygonizeOptions, PolygonizeResult,
-};
-use plenora_kernels_geo::rust_backend::split::{
-    split_polygon_by_linework_rust, split_polygon_by_linework_rust_bounded, SplitError, SplitLimits,
-};
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust_bounded;
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust_with_limits;
+use plenora_kernels_geo::rust_backend::make_valid::MakeValidError;
+use plenora_kernels_geo::rust_backend::make_valid::MakeValidLimits;
+use plenora_kernels_geo::rust_backend::make_valid::RepairMethod;
+use plenora_kernels_geo::rust_backend::polygonize::with_crs::polygonize_linework_rust;
+use plenora_kernels_geo::rust_backend::polygonize::with_crs::polygonize_linework_rust_bounded;
+use plenora_kernels_geo::rust_backend::polygonize::PolygonizeError;
+use plenora_kernels_geo::rust_backend::polygonize::PolygonizeLimits;
+use plenora_kernels_geo::rust_backend::polygonize::PolygonizeOptions;
+use plenora_kernels_geo::rust_backend::polygonize::PolygonizeResult;
+use plenora_kernels_geo::rust_backend::split::with_crs::split_polygon_by_linework_rust;
+use plenora_kernels_geo::rust_backend::split::with_crs::split_polygon_by_linework_rust_bounded;
+use plenora_kernels_geo::rust_backend::split::SplitError;
+use plenora_kernels_geo::rust_backend::split::SplitLimits;
 
 #[derive(Debug)]
 struct AssuranceError(String);
@@ -301,15 +306,20 @@ fn precisione(geometry: &Geometry<f64>) -> f64 {
 const PRECISIONE: f64 = 1e-6;
 
 fn polygonize(geometry: &Geometry<f64>) -> AssuranceResult<PolygonizeResult> {
-    polygonize_linework_rust(
-        geometry,
-        PolygonizeOptions {
+    {
+        let options = PolygonizeOptions {
             node_input: true,
             require_complete: false,
             limits: PolygonizeLimits::unlimited(),
             precision: precisione(geometry),
-        },
-    )
+        };
+        let sr = crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(options.precision)
+                .expect("precisione fixture"),
+        );
+        polygonize_linework_rust(CrsContext::new(&[&sr]), geometry, options)
+    }
+    .map_err(kernel_error_fixture)
     .map_err(|error| AssuranceError(format!("polygonize: {error}")))
 }
 
@@ -366,11 +376,21 @@ fn assert_split_oracle(
     label: &str,
 ) -> AssuranceResult<()> {
     let output = split_polygon_by_linework_rust(
+        CrsContext::new(&[
+            &crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(precisione(source))
+                    .expect("precisione fixture"),
+            ),
+            &crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(precisione(source))
+                    .expect("precisione fixture"),
+            ),
+        ]),
         source,
         splitter,
         unlimited_split_limits(),
-        precisione(source),
     )
+    .map_err(kernel_error_fixture)
     .map_err(|error| AssuranceError(format!("{label}: split: {error}")))?;
     require(
         output.len() == usize::try_from(expected_parts).unwrap_or(usize::MAX),
@@ -390,12 +410,16 @@ fn assert_make_valid_oracle(
     label: &str,
 ) -> AssuranceResult<()> {
     let output = make_valid_geometry_rust_with_limits(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(precisione(geometry))
+                .expect("precisione fixture"),
+        )]),
         geometry,
         method,
         true,
         unlimited_make_valid_limits(),
-        precisione(geometry),
     )
+    .map_err(kernel_error_fixture)
     .map_err(|error| AssuranceError(format!("{label}: make_valid: {error}")))?;
     let area = geometry_area(&output)?;
     require(
@@ -825,9 +849,8 @@ fn run_wkb_corpus() -> AssuranceResult<usize> {
 
 fn run_limit_contracts() -> AssuranceResult<usize> {
     let grid = rectangular_grid(8, 8);
-    let coordinate_limited = polygonize_linework_rust(
-        &grid,
-        PolygonizeOptions {
+    let coordinate_limited = {
+        let options = PolygonizeOptions {
             node_input: true,
             require_complete: false,
             precision: PRECISIONE,
@@ -835,8 +858,14 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
                 max_input_coordinates: 1,
                 ..PolygonizeLimits::unlimited()
             },
-        },
-    );
+        };
+        let sr = crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(options.precision)
+                .expect("precisione fixture"),
+        );
+        polygonize_linework_rust(CrsContext::new(&[&sr]), &grid, options)
+    }
+    .map_err(kernel_error_fixture);
     require(
         matches!(
             coordinate_limited,
@@ -844,9 +873,8 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         ),
         "polygonize non fail-closed sul limite input",
     )?;
-    let work_limited = polygonize_linework_rust(
-        &grid,
-        PolygonizeOptions {
+    let work_limited = {
+        let options = PolygonizeOptions {
             node_input: true,
             require_complete: false,
             precision: PRECISIONE,
@@ -854,8 +882,14 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
                 max_noding_work: 10,
                 ..PolygonizeLimits::unlimited()
             },
-        },
-    );
+        };
+        let sr = crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(options.precision)
+                .expect("precisione fixture"),
+        );
+        polygonize_linework_rust(CrsContext::new(&[&sr]), &grid, options)
+    }
+    .map_err(kernel_error_fixture);
     require(
         matches!(work_limited, Err(PolygonizeError::WorkLimit { .. })),
         "polygonize non fail-closed sul lavoro",
@@ -870,24 +904,28 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             ..PolygonizeLimits::unlimited()
         },
     ] {
-        let limited = polygonize_linework_rust(
-            &grid,
-            PolygonizeOptions {
+        let limited = {
+            let options = PolygonizeOptions {
                 node_input: true,
                 require_complete: false,
                 precision: PRECISIONE,
                 limits,
-            },
-        );
+            };
+            let sr = crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(options.precision)
+                    .expect("precisione fixture"),
+            );
+            polygonize_linework_rust(CrsContext::new(&[&sr]), &grid, options)
+        }
+        .map_err(kernel_error_fixture);
         require(
             matches!(limited, Err(PolygonizeError::OutputLimit { .. })),
             "polygonize non fail-closed sul limite output",
         )?;
     }
 
-    let incomplete_polygonize = polygonize_linework_rust_bounded(
-        &grid,
-        PolygonizeOptions {
+    let incomplete_polygonize = {
+        let options = PolygonizeOptions {
             node_input: true,
             require_complete: false,
             precision: PRECISIONE,
@@ -895,8 +933,14 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
                 max_input_coordinates: 36,
                 ..PolygonizeLimits::unlimited()
             },
-        },
-    );
+        };
+        let sr = crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(options.precision)
+                .expect("precisione fixture"),
+        );
+        polygonize_linework_rust_bounded(CrsContext::new(&[&sr]), &grid, options)
+    }
+    .map_err(kernel_error_fixture);
     require(
         matches!(
             incomplete_polygonize,
@@ -904,9 +948,8 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         ),
         "polygonize bounded accetta un profilo incompleto",
     )?;
-    let bounded_polygonize = polygonize_linework_rust_bounded(
-        &grid,
-        PolygonizeOptions {
+    let bounded_polygonize = {
+        let options = PolygonizeOptions {
             node_input: true,
             require_complete: false,
             precision: PRECISIONE,
@@ -916,8 +959,14 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
                 max_output_geometries: 64,
                 max_output_coordinates: 320,
             },
-        },
-    )
+        };
+        let sr = crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(options.precision)
+                .expect("precisione fixture"),
+        );
+        polygonize_linework_rust_bounded(CrsContext::new(&[&sr]), &grid, options)
+    }
+    .map_err(kernel_error_fixture)
     .map_err(|error| AssuranceError(format!("polygonize bounded: {error}")))?;
     require(
         bounded_polygonize.polygons.len() == 64,
@@ -960,7 +1009,22 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             LimiteAtteso::Uscita(4),
         ),
     ] {
-        let limited = split_polygon_by_linework_rust(&source, &splitter, limits, PRECISIONE);
+        let limited = split_polygon_by_linework_rust(
+            CrsContext::new(&[
+                &crs_fixture_precision(
+                    plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                        .expect("precisione fixture"),
+                ),
+                &crs_fixture_precision(
+                    plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                        .expect("precisione fixture"),
+                ),
+            ]),
+            &source,
+            &splitter,
+            limits,
+        )
+        .map_err(kernel_error_fixture);
         let categoria_e_limite = match atteso {
             LimiteAtteso::Coordinate => {
                 matches!(limited, Err(SplitError::CoordinateLimit { limit: 1, .. }))
@@ -978,14 +1042,24 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
     }
 
     let incomplete_split = split_polygon_by_linework_rust_bounded(
+        CrsContext::new(&[
+            &crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                    .expect("precisione fixture"),
+            ),
+            &crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                    .expect("precisione fixture"),
+            ),
+        ]),
         &source,
         &splitter,
         SplitLimits {
             max_input_coordinates: 25,
             ..SplitLimits::unlimited()
         },
-        PRECISIONE,
-    );
+    )
+    .map_err(kernel_error_fixture);
     require(
         matches!(
             incomplete_split,
@@ -994,6 +1068,16 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         "split bounded accetta un profilo incompleto",
     )?;
     let bounded_split = split_polygon_by_linework_rust_bounded(
+        CrsContext::new(&[
+            &crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                    .expect("precisione fixture"),
+            ),
+            &crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                    .expect("precisione fixture"),
+            ),
+        ]),
         &source,
         &splitter,
         SplitLimits {
@@ -1002,8 +1086,8 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             max_output_parts: 32,
             max_output_coordinates: 160,
         },
-        PRECISIONE,
     )
+    .map_err(kernel_error_fixture)
     .map_err(|error| AssuranceError(format!("split bounded: {error}")))?;
     require(
         bounded_split.len() == 10,
@@ -1048,12 +1132,16 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         ),
     ] {
         let limited = make_valid_geometry_rust_with_limits(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                    .expect("precisione fixture"),
+            )]),
             &bow_tie,
             RepairMethod::Linework,
             true,
             limits,
-            PRECISIONE,
-        );
+        )
+        .map_err(kernel_error_fixture);
         let categoria_e_limite = match atteso {
             LimiteAtteso::Coordinate => matches!(
                 limited,
@@ -1074,6 +1162,10 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
     }
 
     let incomplete_make_valid = make_valid_geometry_rust_bounded(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                .expect("precisione fixture"),
+        )]),
         &bow_tie,
         RepairMethod::Linework,
         true,
@@ -1081,8 +1173,8 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             max_input_coordinates: 5,
             ..MakeValidLimits::unlimited()
         },
-        PRECISIONE,
-    );
+    )
+    .map_err(kernel_error_fixture);
     require(
         matches!(
             incomplete_make_valid,
@@ -1091,6 +1183,10 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
         "make_valid bounded accetta un profilo incompleto",
     )?;
     let bounded_make_valid = make_valid_geometry_rust_bounded(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(PRECISIONE)
+                .expect("precisione fixture"),
+        )]),
         &bow_tie,
         RepairMethod::Linework,
         true,
@@ -1100,8 +1196,8 @@ fn run_limit_contracts() -> AssuranceResult<usize> {
             max_output_geometries: 2,
             max_output_coordinates: 10,
         },
-        PRECISIONE,
     )
+    .map_err(kernel_error_fixture)
     .map_err(|error| AssuranceError(format!("make_valid bounded: {error}")))?;
     require(
         (geometry_area(&bounded_make_valid)? - 2.0).abs() <= 1e-12,
@@ -1176,4 +1272,30 @@ fn wkb_transport_corpus() -> AssuranceResult<()> {
 fn fail_closed_limits() -> AssuranceResult<()> {
     let checks = run_limit_contracts()?;
     require(checks == expected("fail_closed_limits"), "conteggio")
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

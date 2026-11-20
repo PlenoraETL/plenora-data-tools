@@ -12,12 +12,13 @@
 #[path = "comune/argomenti.rs"]
 mod argomenti;
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::hint::black_box;
 use std::time::Instant;
 
 use geo::{CoordsIter, Geometry, MultiPoint, Point};
-use plenora_kernels_geo::advanced::voronoi_cells;
-use plenora_kernels_geo::extended_algorithms::delaunay;
+use plenora_kernels_geo::advanced::with_crs::voronoi_cells;
+use plenora_kernels_geo::extended_algorithms::with_crs::delaunay;
 
 struct Rng(u64);
 
@@ -86,18 +87,28 @@ fn main() {
         let inizio = Instant::now();
         let uscita: Vec<Geometry<f64>> = if voronoi {
             voronoi_cells(
+                CrsContext::new(&[&crs_fixture_precision(
+                    plenora_kernels_geo::rust_backend::precision::Precision::new(0.01)
+                        .expect("precisione"),
+                )]),
                 black_box(&geometrie),
                 usize::MAX,
-                plenora_kernels_geo::rust_backend::precision::Precision::new(0.01)
-                    .expect("precisione"),
             )
+            .map_err(kernel_error_fixture)
             .expect("voronoi")
         } else {
-            delaunay(black_box(&multipunto), u64::MAX, u64::MAX)
-                .expect("delaunay")
-                .into_iter()
-                .map(Geometry::Polygon)
-                .collect()
+            delaunay(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                black_box(&multipunto),
+                u64::MAX,
+                u64::MAX,
+            )
+            .map_err(kernel_error_fixture)
+            .expect("delaunay")
+            .into_iter()
+            .map(Geometry::Polygon)
+            .collect()
         };
         tempi.push(inizio.elapsed().as_secs_f64());
         if giro == 0 {
@@ -118,4 +129,30 @@ fn main() {
         if voronoi { "voronoi" } else { "delaunay" },
         mediana * 1000.0,
     );
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

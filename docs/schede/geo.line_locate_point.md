@@ -6,7 +6,7 @@ la frazione della lunghezza totale da 0 (inizio) a 1 (fine), come
 `ST_LineLocatePoint` di PostGIS. Le geometrie che non sono `LineString`
 danno null.
 
-Il calcolo per geometria è `extensions::line_locate_point`, che il
+Il calcolo per geometria è `extensions::with_crs::line_locate_point`, che il
 runner chiama su ogni riga non nulla.
 
 ### Parametri

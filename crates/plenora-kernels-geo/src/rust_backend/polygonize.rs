@@ -2164,7 +2164,7 @@ fn checked_output(
 /// decidibile; [`PolygonizeError::InvalidOutput`] per una faccia invalida;
 /// [`PolygonizeError::Incomplete`] se `require_complete` e' attivo e
 /// restano residui.
-pub fn polygonize_linework_rust(
+pub(crate) fn polygonize_linework_rust(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<PolygonizeResult, PolygonizeError> {
@@ -2178,7 +2178,7 @@ pub fn polygonize_linework_rust(
 /// # Errors
 ///
 /// Come [`polygonize_linework_rust`].
-pub fn polygonize_linework_rust_with_rounded(
+pub(crate) fn polygonize_linework_rust_with_rounded(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<(PolygonizeResult, Vec<Coord<f64>>), PolygonizeError> {
@@ -2271,7 +2271,7 @@ pub fn polygonize_linework_rust_with_rounded(
 /// Restituisce [`PolygonizeError::UnboundedLimitConfiguration`] se almeno un
 /// limite e' lasciato a [`u64::MAX`]; altrimenti propaga gli errori di
 /// [`polygonize_linework_rust`].
-pub fn polygonize_linework_rust_bounded(
+pub(crate) fn polygonize_linework_rust_bounded(
     linework: &Geometry<f64>,
     options: PolygonizeOptions,
 ) -> Result<PolygonizeResult, PolygonizeError> {
@@ -2795,3 +2795,18 @@ mod compatibility_600;
 
 #[cfg(test)]
 use super::precision;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Coord, Geometry, PolygonizeError, PolygonizeOptions, PolygonizeResult};
+
+    crate::crs::checked_kernel!(polygonize_linework_rust, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, options: PolygonizeOptions) -> (PolygonizeResult, PolygonizeError),
+        |context| { let options = PolygonizeOptions { precision: context.precision()?.value(), ..options }; super::polygonize_linework_rust(linework, options) });
+    crate::crs::checked_kernel!(polygonize_linework_rust_with_rounded, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, options: PolygonizeOptions) -> ((PolygonizeResult, Vec<Coord<f64>>), PolygonizeError),
+        |context| { let options = PolygonizeOptions { precision: context.precision()?.value(), ..options }; super::polygonize_linework_rust_with_rounded(linework, options) });
+    crate::crs::checked_kernel!(polygonize_linework_rust_bounded, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, options: PolygonizeOptions) -> (PolygonizeResult, PolygonizeError),
+        |context| { let options = PolygonizeOptions { precision: context.precision()?.value(), ..options }; super::polygonize_linework_rust_bounded(linework, options) });
+}

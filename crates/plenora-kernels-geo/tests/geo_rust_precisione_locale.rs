@@ -19,14 +19,17 @@
 //! Qui le coordinate sono metri e la precisione e' 1 cm.
 
 use geo::{Contains, Coord, CoordsIter, Geometry, LineString, MultiLineString, Point, Polygon};
-use plenora_kernels_geo::rust_backend::make_valid::{
-    make_valid_geometry_rust, MakeValidError, RepairMethod,
-};
-use plenora_kernels_geo::rust_backend::polygonize::{
-    polygonize_linework_rust, PolygonizeError, PolygonizeLimits, PolygonizeOptions,
-};
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust;
+use plenora_kernels_geo::rust_backend::make_valid::MakeValidError;
+use plenora_kernels_geo::rust_backend::make_valid::RepairMethod;
+use plenora_kernels_geo::rust_backend::polygonize::with_crs::polygonize_linework_rust;
+use plenora_kernels_geo::rust_backend::polygonize::PolygonizeError;
+use plenora_kernels_geo::rust_backend::polygonize::PolygonizeLimits;
+use plenora_kernels_geo::rust_backend::polygonize::PolygonizeOptions;
 use plenora_kernels_geo::rust_backend::precision::Precision;
-use plenora_kernels_geo::rust_backend::{polygonize_linework, RustBackendError};
+use plenora_kernels_geo::rust_backend::with_crs::polygonize_linework;
+use plenora_kernels_geo::rust_backend::RustBackendError;
 
 /// 1 cm in metri.
 const CENTIMETRO: f64 = 0.01;
@@ -70,8 +73,17 @@ fn linework_conserva_la_sporgenza_di_un_metro() {
         (100.0, 0.0),
     ]);
     let input = Geometry::Polygon(Polygon::new(shell, vec![anello]));
-    let output = make_valid_geometry_rust(&input, RepairMethod::Linework, true, CENTIMETRO)
-        .expect("linework");
+    let output = make_valid_geometry_rust(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                .expect("precisione fixture"),
+        )]),
+        &input,
+        RepairMethod::Linework,
+        true,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("linework");
     let area = poligoni(&output);
     assert!(
         area.iter()
@@ -114,9 +126,17 @@ fn shell_con_vertice_lontano(lontano: f64, scarto: f64) -> Geometry<f64> {
 fn aggancio_oltre_il_centimetro_non_serve_piu() {
     let input = shell_con_vertice_lontano(2_f64.powi(23), 0.0155);
     for keep_collapsed in [false, true] {
-        let output =
-            make_valid_geometry_rust(&input, RepairMethod::Structure, keep_collapsed, CENTIMETRO)
-                .expect("structure");
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            RepairMethod::Structure,
+            keep_collapsed,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("structure");
         assert_incrocio_esatto(&output);
     }
 }
@@ -143,8 +163,17 @@ fn assert_incrocio_esatto(output: &Geometry<f64>) {
 #[test]
 fn l_aggancio_considera_solo_i_vertici_vicini() {
     let input = shell_con_vertice_lontano(2_f64.powi(21), 0.0015);
-    let output = make_valid_geometry_rust(&input, RepairMethod::Structure, false, CENTIMETRO)
-        .expect("structure");
+    let output = make_valid_geometry_rust(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                .expect("precisione fixture"),
+        )]),
+        &input,
+        RepairMethod::Structure,
+        false,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("structure");
     assert_incrocio_esatto(&output);
 }
 
@@ -162,18 +191,33 @@ fn diagonali(base: f64) -> Geometry<f64> {
 #[test]
 fn noding_arrotondato_oltre_il_centimetro_e_un_errore() {
     let linee = diagonali(2_f64.powi(52));
-    let kernel = polygonize_linework_rust(
-        &linee,
-        PolygonizeOptions {
+    let kernel = {
+        let options = PolygonizeOptions {
             node_input: true,
             require_complete: false,
             limits: PolygonizeLimits::unlimited(),
             precision: CENTIMETRO,
-        },
-    );
+        };
+        let sr = crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(options.precision)
+                .expect("precisione fixture"),
+        );
+        polygonize_linework_rust(CrsContext::new(&[&sr]), &linee, options)
+    }
+    .map_err(kernel_error_fixture);
     assert_eq!(kernel, Err(PolygonizeError::PrecisionInsufficient));
     assert!(matches!(
-        polygonize_linework(&linee, true, false, 100, 1_000, 100, 100, precisione()),
+        polygonize_linework(
+            CrsContext::new(&[&crs_fixture_precision(precisione())]),
+            &linee,
+            true,
+            false,
+            100,
+            1_000,
+            100,
+            100
+        )
+        .map_err(kernel_error_fixture),
         Err(RustBackendError::PrecisionInsufficient)
     ));
 }
@@ -184,6 +228,7 @@ fn noding_arrotondato_oltre_il_centimetro_e_un_errore() {
 fn noding_esatto_lontano_dall_origine_resta() {
     let base = 2_f64.powi(30);
     let risultato = polygonize_linework(
+        CrsContext::new(&[&crs_fixture_precision(precisione())]),
         &diagonali(base),
         true,
         false,
@@ -191,8 +236,8 @@ fn noding_esatto_lontano_dall_origine_resta() {
         1_000,
         100,
         100,
-        precisione(),
     )
+    .map_err(kernel_error_fixture)
     .expect("polygonize");
     assert!(risultato.polygons.is_empty());
     let incrocio = Coord {
@@ -208,23 +253,40 @@ fn noding_esatto_lontano_dall_origine_resta() {
     assert!(linee.iter().all(|linea| linea.0.contains(&incrocio)));
 }
 
-/// La precisione e' un argomento esplicito anche del polygonize: non
-/// finita o non positiva e' un errore, prima di toccare i dati.
+/// Il wrapper pubblico deriva la precisione dallo SR e non si fida del campo
+/// storico delle opzioni. Uno SR senza unita' non autorizza il calcolo.
 #[test]
-fn precisione_del_polygonize_non_valida_e_un_errore() {
+fn precisione_del_polygonize_deriva_solo_dal_crs() {
+    let sr = plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("SR metrico");
+    let geometry = diagonali(0.0);
+    let options = PolygonizeOptions {
+        node_input: true,
+        require_complete: false,
+        limits: PolygonizeLimits::unlimited(),
+        precision: 0.01,
+    };
+    let expected =
+        polygonize_linework_rust(CrsContext::new(&[&sr]), &geometry, options).expect("SR metrico");
+    let missing_unit = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS"}),
+        plenora_core::crs::CrsKind::Projected,
+        None,
+    );
     for precision in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let options = PolygonizeOptions {
+            precision,
+            ..options
+        };
         assert_eq!(
-            polygonize_linework_rust(
-                &diagonali(0.0),
-                PolygonizeOptions {
-                    node_input: true,
-                    require_complete: false,
-                    limits: PolygonizeLimits::unlimited(),
-                    precision,
-                },
-            ),
-            Err(PolygonizeError::InvalidPrecision)
+            polygonize_linework_rust(CrsContext::new(&[&sr]), &geometry, options,)
+                .expect("precisione dallo SR"),
+            expected
         );
+        assert!(matches!(
+            polygonize_linework_rust(CrsContext::new(&[&missing_unit]), &geometry, options,),
+            Err(plenora_kernels_geo::crs::DirectError::Crs(_))
+        ));
     }
 }
 
@@ -249,8 +311,17 @@ fn linework_non_dipende_dall_ordine_dei_buchi() {
     let b = quadrato(2.0, 0.0, 8.0, 8.0);
     for buchi in [vec![a.clone(), b.clone()], vec![b, a]] {
         let input = Geometry::Polygon(Polygon::new(quadrato(0.0, 0.0, 10.0, 10.0), buchi));
-        let output = make_valid_geometry_rust(&input, RepairMethod::Linework, true, CENTIMETRO)
-            .expect("linework");
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &input,
+            RepairMethod::Linework,
+            true,
+        )
+        .map_err(kernel_error_fixture)
+        .expect("linework");
         let area = poligoni(&output);
         let totale: f64 = area.iter().map(geo::Area::unsigned_area).sum();
         assert!((totale - 96.0).abs() <= 1e-9, "area {totale}");
@@ -293,7 +364,16 @@ fn coordinate_troppo_grandi_per_la_precisione_sono_un_errore() {
     for method in [RepairMethod::Structure, RepairMethod::Linework] {
         assert!(
             matches!(
-                make_valid_geometry_rust(&input, method, false, CENTIMETRO),
+                make_valid_geometry_rust(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                            .expect("precisione fixture")
+                    )]),
+                    &input,
+                    method,
+                    false
+                )
+                .map_err(kernel_error_fixture),
                 Err(MakeValidError::PrecisionInsufficient)
             ),
             "{method:?}"
@@ -348,11 +428,15 @@ fn linework_casi_della_campagna_hanno_l_area_di_geos() {
             let input = Geometry::Polygon(Polygon::new(shell.clone(), ordine));
             for keep_collapsed in [false, true] {
                 let output = make_valid_geometry_rust(
+                    CrsContext::new(&[&crs_fixture_precision(
+                        plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                            .expect("precisione fixture"),
+                    )]),
                     &input,
                     RepairMethod::Linework,
                     keep_collapsed,
-                    CENTIMETRO,
                 )
+                .map_err(kernel_error_fixture)
                 .expect(nome);
                 let area: f64 = poligoni(&output).iter().map(geo::Area::unsigned_area).sum();
                 assert!(
@@ -362,4 +446,30 @@ fn linework_casi_della_campagna_hanno_l_area_di_geos() {
             }
         }
     }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

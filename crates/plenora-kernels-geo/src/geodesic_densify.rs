@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use geo::{Coord, LineString};
 use geographiclib_rs::{DirectGeodesic, InverseGeodesic};
-use plenora_core::crs::{CrsKind, ResolvedCrs};
+use plenora_core::crs::ResolvedCrs;
 use thiserror::Error;
 
 use crate::geodetica::EllissoideGeodetico;
@@ -289,7 +289,12 @@ pub fn geodesic_densify_with_limits(
 ) -> Result<Vec<LineString<f64>>, GeodesicDensifyError> {
     let mut work = DensifyWork::new(limits, cancelled);
     work.checkpoint()?;
-    if crs.kind() != CrsKind::Geographic {
+    if plenora_core::crs::validate_requirement(
+        plenora_core::catalog::CrsRequirement::Geographic,
+        &[crs],
+    )
+    .is_err()
+    {
         return Err(GeodesicDensifyError::GeographicRequired);
     }
     if !(maximum_m.is_finite() && maximum_m > 0.0) {

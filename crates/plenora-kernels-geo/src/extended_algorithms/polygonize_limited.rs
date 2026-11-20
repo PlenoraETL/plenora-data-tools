@@ -35,7 +35,11 @@ use geo::{Geometry, LineString, Polygon};
 /// [`PredicateError`] per coordinate non finite, struttura o tipi non
 /// supportati, limiti, allocazione, cancellazione, deadline;
 /// `InvalidRoundedTopology` se la pubblicazione altera la topologia.
-pub fn polygonize_with_limits(
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "La visibilita' impedisce riesportazioni accidentali senza CRS"
+)]
+pub(crate) fn polygonize_with_limits(
     linework: &Geometry<f64>,
     limits: RelateLimits,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
@@ -218,3 +222,12 @@ fn polygonize(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Geometry, Polygon, PredicateError, RelateLimits};
+
+    crate::crs::checked_kernel!(polygonize_with_limits, "geo.polygonize", 1,
+        (linework: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>) -> (Vec<Polygon<f64>>, PredicateError),
+        |context| {  super::polygonize_with_limits(linework, limits, cancelled) });
+}

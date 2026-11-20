@@ -12,9 +12,118 @@
 
 use geo::{CoordsIter, Geometry};
 pub use plenora_core::crs::{
-    required_definition, validate_requirement, CrsError, CrsKind, ResolvedCrs,
+    required_definition, validate_requirement, CrsError, CrsKind, CrsMode, ResolvedCrs,
     MAX_CRS_DEFINITION_BYTES,
 };
+
+/// CRS degli operandi di una chiamata diretta.
+///
+/// Un elemento per operando
+/// (una collezione omogenea e' un operando); nessuna inferenza dalle coordinate.
+/// Le API `with_crs` verificano questo contratto prima di chiamare il kernel.
+/// Assi XY normalizzati e dominio delle coordinate restano precondizioni del
+/// chiamante, come per le API storiche; questo tipo non visita geometrie.
+#[derive(Clone, Copy, Debug)]
+pub struct CrsContext<'a> {
+    inputs: &'a [&'a ResolvedCrs],
+    mode: CrsMode,
+}
+
+impl<'a> CrsContext<'a> {
+    /// Requisito del catalogo, senza consenso al piano angolare.
+    #[must_use]
+    pub const fn new(inputs: &'a [&'a ResolvedCrs]) -> Self {
+        Self {
+            inputs,
+            mode: CrsMode::Required,
+        }
+    }
+
+    /// Consenso al piano XY nelle unita' dello SR. Nessuna geodetica,
+    /// conversione di unita', normalizzazione del seam o riproiezione.
+    #[must_use]
+    pub const fn planar_coordinates(inputs: &'a [&'a ResolvedCrs]) -> Self {
+        Self {
+            inputs,
+            mode: CrsMode::PlanarCoordinates,
+        }
+    }
+
+    pub(crate) fn check(self, operation: &str, arity: usize) -> Result<(), CrsError> {
+        if self.inputs.len() != arity {
+            return Err(CrsError::InvalidContract(
+                "numero di CRS degli operandi errato",
+            ));
+        }
+        let requirement = plenora_core::catalog::find_operation(operation)
+            .and_then(|operation| operation.crs_requirement)
+            .ok_or(CrsError::InvalidContract("requisito CRS non dichiarato"))?;
+        plenora_core::crs::validate_requirement_with_mode(requirement, self.inputs, self.mode)
+    }
+
+    pub(crate) fn precision(self) -> Result<crate::rust_backend::precision::Precision, CrsError> {
+        let crs = self
+            .inputs
+            .first()
+            .ok_or(CrsError::InvalidContract("CRS assente"))?;
+        crate::rust_backend::precision::Precision::from_crs(crs)
+            .map_err(|_| CrsError::InvalidContract("precisione del CRS non disponibile"))
+    }
+
+    pub(crate) fn ellipsoid(self) -> Result<crate::geodetica::EllissoideGeodetico, CrsError> {
+        let crs = self
+            .inputs
+            .first()
+            .ok_or(CrsError::InvalidContract("CRS assente"))?;
+        if self
+            .inputs
+            .iter()
+            .any(|other| !crs.semantically_equals(other))
+        {
+            return Err(CrsError::Mismatch);
+        }
+        crate::geodetica::EllissoideGeodetico::da_crs(crs)
+    }
+}
+
+/// Errore di una chiamata diretta verificata.
+///
+/// Il fallimento del kernel resta
+/// tipizzato, inclusi deadline, cancellazione e limiti: nessuna riclassificazione.
+#[derive(Debug, thiserror::Error)]
+pub enum DirectError<E> {
+    /// Il requisito CRS o la precisione non sono soddisfatti.
+    #[error(transparent)]
+    Crs(#[from] CrsError),
+    /// Errore originale del kernel, senza dati aggiunti.
+    #[error(transparent)]
+    Kernel(E),
+}
+
+// Il solo punto d'ingresso dei wrapper: requisito dal catalogo, poi kernel.
+macro_rules! checked_kernel {
+    ($name:ident, $op:literal, $arity:literal,
+     ($($arg:ident: $ty:ty),* $(,)?) -> ($out:ty, $error:ty),
+     |$context:ident| $body:block) => {
+        #[doc = concat!("Chiamata con CRS verificato di `", stringify!($name), "`.")]
+        ///
+        /// Unita', dominio, limiti e interruzioni sono quelli del kernel.
+        /// La precisione e l'ellissoide, quando necessari, derivano dal CRS.
+        ///
+        /// # Errors
+        /// `DirectError::Crs` prima del calcolo; `DirectError::Kernel` conserva
+        /// esattamente l'errore del kernel, senza risultati parziali.
+        #[allow(clippy::too_many_arguments, reason = "Firma del kernel piu' contesto CRS")]
+        pub fn $name(
+            $context: $crate::crs::CrsContext<'_>,
+            $($arg: $ty),*
+        ) -> Result<$out, $crate::crs::DirectError<$error>> {
+            $context.check($op, $arity)?;
+            $body.map_err($crate::crs::DirectError::Kernel)
+        }
+    };
+}
+pub(crate) use checked_kernel;
 
 /// Verifica il dominio di validita' del CRS sulle coordinate di una geometria,
 /// in ordine GIS normalizzato (x=longitudine o easting, y=latitudine o
@@ -119,5 +228,431 @@ mod tests {
             validate_geometry_domain(&Geometry::Point(Point::new(5.0e6, 4.0e6)), &utm),
             Err(CrsError::CoordinateOutOfDomain { .. })
         ));
+    }
+}
+
+#[cfg(test)]
+#[deny(clippy::disallowed_methods)]
+mod direct_tests {
+    use super::*;
+    use plenora_core::catalog::CrsRequirement;
+    use plenora_core::crs::{resolve_crs, validate_requirement_with_mode};
+    use std::collections::BTreeSet;
+
+    // Censimento delle famiglie: le implementazioni sono interne; solo la
+    // macro puo' esporle dopo il gate comune. Nuovi ingressi diretti falliscono.
+    const SOURCES: &[(&str, &str)] = &[
+        ("advanced", include_str!("advanced.rs")),
+        ("analysis", include_str!("analysis.rs")),
+        ("cluster", include_str!("cluster.rs")),
+        ("construction", include_str!("construction.rs")),
+        ("extended", include_str!("extended.rs")),
+        (
+            "extended_algorithms",
+            include_str!("extended_algorithms.rs"),
+        ),
+        (
+            "extended_algorithms/polygonize_limited",
+            include_str!("extended_algorithms/polygonize_limited.rs"),
+        ),
+        (
+            "extended_algorithms/split_limited",
+            include_str!("extended_algorithms/split_limited.rs"),
+        ),
+        ("extensions", include_str!("extensions.rs")),
+        ("extensions2", include_str!("extensions2.rs")),
+        ("extensions3", include_str!("extensions3.rs")),
+        ("offset", include_str!("offset.rs")),
+        ("operations", include_str!("operations.rs")),
+        ("predicates", include_str!("predicates.rs")),
+        (
+            "predicates/arrangement_indexed/general_boolean",
+            include_str!("predicates/arrangement_indexed/general_boolean.rs"),
+        ),
+        (
+            "predicates/arrangement_indexed/line_boolean",
+            include_str!("predicates/arrangement_indexed/line_boolean.rs"),
+        ),
+        (
+            "predicates/arrangement_indexed/point_boolean",
+            include_str!("predicates/arrangement_indexed/point_boolean.rs"),
+        ),
+        (
+            "predicates/arrangement_indexed/polygon_boolean",
+            include_str!("predicates/arrangement_indexed/polygon_boolean.rs"),
+        ),
+        (
+            "predicates/arrangement_indexed/polygon_completion",
+            include_str!("predicates/arrangement_indexed/polygon_completion.rs"),
+        ),
+        ("reshape", include_str!("reshape.rs")),
+        (
+            "rust_backend/make_valid",
+            include_str!("rust_backend/make_valid.rs"),
+        ),
+        ("rust_backend/mod", include_str!("rust_backend/mod.rs")),
+        (
+            "rust_backend/polygonize",
+            include_str!("rust_backend/polygonize.rs"),
+        ),
+        ("rust_backend/split", include_str!("rust_backend/split.rs")),
+        ("spatial_join", include_str!("spatial_join.rs")),
+        ("topology", include_str!("topology.rs")),
+        ("trim_extend", include_str!("trim_extend.rs")),
+    ];
+
+    fn public_function_names(source: &str) -> Vec<&str> {
+        let tokens: Vec<_> = source
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|token| !token.is_empty())
+            .collect();
+        let mut names = Vec::new();
+        for (index, token) in tokens.iter().enumerate() {
+            if *token != "pub" {
+                continue;
+            }
+            let tail = &tokens[index + 1..];
+            let modifier_count = tail
+                .iter()
+                .take_while(|t| matches!(**t, "const" | "async" | "unsafe"))
+                .count();
+            if let ["fn", name, ..] = &tail[modifier_count..] {
+                names.push(*name);
+            }
+        }
+        names.sort_unstable();
+        names
+    }
+
+    #[test]
+    fn enumeration_rejects_reintroduced_raw_visibility() {
+        assert!(public_function_names("pub(crate) fn area() {}").is_empty());
+        assert!(public_function_names("pub\nfn area() {}").contains(&"area"));
+        assert!(public_function_names("    pub fn area() {}").contains(&"area"));
+        assert_eq!(
+            public_function_names(include_str!("lib.rs")),
+            [
+                "check_geometry_valid",
+                "geometry_from_wkb",
+                "name",
+                "validate_wkb_contract",
+                "validate_wkb_contract_for_dimensions",
+                "validate_wkb_contract_for_dimensions_with_depth",
+                "validate_wkb_contract_with_depth",
+                "validate_wkb_transport_for_dimensions_with_depth",
+                "wkb_hex_to_bytes",
+            ]
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Matrice del contratto e censimento degli ingressi"
+    )]
+    fn every_direct_api_has_the_catalogue_gate() {
+        let projected = resolve_crs("EPSG:3857", "crs").unwrap();
+        let geographic = resolve_crs("EPSG:4326", "crs").unwrap();
+        for (module, source) in SOURCES {
+            let public: BTreeSet<_> = source
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("pub(crate) fn ")
+                        .and_then(|rest| rest.split('(').next())
+                })
+                .filter(|name| *name != "residual_classes")
+                .collect();
+            let mut covered = BTreeSet::new();
+            for entry in source.split("crate::crs::checked_kernel!(").skip(1) {
+                let mut fields = entry.split(',');
+                let name = fields.next().unwrap().trim();
+                let operation = fields.next().unwrap().trim().trim_matches('"');
+                let arity: usize = fields.next().unwrap().trim().parse().unwrap();
+                assert!(covered.insert(name), "{module}::{name}");
+                let requirement = plenora_core::catalog::find_operation(operation)
+                    .unwrap()
+                    .crs_requirement
+                    .unwrap();
+                let projected_inputs = vec![&projected; arity];
+                let geographic_inputs = vec![&geographic; arity];
+                assert!(matches!(
+                    CrsContext::new(&[]).check(operation, arity),
+                    Err(CrsError::InvalidContract(_))
+                ));
+                match requirement {
+                    CrsRequirement::Projected | CrsRequirement::SameProjected => {
+                        CrsContext::new(&projected_inputs)
+                            .check(operation, arity)
+                            .unwrap();
+                        assert!(matches!(
+                            CrsContext::new(&geographic_inputs).check(operation, arity),
+                            Err(CrsError::ProjectedRequired { .. })
+                        ));
+                        CrsContext::planar_coordinates(&geographic_inputs)
+                            .check(operation, arity)
+                            .unwrap();
+                    }
+                    CrsRequirement::Geographic => {
+                        CrsContext::new(&geographic_inputs)
+                            .check(operation, arity)
+                            .unwrap();
+                        assert!(matches!(
+                            CrsContext::new(&projected_inputs).check(operation, arity),
+                            Err(CrsError::GeographicRequired { .. })
+                        ));
+                        assert!(matches!(
+                            CrsContext::planar_coordinates(&geographic_inputs)
+                                .check(operation, arity),
+                            Err(CrsError::InvalidContract(_))
+                        ));
+                    }
+                    CrsRequirement::Known => {
+                        CrsContext::new(&projected_inputs)
+                            .check(operation, arity)
+                            .unwrap();
+                        CrsContext::new(&geographic_inputs)
+                            .check(operation, arity)
+                            .unwrap();
+                    }
+                    CrsRequirement::Reprojection => {
+                        assert_eq!(arity, 2);
+                    }
+                }
+            }
+            assert!(
+                covered.is_subset(&public),
+                "{module}: implementazioni del gate mancanti"
+            );
+            // Solo metodi di contenitori, errori e diagnostica: nessun kernel diretto.
+            // Un nuovo nome pubblico o una seconda occorrenza di un nome ammesso fallisce.
+            let permitted: &[&str] = match *module {
+                "extensions" => &["del_passo", "e_interna", "e_un_limite"],
+                "extensions2" | "offset" => &["new"],
+                "extensions3" => &["name"],
+                "predicates" => &["cells", "evaluate", "matches"],
+                "rust_backend/make_valid" | "rust_backend/split" => {
+                    &["is_fully_bounded", "unlimited"]
+                }
+                "rust_backend/mod" => &["residual_classes", "residual_count"],
+                "rust_backend/polygonize" => &["is_fully_bounded", "residual_count", "unlimited"],
+                _ => &[],
+            };
+            assert_eq!(
+                public_function_names(source),
+                permitted,
+                "{module}: superficie senza SR modificata"
+            );
+        }
+    }
+
+    #[test]
+    fn catalogue_and_root_transformations_are_completely_enumerated() {
+        let mut covered = BTreeSet::from([
+            "geo.centroid",
+            "geo.convex_hull",
+            "geo.envelope",
+            "geo.reproject",
+            "geo.symmetric_difference",
+            "geo.predicate_disjoint",
+            "geo.predicate_contains",
+            "geo.predicate_within",
+            "geo.predicate_equals_topo",
+            "geo.predicate_covers",
+            "geo.predicate_covered_by",
+            "geo.predicate_contains_properly",
+            "geo.predicate_touches",
+            "geo.predicate_crosses",
+            "geo.predicate_overlaps",
+        ]);
+        for (_, source) in SOURCES {
+            for entry in source.split("crate::crs::checked_kernel!(").skip(1) {
+                covered.insert(entry.split(',').nth(1).unwrap().trim().trim_matches('"'));
+            }
+        }
+        let expected: BTreeSet<_> = plenora_core::catalog::CATALOG
+            .iter()
+            .filter(|descriptor| descriptor.crs_requirement.is_some())
+            .map(|descriptor| descriptor.id)
+            .collect();
+        assert_eq!(covered, expected);
+        let geographic = resolve_crs("EPSG:4326", "crs").unwrap();
+        let square = crate::test_support::rect(-1., -1., 1., 1.);
+        let wkb = crate::test_support::to_wkb(&square);
+        for operation in crate::Operation::ALL {
+            assert!(matches!(
+                crate::with_crs::transform_geometry(
+                    CrsContext::new(&[&geographic]),
+                    operation,
+                    &square
+                ),
+                Err(DirectError::Crs(CrsError::ProjectedRequired { .. }))
+            ));
+            assert!(matches!(
+                crate::with_crs::transform_wkb(CrsContext::new(&[&geographic]), operation, &wkb),
+                Err(DirectError::Crs(CrsError::ProjectedRequired { .. }))
+            ));
+            crate::with_crs::transform_geometry(
+                CrsContext::planar_coordinates(&[&geographic]),
+                operation,
+                &square,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn precision_and_ellipsoid_come_from_the_context() {
+        let geographic = resolve_crs("EPSG:4326", "crs").unwrap();
+        let other = resolve_crs("EPSG:4269", "crs").unwrap();
+        let inputs = [&geographic];
+        let context = CrsContext::planar_coordinates(&inputs);
+        assert_eq!(
+            context.precision().unwrap().value().to_bits(),
+            geographic.precisione_coordinate().unwrap().to_bits()
+        );
+        assert!(matches!(
+            CrsContext::new(&[&geographic, &other]).ellipsoid(),
+            Err(CrsError::Mismatch)
+        ));
+        let point = geo::Point::new(0., 0.);
+        assert!(matches!(
+            crate::extended::with_crs::geodesic_distance_m(context, point, point),
+            Err(DirectError::Crs(CrsError::InvalidContract(_)))
+        ));
+        let inputs = [&geographic, &geographic];
+        let context = CrsContext::new(&inputs);
+        assert_eq!(
+            crate::extended::with_crs::geodesic_distance_m(context, point, point)
+                .unwrap()
+                .to_bits(),
+            0_f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn square_units_seam_and_poles_are_explicitly_planar() {
+        use crate::operations::with_crs::{area, length};
+        let geographic = resolve_crs("EPSG:4326", "crs").unwrap();
+        let projected = resolve_crs("EPSG:3857", "crs").unwrap();
+        let square = crate::test_support::rect(-1., -1., 1., 1.);
+        assert_eq!(
+            area(CrsContext::new(&[&projected]), &square)
+                .unwrap()
+                .to_bits(),
+            4_f64.to_bits()
+        );
+        assert!(matches!(
+            area(CrsContext::new(&[&geographic]), &square),
+            Err(DirectError::Crs(CrsError::ProjectedRequired { .. }))
+        ));
+        assert!(matches!(
+            area(CrsContext::new(&[]), &square),
+            Err(DirectError::Crs(CrsError::InvalidContract(_)))
+        ));
+        assert_eq!(
+            area(CrsContext::planar_coordinates(&[&geographic]), &square)
+                .unwrap()
+                .to_bits(),
+            4_f64.to_bits()
+        );
+        // Oracolo analitico XY: 179 - (-179) = 358 gradi, nessun wrap.
+        let seam = Geometry::LineString(geo::LineString::from(vec![(-179., 0.), (179., 0.)]));
+        assert_eq!(
+            length(CrsContext::planar_coordinates(&[&geographic]), &seam)
+                .unwrap()
+                .to_bits(),
+            358_f64.to_bits()
+        );
+        let polar = Geometry::LineString(geo::LineString::from(vec![(-1., 90.), (1., 90.)]));
+        assert_eq!(
+            length(CrsContext::planar_coordinates(&[&geographic]), &polar)
+                .unwrap()
+                .to_bits(),
+            2_f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn mismatch_and_invalid_linear_units_do_not_get_a_planar_exception() {
+        let geographic = resolve_crs("EPSG:4326", "crs").unwrap();
+        let other = resolve_crs("EPSG:4269", "crs").unwrap();
+        assert!(matches!(
+            validate_requirement_with_mode(
+                CrsRequirement::SameProjected,
+                &[&geographic, &other],
+                CrsMode::PlanarCoordinates
+            ),
+            Err(CrsError::Mismatch)
+        ));
+        let invalid = ResolvedCrs::from_resolved_parts(
+            "local".to_owned(),
+            serde_json::json!({}),
+            CrsKind::Projected,
+            None,
+        );
+        assert!(matches!(
+            validate_requirement_with_mode(
+                CrsRequirement::Projected,
+                &[&invalid],
+                CrsMode::PlanarCoordinates
+            ),
+            Err(CrsError::MissingLinearUnit)
+        ));
+        assert!(matches!(
+            validate_requirement_with_mode(
+                CrsRequirement::Reprojection,
+                &[&geographic, &other],
+                CrsMode::PlanarCoordinates
+            ),
+            Err(CrsError::InvalidContract(_))
+        ));
+    }
+
+    #[test]
+    fn shared_entrypoints_have_identical_catalogue_requirements() {
+        for family in [
+            &["geo.centroid", "geo.convex_hull", "geo.envelope"][..],
+            &[
+                "geo.union",
+                "geo.intersection",
+                "geo.difference",
+                "geo.symmetric_difference",
+            ][..],
+            &[
+                "geo.predicate_intersects",
+                "geo.predicate_disjoint",
+                "geo.predicate_contains",
+                "geo.predicate_within",
+                "geo.predicate_equals_topo",
+                "geo.predicate_covers",
+                "geo.predicate_covered_by",
+                "geo.predicate_contains_properly",
+                "geo.predicate_touches",
+                "geo.predicate_crosses",
+                "geo.predicate_overlaps",
+            ][..],
+        ] {
+            let expected = plenora_core::catalog::find_operation(family[0])
+                .unwrap()
+                .crs_requirement;
+            for name in family {
+                assert_eq!(
+                    plenora_core::catalog::find_operation(name)
+                        .unwrap()
+                        .crs_requirement,
+                    expected
+                );
+            }
+        }
+    }
+}
+
+// Gli adapter conservano la categoria originale degli errori del kernel.
+impl From<DirectError<Self>> for plenora_core::PlenoraError {
+    fn from(error: DirectError<Self>) -> Self {
+        match error {
+            DirectError::Crs(error) => Self::Crs(error.to_string()),
+            DirectError::Kernel(error) => error,
+        }
     }
 }

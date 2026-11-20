@@ -7,7 +7,7 @@ maggiore di `tolerance` scrive una riga `overlap`, con le posizioni delle
 due righe, l'area e la geometria della zona sovrapposta. I buchi fra i
 poligoni (gap) non si cercano: se un buco sia atteso dipende dal dominio.
 
-La conversione di colonna è `extensions3::coverage_validate_rows`, che il
+La conversione di colonna è `extensions3::with_crs::coverage_validate_rows`, che il
 runner chiama su tutta la colonna con i default della tabella sotto e la
 precisione del CRS della colonna ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 

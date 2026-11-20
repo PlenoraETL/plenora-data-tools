@@ -90,7 +90,7 @@ impl Default for RelateLimits {
 /// # Errors
 /// Gli errori di [`relate_matrix`], piu' limite di lavoro/prenotazioni,
 /// allocazione fallita, annullamento e [`PredicateError::DeadlineExceeded`].
-pub fn relate_matrix_with_limits(
+pub(crate) fn relate_matrix_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     limits: RelateLimits,
@@ -212,7 +212,7 @@ impl std::fmt::Display for De9imMatrix {
 /// Operandi non finiti o invalidi, limiti superati e prenotazione fallita;
 /// nessun messaggio contiene coordinate. La validazione include anelli
 /// semplici, contenimento dei buchi e connessione dell'interno poligonale.
-pub fn relate_matrix(
+pub(crate) fn relate_matrix(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
 ) -> Result<De9imMatrix, PredicateError> {
@@ -368,7 +368,7 @@ fn validate(geometry: &Geometry<f64>, side: &'static str) -> Result<(), Predicat
 /// Per la matrice razionale nuova usare [`relate_matrix`] e poi
 /// [`De9imMatrix::evaluate`]. I due percorsi possono differire su collezioni
 /// unite e intersezioni non rappresentabili esattamente in `f64`.
-pub fn evaluate(
+pub(crate) fn evaluate(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     predicate: SpatialPredicate,
@@ -392,7 +392,7 @@ pub fn evaluate(
 ///
 /// `PredicateError::CalcoloNonConcluso` quando `geo::Relate` si interrompe.
 /// Backend, risultati e default sono quelli pubblicati nella 6.0.0.
-pub fn evaluate_validated(
+pub(crate) fn evaluate_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     predicate: SpatialPredicate,
@@ -894,4 +894,23 @@ mod tests {
                 .expect("successo atteso")
         );
     }
+}
+
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{De9imMatrix, Geometry, PredicateError, RelateLimits, SpatialPredicate};
+
+    crate::crs::checked_kernel!(relate_matrix_with_limits, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>) -> (De9imMatrix, PredicateError),
+        |context| {  super::relate_matrix_with_limits(left, right, limits, cancelled) });
+    crate::crs::checked_kernel!(relate_matrix, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>) -> (De9imMatrix, PredicateError),
+        |context| {  super::relate_matrix(left, right) });
+    crate::crs::checked_kernel!(evaluate, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate) -> (bool, PredicateError),
+        |context| {  super::evaluate(left, right, predicate) });
+    crate::crs::checked_kernel!(evaluate_validated, "geo.predicate_intersects", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, predicate: SpatialPredicate) -> (bool, PredicateError),
+        |context| {  super::evaluate_validated(left, right, predicate) });
 }

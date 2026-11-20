@@ -29,7 +29,7 @@ i metadati di schema e le proprietà del contratto (`sorted_by`,
 
 ### Righe
 
-1:1. Il kernel (`extended_algorithms::line_interpolate_point`) riceve una
+1:1. Il kernel (`extended_algorithms::with_crs::line_interpolate_point`) riceve una
 `LineString` e rende nessun punto se è vuota. Il runner lo chiama su ogni
 cella non nulla, in parallelo: una cella nulla resta nulla; una linea
 vuota dà null, e se la colonna d'uscita (con la nullabilità di quella

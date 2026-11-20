@@ -15,9 +15,10 @@
 //!   feature: li' la topologia e' decisa da un ULP.
 
 use geo::{Area, Geometry};
-use plenora_kernels_geo::rust_backend::make_valid::{
-    make_valid_geometry_rust, MakeValidError, RepairMethod,
-};
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::rust_backend::make_valid::with_crs::make_valid_geometry_rust;
+use plenora_kernels_geo::rust_backend::make_valid::MakeValidError;
+use plenora_kernels_geo::rust_backend::make_valid::RepairMethod;
 use wkt::TryFromWkt;
 
 const CENTIMETRO: f64 = 0.01;
@@ -106,9 +107,17 @@ fn structure_fills_rings_by_nonzero_winding_like_geos() {
         ),
     ];
     for (input, geos) in cases {
-        let output =
-            make_valid_geometry_rust(&wkt(input), RepairMethod::Structure, false, CENTIMETRO)
-                .unwrap_or_else(|errore| panic!("{input}: {errore}"));
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &wkt(input),
+            RepairMethod::Structure,
+            false,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("{input}: {errore}"));
         assert!(
             (polygonal_area(&output) - geos).abs() < 1e-9,
             "{input}: area {}, GEOS {geos}",
@@ -172,9 +181,17 @@ fn collapsed_parts_are_united_like_geos() {
         ),
     ];
     for (input, area, length, point_count) in cases {
-        let output =
-            make_valid_geometry_rust(&wkt(input), RepairMethod::Structure, true, CENTIMETRO)
-                .unwrap_or_else(|errore| panic!("{input}: {errore}"));
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &wkt(input),
+            RepairMethod::Structure,
+            true,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("{input}: {errore}"));
         assert!(
             (polygonal_area(&output) - area).abs() < 1e-9,
             "{input}: {output:?}"
@@ -200,7 +217,16 @@ fn linework_rejects_a_rounded_crossing_next_to_another_feature() {
     );
     for keep_collapsed in [false, true] {
         assert!(matches!(
-            make_valid_geometry_rust(&input, RepairMethod::Linework, keep_collapsed, CENTIMETRO),
+            make_valid_geometry_rust(
+                CrsContext::new(&[&crs_fixture_precision(
+                    plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                        .expect("precisione fixture")
+                )]),
+                &input,
+                RepairMethod::Linework,
+                keep_collapsed
+            )
+            .map_err(kernel_error_fixture),
             Err(MakeValidError::PrecisionInsufficient)
         ));
     }
@@ -208,8 +234,17 @@ fn linework_rejects_a_rounded_crossing_next_to_another_feature() {
     // incroci sono esatti, e il risultato resta quello di GEOS.
     let exact = wkt("POLYGON((0 0,10 0,10 10,0 10,0 0),(1 1,5 1,5 5,1 5,1 1),\
          (4.999999999999999 3,9 3,9 8,4.999999999999999 8,4.999999999999999 3))");
-    let output = make_valid_geometry_rust(&exact, RepairMethod::Linework, false, CENTIMETRO)
-        .expect("buchi sovrapposti");
+    let output = make_valid_geometry_rust(
+        CrsContext::new(&[&crs_fixture_precision(
+            plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                .expect("precisione fixture"),
+        )]),
+        &exact,
+        RepairMethod::Linework,
+        false,
+    )
+    .map_err(kernel_error_fixture)
+    .expect("buchi sovrapposti");
     assert!((polygonal_area(&output) - 64.0).abs() < 1e-9);
     assert_eq!(line_length(&output).to_bits(), 0.0_f64.to_bits());
     assert_eq!(points(&output), 0);
@@ -230,12 +265,46 @@ fn structure_winding_ignores_retraced_segments_under_the_sample() {
         ),
     ];
     for (input, geos) in cases {
-        let output =
-            make_valid_geometry_rust(&wkt(input), RepairMethod::Structure, false, CENTIMETRO)
-                .unwrap_or_else(|errore| panic!("{input}: {errore}"));
+        let output = make_valid_geometry_rust(
+            CrsContext::new(&[&crs_fixture_precision(
+                plenora_kernels_geo::rust_backend::precision::Precision::new(CENTIMETRO)
+                    .expect("precisione fixture"),
+            )]),
+            &wkt(input),
+            RepairMethod::Structure,
+            false,
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap_or_else(|errore| panic!("{input}: {errore}"));
         assert!(
             (polygonal_area(&output) - geos).abs() < 1e-9,
             "{input}: {output:?}"
         );
     }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

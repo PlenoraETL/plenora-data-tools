@@ -34,9 +34,14 @@
 
 use geo::Geometry;
 use geozero::{wkb::Wkb, ToGeo};
-use plenora_kernels_geo::advanced::{voronoi_cells, AdvancedError};
-use plenora_kernels_geo::predicates::{evaluate, PredicateError, SpatialPredicate};
-use plenora_kernels_geo::topology::{dissolve, TopologyError};
+use plenora_kernels_geo::advanced::with_crs::voronoi_cells;
+use plenora_kernels_geo::advanced::AdvancedError;
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::predicates::with_crs::evaluate;
+use plenora_kernels_geo::predicates::PredicateError;
+use plenora_kernels_geo::predicates::SpatialPredicate;
+use plenora_kernels_geo::topology::with_crs::dissolve;
+use plenora_kernels_geo::topology::TopologyError;
 
 /// Precisione dichiarata: 1 cm con coordinate in metri (docs/limiti.md, «Limiti dichiarati»).
 fn precisione() -> plenora_kernels_geo::rust_backend::precision::Precision {
@@ -75,7 +80,13 @@ fn quadrato() -> Geometry<f64> {
 #[test]
 fn voronoi_su_reperto_concluso_resta_invalidpoint_con_contesto() {
     let geometrie = [reperto(), quadrato()];
-    let errore = voronoi_cells(&geometrie, 16, precisione()).expect_err("il reperto non passa");
+    let errore = voronoi_cells(
+        CrsContext::new(&[&crs_fixture_precision(precisione())]),
+        &geometrie,
+        16,
+    )
+    .map_err(kernel_error_fixture)
+    .expect_err("il reperto non passa");
     assert!(
         matches!(errore, AdvancedError::InvalidPoint { .. }),
         "col candidato esatto `geo` conclude sempre: l'ingresso e' davvero invalido — {errore:?}"
@@ -89,7 +100,12 @@ fn voronoi_su_reperto_concluso_resta_invalidpoint_con_contesto() {
 #[test]
 fn dissolve_su_reperto_concluso_resta_invalidgeometry() {
     let geometrie = [reperto(), quadrato()];
-    let errore = dissolve(&geometrie, precisione()).expect_err("il reperto non passa");
+    let errore = dissolve(
+        CrsContext::new(&[&crs_fixture_precision(precisione())]),
+        &geometrie,
+    )
+    .map_err(kernel_error_fixture)
+    .expect_err("il reperto non passa");
     assert!(
         matches!(errore, TopologyError::InvalidGeometry(_)),
         "col candidato esatto `geo` conclude sempre: {errore:?}"
@@ -102,8 +118,14 @@ fn dissolve_su_reperto_concluso_resta_invalidgeometry() {
 /// dove l'ingresso e' davvero invalido, l'errore continua a dire quale lato.
 #[test]
 fn i_predicati_su_reperto_concluso_nominano_il_lato() {
-    let errore = evaluate(&reperto(), &quadrato(), SpatialPredicate::Intersects)
-        .expect_err("il reperto non passa");
+    let errore = evaluate(
+        CrsContext::new(&[crs_fixture_metrico(); 2]),
+        &reperto(),
+        &quadrato(),
+        SpatialPredicate::Intersects,
+    )
+    .map_err(kernel_error_fixture)
+    .expect_err("il reperto non passa");
     assert!(
         matches!(errore, PredicateError::InvalidGeometry { side: "left", .. }),
         "col candidato esatto `geo` conclude sempre, e il lato resta nominato: {errore:?}"
@@ -117,3 +139,35 @@ fn i_predicati_su_reperto_concluso_nominano_il_lato() {
 // predicates.rs) verifica il testo esatto reso dalla propria conversione su
 // un `EsitoValidazione::NonConclusa` sintetico — la stessa proprieta',
 // provata dove l'innesco puo' essere reale.
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
+}

@@ -6,6 +6,7 @@ mod comune_geo;
 #[path = "comune_geo/trasformazioni_attese.rs"]
 mod trasformazioni_attese;
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::sync::Arc;
 
 use geo::{Geometry, LineString, Point, Polygon};
@@ -16,7 +17,6 @@ use plenora_core::arrow::array::{
 use plenora_core::arrow::schema::{DataType, Field, Schema};
 use plenora_core::crs::resolve_crs;
 use plenora_core::{ErrorCategory, PlenoraError};
-use plenora_kernels_geo::geodetica::EllissoideGeodetico;
 use plenora_kernels_geo::operations::BufferCapStyle;
 use plenora_kernels_geo::predicates::SpatialPredicate;
 use plenora_kernels_geo::rust_backend::precision::Precision;
@@ -31,11 +31,6 @@ use comune_geo::{
 
 fn centimetro_utm() -> Precision {
     Precision::from_crs(&resolve_crs(UTM, "crs").expect("crs")).expect("precisione")
-}
-
-/// L'ellissoide del datum di un CRS della tabella integrata.
-fn ellissoide(crs: &str) -> EllissoideGeodetico {
-    EllissoideGeodetico::da_crs(&resolve_crs(crs, "crs").expect("crs")).expect("ellissoide")
 }
 
 fn colonna<'a>(tabella: &'a RecordBatch, nome: &str) -> &'a ArrayRef {
@@ -173,21 +168,39 @@ fn le_misure_sono_i_kernel() {
             json!({}),
             poligoni(),
             "area",
-            Box::new(|g| Some(operations::area(g).unwrap())),
+            Box::new(|g| {
+                Some(
+                    operations::with_crs::area(CrsContext::new(&[crs_fixture_metrico()]), g)
+                        .map_err(kernel_error_fixture)
+                        .unwrap(),
+                )
+            }),
         ),
         (
             "geo.length",
             json!({"output_column": "lunghezza"}),
             linee(),
             "lunghezza",
-            Box::new(|g| Some(operations::length(g).unwrap())),
+            Box::new(|g| {
+                Some(
+                    operations::with_crs::length(CrsContext::new(&[crs_fixture_metrico()]), g)
+                        .map_err(kernel_error_fixture)
+                        .unwrap(),
+                )
+            }),
         ),
         (
             "geo.perimeter",
             json!({}),
             poligoni(),
             "perimeter",
-            Box::new(|g| Some(operations::perimeter(g).unwrap())),
+            Box::new(|g| {
+                Some(
+                    operations::with_crs::perimeter(CrsContext::new(&[crs_fixture_metrico()]), g)
+                        .map_err(kernel_error_fixture)
+                        .unwrap(),
+                )
+            }),
         ),
         (
             "geo.geodesic_line_length",
@@ -195,7 +208,14 @@ fn le_misure_sono_i_kernel() {
             linee_lonlat(),
             "geodesic_line_length",
             Box::new(|g| {
-                Some(extended::geodesic_line_length_m(linea(g), &ellissoide(LONLAT)).unwrap())
+                Some(
+                    extended::with_crs::geodesic_line_length_m(
+                        CrsContext::new(&[crs_fixture_geografico()]),
+                        linea(g),
+                    )
+                    .map_err(kernel_error_fixture)
+                    .unwrap(),
+                )
             }),
         ),
         (
@@ -204,7 +224,14 @@ fn le_misure_sono_i_kernel() {
             poligoni_lonlat(),
             "geodesic_area",
             Box::new(|g| {
-                Some(extended_algorithms::geodesic_area_m2(g, &ellissoide(LONLAT)).unwrap())
+                Some(
+                    extended_algorithms::with_crs::geodesic_area_m2(
+                        CrsContext::new(&[crs_fixture_geografico()]),
+                        g,
+                    )
+                    .map_err(kernel_error_fixture)
+                    .unwrap(),
+                )
             }),
         ),
         (
@@ -212,7 +239,15 @@ fn le_misure_sono_i_kernel() {
             json!({"point_wkb": esadecimale_di(&Geometry::Point(riferimento))}),
             linee(),
             "fraction",
-            Box::new(move |g| extensions::line_locate_point(g, &riferimento).unwrap()),
+            Box::new(move |g| {
+                extensions::with_crs::line_locate_point(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    g,
+                    &riferimento,
+                )
+                .map_err(kernel_error_fixture)
+                .unwrap()
+            }),
         ),
         (
             "geo.distance",
@@ -221,7 +256,15 @@ fn le_misure_sono_i_kernel() {
             "distance",
             Box::new({
                 let altra = altra.clone();
-                move |g| operations::distance(g, &altra).unwrap()
+                move |g| {
+                    operations::with_crs::distance(
+                        CrsContext::new(&[crs_fixture_metrico(); 2]),
+                        g,
+                        &altra,
+                    )
+                    .map_err(kernel_error_fixture)
+                    .unwrap()
+                }
             }),
         ),
         (
@@ -231,7 +274,16 @@ fn le_misure_sono_i_kernel() {
             "hausdorff_distance",
             Box::new({
                 let altra = altra.clone();
-                move |g| extended::hausdorff_distance(g, &altra, u64::MAX).unwrap()
+                move |g| {
+                    extended::with_crs::hausdorff_distance(
+                        CrsContext::new(&[crs_fixture_metrico(); 2]),
+                        g,
+                        &altra,
+                        u64::MAX,
+                    )
+                    .map_err(kernel_error_fixture)
+                    .unwrap()
+                }
             }),
         ),
         (
@@ -240,7 +292,14 @@ fn le_misure_sono_i_kernel() {
             linee(),
             "frechet",
             Box::new(move |g| {
-                extended_algorithms::frechet_distance(linea(g), linea(&altra), u64::MAX).unwrap()
+                extended_algorithms::with_crs::frechet_distance(
+                    CrsContext::new(&[crs_fixture_metrico(); 2]),
+                    linea(g),
+                    linea(&altra),
+                    u64::MAX,
+                )
+                .map_err(kernel_error_fixture)
+                .unwrap()
             }),
         ),
         (
@@ -252,11 +311,12 @@ fn le_misure_sono_i_kernel() {
                 let milano = milano.clone();
                 move |g| {
                     Some(
-                        extended::haversine_distance_m(
+                        extended::with_crs::haversine_distance_m(
+                            CrsContext::new(&[crs_fixture_geografico(); 2]),
                             punto(g),
                             punto(&milano),
-                            &ellissoide(LONLAT),
                         )
+                        .map_err(kernel_error_fixture)
                         .unwrap(),
                     )
                 }
@@ -271,11 +331,12 @@ fn le_misure_sono_i_kernel() {
                 let milano = milano.clone();
                 move |g| {
                     Some(
-                        extended::geodesic_distance_m(
+                        extended::with_crs::geodesic_distance_m(
+                            CrsContext::new(&[crs_fixture_geografico(); 2]),
                             punto(g),
                             punto(&milano),
-                            &ellissoide(LONLAT),
                         )
+                        .map_err(kernel_error_fixture)
                         .unwrap(),
                     )
                 }
@@ -288,11 +349,12 @@ fn le_misure_sono_i_kernel() {
             "bearing",
             Box::new(move |g| {
                 Some(
-                    extended_algorithms::geodesic_bearing_degrees(
+                    extended_algorithms::with_crs::geodesic_bearing_degrees(
+                        CrsContext::new(&[crs_fixture_geografico(); 2]),
                         punto(g),
                         punto(&milano),
-                        &ellissoide(LONLAT),
                     )
+                    .map_err(kernel_error_fixture)
                     .unwrap(),
                 )
             }),
@@ -487,9 +549,13 @@ fn le_misure_geodetiche_usano_l_ellissoide_del_crs() {
     for (op, kernel) in [
         (
             "geo.geodesic_distance",
-            extended::geodesic_distance_m as fn(_, _, &_) -> _,
+            extended::with_crs::geodesic_distance_m
+                as for<'a> fn(plenora_kernels_geo::crs::CrsContext<'a>, _, _) -> _,
         ),
-        ("geo.haversine_distance", extended::haversine_distance_m),
+        (
+            "geo.haversine_distance",
+            extended::with_crs::haversine_distance_m,
+        ),
     ] {
         let uscita = un_passo(op, config.clone(), std::slice::from_ref(&punti))
             .unwrap_or_else(|errore| panic!("{op}: {errore}"));
@@ -500,8 +566,24 @@ fn le_misure_geodetiche_usano_l_ellissoide_del_crs() {
             .expect("float64");
         for (riga, x, y) in [(0, 11.3426, 44.4949), (2, 12.4964, 41.9028)] {
             let da = Point::new(x, y);
-            let ed50 = kernel(da, punto(&modena), &ellissoide(ED50)).expect("ed50");
-            let wgs84 = kernel(da, punto(&modena), &ellissoide(LONLAT)).expect("wgs84");
+            let ed50 = kernel(
+                CrsContext::new(&[
+                    &resolve_crs(ED50, "crs").expect("CRS"),
+                    &resolve_crs(ED50, "crs").expect("CRS"),
+                ]),
+                da,
+                punto(&modena),
+            )
+            .expect("ed50");
+            let wgs84 = kernel(
+                CrsContext::new(&[
+                    &resolve_crs(LONLAT, "crs").expect("CRS"),
+                    &resolve_crs(LONLAT, "crs").expect("CRS"),
+                ]),
+                da,
+                punto(&modena),
+            )
+            .expect("wgs84");
             assert_eq!(valori.value(riga).to_bits(), ed50.to_bits(), "{op}");
             assert!((ed50 - wgs84).abs() > 1.0, "{op}: {ed50} {wgs84}");
         }
@@ -512,11 +594,15 @@ fn le_misure_geodetiche_usano_l_ellissoide_del_crs() {
         .as_any()
         .downcast_ref::<Float64Array>()
         .expect("float64");
-    let atteso = extended_algorithms::geodesic_bearing_degrees(
+    let atteso = extended_algorithms::with_crs::geodesic_bearing_degrees(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs(ED50, "crs").expect("CRS fixture geografico"),
+            &plenora_core::crs::resolve_crs(ED50, "crs").expect("CRS fixture geografico"),
+        ]),
         Point::new(11.3426, 44.4949),
         punto(&modena),
-        &ellissoide(ED50),
     )
+    .map_err(kernel_error_fixture)
     .expect("azimut");
     assert_eq!(valori.value(0).to_bits(), atteso.to_bits());
 }
@@ -1105,10 +1191,21 @@ fn il_crs_attraversa_la_catena() {
         .iter()
         .map(|g| {
             g.as_ref().map(|g| {
-                let fascia =
-                    operations::buffer_with_cap(g, 50.0, BufferCapStyle::Round, centimetro_utm())
-                        .unwrap();
-                operations::area(&fascia).unwrap()
+                let fascia = operations::with_crs::buffer_with_cap(
+                    CrsContext::new(&[&crs_fixture_precision(centimetro_utm())]),
+                    g,
+                    50.0,
+                    BufferCapStyle::Round,
+                )
+                .map_err(kernel_error_fixture)
+                .unwrap();
+                operations::with_crs::area(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &fascia,
+                )
+                .map_err(kernel_error_fixture)
+                .unwrap()
             })
         })
         .collect();
@@ -1164,14 +1261,21 @@ fn tabellari_e_geo_si_concatenano() {
         .enumerate()
         .filter(|(riga, _)| riga % 2 == 0)
         .map(|(_, g)| {
-            let fascia = operations::buffer_with_cap(
+            let fascia = operations::with_crs::buffer_with_cap(
+                CrsContext::new(&[&crs_fixture_precision(centimetro_utm())]),
                 g.as_ref().unwrap(),
                 2.0,
                 BufferCapStyle::Round,
-                centimetro_utm(),
             )
+            .map_err(kernel_error_fixture)
             .unwrap();
-            operations::area(&fascia).unwrap()
+            operations::with_crs::area(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                &fascia,
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap()
         })
         .collect();
     let mut attese = attese;
@@ -1824,4 +1928,42 @@ fn il_poligono_vuoto_da_wkt_si_rilegge_nel_passo_dopo() {
         plenora_kernels_geo::geometry_from_wkb(celle.value(riga)).unwrap();
     }
     assert_eq!(esito.outputs[1].1.num_rows(), 3);
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_geografico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:4326", "crs").expect("CRS fixture"))
 }

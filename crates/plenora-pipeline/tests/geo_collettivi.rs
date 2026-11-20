@@ -7,6 +7,7 @@
 
 mod comune_geo;
 
+use plenora_kernels_geo::crs::CrsContext;
 use std::sync::Arc;
 
 use geo::{Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
@@ -97,7 +98,14 @@ fn le_espansioni_sono_i_kernel() {
     let mut parti = Vec::new();
     for (riga, g) in geometrie(&ingresso, "geometry").iter().enumerate() {
         if let Some(g) = g {
-            for parte in operations::explode(g).unwrap() {
+            for parte in operations::with_crs::explode(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                g,
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap()
+            {
                 madri.push(u64::try_from(riga).unwrap());
                 parti.push(Some(wkb(&parte)));
             }
@@ -149,11 +157,15 @@ fn le_espansioni_sono_i_kernel() {
     );
     let uscita =
         un_passo_verificato("geo.delaunay", json!({}), std::slice::from_ref(&nuvola)).unwrap();
-    let triangoli: Vec<Option<Vec<u8>>> = extended_algorithms::delaunay(
+    let triangoli: Vec<Option<Vec<u8>>> = extended_algorithms::with_crs::delaunay(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
         geometrie(&nuvola, "geometry")[0].as_ref().unwrap(),
         u64::MAX,
         u64::MAX,
     )
+    .map_err(kernel_error_fixture)
     .unwrap()
     .into_iter()
     .map(|t| Some(wkb(&Geometry::Polygon(t))))
@@ -216,12 +228,16 @@ fn le_espansioni_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let mut attese: Vec<Option<Vec<u8>>> =
-        extensions2::subdivide_wkb(&wkb(&denso), 8, centimetro())
-            .unwrap()
-            .into_iter()
-            .map(Some)
-            .collect();
+    let mut attese: Vec<Option<Vec<u8>>> = extensions2::with_crs::subdivide_wkb(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+        &wkb(&denso),
+        8,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap()
+    .into_iter()
+    .map(Some)
+    .collect();
     let pezzi = attese.len();
     attese.push(None);
     assert!(pezzi > 1);
@@ -312,7 +328,12 @@ fn le_aggregazioni_sono_i_kernel() {
         .into_iter()
         .flatten()
         .collect();
-    let unione = topology::dissolve(&presenti, centimetro()).unwrap();
+    let unione = topology::with_crs::dissolve(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+        &presenti,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     let unione_attesa = Geometry::MultiPolygon(MultiPolygon(vec![
         Polygon::new(
             LineString::from(vec![
@@ -345,9 +366,15 @@ fn le_aggregazioni_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let linea = construction::line_from_ordered_points(&geometrie(&ingresso, "geometry"))
-        .unwrap()
-        .unwrap();
+    let linea = construction::with_crs::line_from_ordered_points(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &geometrie(&ingresso, "geometry"),
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap()
+    .unwrap();
     assert_eq!(
         colonna(&uscita, "geometry").as_ref(),
         &binaria(&[Some(wkb(&linea))]) as &dyn Array
@@ -367,8 +394,14 @@ fn le_aggregazioni_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let poligono =
-        construction::polygon_from_ordered_points(&geometrie(&ingresso, "geometry")).unwrap();
+    let poligono = construction::with_crs::polygon_from_ordered_points(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &geometrie(&ingresso, "geometry"),
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(
         colonna(&uscita, "geometry").as_ref(),
         &binaria(&[poligono.as_ref().map(wkb)]) as &dyn Array
@@ -394,11 +427,15 @@ fn le_aggregazioni_sono_i_kernel() {
         .into_iter()
         .flatten()
         .collect();
-    let fuse: Vec<Option<Vec<u8>>> = extended_algorithms::line_merge(
+    let fuse: Vec<Option<Vec<u8>>> = extended_algorithms::with_crs::line_merge(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
         &Geometry::GeometryCollection(raccolte),
         u64::MAX,
         u64::MAX,
     )
+    .map_err(kernel_error_fixture)
     .unwrap()
     .into_iter()
     .map(|l| Some(wkb(&Geometry::LineString(l))))
@@ -498,7 +535,16 @@ fn le_aggregazioni_sono_i_kernel() {
             .filter(|riga| etichette_in.value(*riga) == etichette.value(gruppo))
             .map(|riga| tutte[riga].clone())
             .collect();
-        assert_eq!(raccolta, &extensions::collect_geometries(&membri).unwrap());
+        assert_eq!(
+            raccolta,
+            &extensions::with_crs::collect_geometries(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                &membri
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap()
+        );
     }
     assert_eq!(
         etichette.iter().collect::<Vec<_>>(),
@@ -608,8 +654,14 @@ fn collect_ordina_i_gruppi_per_valore() {
     // Il gruppo raccoglie le righe in ordine d'ingresso (1 e 5).
     assert_eq!(
         geometrie(&uscita, "geometry")[0],
-        extensions::collect_geometries(&[geometrie_in[1].clone(), geometrie_in[5].clone()])
-            .unwrap()
+        extensions::with_crs::collect_geometries(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            &[geometrie_in[1].clone(), geometrie_in[5].clone()]
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap()
     );
 
     let uscita = un_passo(
@@ -660,10 +712,15 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
 
     let uscita =
         un_passo_verificato("geo.voronoi", json!({}), std::slice::from_ref(&ingresso)).unwrap();
-    let mut celle_attese = advanced::voronoi_cells(&presenti, 100_000, centimetro())
-        .unwrap()
-        .into_iter()
-        .map(|c| Some(wkb(&c)));
+    let mut celle_attese = advanced::with_crs::voronoi_cells(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+        &presenti,
+        100_000,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap()
+    .into_iter()
+    .map(|c| Some(wkb(&c)));
     let attese: Vec<Option<Vec<u8>>> = geometrie(&ingresso, "geometry")
         .iter()
         .map(|g| g.as_ref().and_then(|_| celle_attese.next().flatten()))
@@ -731,10 +788,18 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let etichette: UInt64Array = cluster::dbscan_column(&celle(&ingresso), 15.0, 2)
-        .unwrap()
-        .into_iter()
-        .collect();
+    let etichette: UInt64Array = cluster::with_crs::dbscan_column(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &celle(&ingresso),
+        15.0,
+        2,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap()
+    .into_iter()
+    .collect();
     assert_eq!(
         colonna(&uscita, "cluster_id").as_ref(),
         &etichette as &dyn Array
@@ -757,15 +822,16 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         .into_iter()
         .flatten()
         .collect();
-    let mut pulite = topology::clean_valid_polygon_topology(
+    let mut pulite = topology::with_crs::clean_valid_polygon_topology(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
         &presenti,
         0.0,
         true,
         false,
         u64::MAX,
         u64::MAX,
-        centimetro(),
     )
+    .map_err(kernel_error_fixture)
     .unwrap()
     .into_iter();
     let attese: Vec<Option<Vec<u8>>> = geometrie(&ingresso, "geometry")
@@ -822,8 +888,14 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         std::slice::from_ref(&ingresso),
     )
     .unwrap();
-    let problemi =
-        extensions3::coverage_validate_rows(&celle(&ingresso), 0.0, 1000, centimetro()).unwrap();
+    let problemi = extensions3::with_crs::coverage_validate_rows(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+        &celle(&ingresso),
+        0.0,
+        1000,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(uscita.num_rows(), problemi.len());
     assert_eq!(problemi.len(), 1);
     assert_eq!(
@@ -889,7 +961,16 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         std::slice::from_ref(&adiacenti),
     )
     .unwrap();
-    let tratti = extensions3::shared_paths_rows(&celle(&adiacenti), 0.0, 0.0).unwrap();
+    let tratti = extensions3::with_crs::shared_paths_rows(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &celle(&adiacenti),
+        0.0,
+        0.0,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(tratti.len(), 1);
     let geometrie_tratti: Vec<Option<Vec<u8>>> =
         tratti.iter().map(|t| Some(t.wkb.clone())).collect();
@@ -955,7 +1036,16 @@ fn le_collettive_e_le_coperture_sono_i_kernel() {
         comune_geo::schema_geo_indipendente("geo.generate_grid", &innesco, &config, Some(UTM))
     );
     let estensione = GridExtent::new(X0, Y0, X0 + 30.0, Y0 + 20.0).unwrap();
-    let righe = extensions2::generate_grid_rows(&estensione, 10.0, GridShape::Square).unwrap();
+    let righe = extensions2::with_crs::generate_grid_rows(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        &estensione,
+        10.0,
+        GridShape::Square,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(righe.len(), 6);
     let griglia = geometrie(&uscita, "geometry");
     for (riga, g) in griglia.iter().enumerate() {
@@ -1105,10 +1195,22 @@ fn il_crs_attraversa_reproject_buffer_dissolve() {
         .into_iter()
         .flatten()
         .map(|g| {
-            operations::buffer_with_cap(&g, 100_000.0, BufferCapStyle::Round, centimetro()).unwrap()
+            operations::with_crs::buffer_with_cap(
+                CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+                &g,
+                100_000.0,
+                BufferCapStyle::Round,
+            )
+            .map_err(kernel_error_fixture)
+            .unwrap()
         })
         .collect();
-    let unione = topology::dissolve(&fasce, centimetro()).unwrap();
+    let unione = topology::with_crs::dissolve(
+        CrsContext::new(&[&crs_fixture_precision(centimetro())]),
+        &fasce,
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     assert_eq!(
         colonna(uscita, "geometry").as_ref(),
         &binaria(&[Some(wkb(&unione))]) as &dyn Array
@@ -1544,4 +1646,30 @@ fn un_passo_verificato(
         }
     }
     risultato
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// Sistema cartesiano della fixture: la sua unita' rende esplicita la precisione attesa.
+fn crs_fixture_precision(
+    precision: plenora_kernels_geo::rust_backend::precision::Precision,
+) -> plenora_core::crs::ResolvedCrs {
+    let crs = plenora_core::crs::ResolvedCrs::from_resolved_parts(
+        "fixture".to_owned(),
+        serde_json::json!({"type": "ProjectedCRS", "name": "fixture"}),
+        plenora_core::crs::CrsKind::Projected,
+        Some(0.01 / precision.value()),
+    );
+    assert_eq!(
+        crs.precisione_coordinate().map(f64::to_bits),
+        Some(precision.value().to_bits()),
+        "precisione della fixture"
+    );
+    crs
 }

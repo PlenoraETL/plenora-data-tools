@@ -366,7 +366,7 @@ fn prepare_points(geometries: &[Option<Geometry<f64>>]) -> Result<PreparedPoints
 /// - `IndexOverflow`: guardia interna sul numero di cluster (non
 ///   raggiungibile: i cluster sono al piu' quanti i punti in input).
 /// - `InternalInvariant`: cache di vicinato incoerente (guardia fail-closed).
-pub fn dbscan_nullable(
+pub(crate) fn dbscan_nullable(
     geometries: &[Option<Geometry<f64>>],
     eps: f64,
     min_points: usize,
@@ -394,7 +394,7 @@ pub fn dbscan_nullable(
 ///
 /// Come [`dbscan_nullable`]; con input puntuale `UnsupportedGeometry` non
 /// scatta mai.
-pub fn dbscan(
+pub(crate) fn dbscan(
     points: &[Point<f64>],
     eps: f64,
     min_points: usize,
@@ -435,7 +435,7 @@ fn cluster_error(error: &ClusterError) -> PlenoraError {
 /// `PlenoraError::Unsupported` del contratto WKB, e `ResourceLimit` per una
 /// cella oltre il limite di byte); `PlenoraError::Internal` per un'invariante
 /// violata, un panico di `rstar` o una validazione che non conclude.
-pub fn dbscan_column(
+pub(crate) fn dbscan_column(
     cells: &BinaryArray,
     eps: f64,
     min_points: usize,
@@ -869,4 +869,20 @@ mod tests {
             "dbscan 100k punti: {elapsed:?}, {clusters} cluster, {noise} noise, peak RSS: {peak_rss}"
         );
     }
+}
+
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{BinaryArray, ClusterError, Geometry, PlenoraError, Point};
+
+    crate::crs::checked_kernel!(dbscan_nullable, "geo.cluster_dbscan", 1,
+        (geometries: &[Option<Geometry<f64>>], eps: f64, min_points: usize) -> (Vec<Option<u64>>, ClusterError),
+        |context| {  super::dbscan_nullable(geometries, eps, min_points) });
+    crate::crs::checked_kernel!(dbscan, "geo.cluster_dbscan", 1,
+        (points: &[Point<f64>], eps: f64, min_points: usize) -> (Vec<Option<u64>>, ClusterError),
+        |context| {  super::dbscan(points, eps, min_points) });
+    crate::crs::checked_kernel!(dbscan_column, "geo.cluster_dbscan", 1,
+        (cells: &BinaryArray, eps: f64, min_points: usize) -> (Vec<Option<u64>>, PlenoraError),
+        |context| {  super::dbscan_column(cells, eps, min_points) });
 }

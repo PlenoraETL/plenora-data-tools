@@ -8,7 +8,7 @@ resta quella. Le geometrie nulle si saltano. Le colonne che non sono chiavi
 spariscono.
 
 Il runner forma i gruppi su tutta la tabella e per ciascuno chiama
-`extensions::collect_geometries` con le geometrie del gruppo nell'ordine
+`extensions::with_crs::collect_geometries` con le geometrie del gruppo nell'ordine
 delle righe ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri

@@ -6,7 +6,7 @@ una geometria di riferimento data nella config, se dista al più
 geometrie che dovrebbero condividere vertici e ne differiscono di poco. Il
 tipo geometrico non cambia; il risultato deve restare valido.
 
-La conversione di colonna è `extensions2::snap_column`, che il runner
+La conversione di colonna è `extensions2::with_crs::snap_column`, che il runner
 chiama sulla colonna intera.
 
 ### Parametri
@@ -31,7 +31,7 @@ contratto (`sorted_by`, `row_count`).
 ### Righe
 
 1:1: il runner chiama la conversione di colonna dei kernel
-(`extensions2::snap_column`) sulla colonna intera, con il riferimento letto
+(`extensions2::with_crs::snap_column`) sulla colonna intera, con il riferimento letto
 una volta in validazione. Una cella nulla resta nulla. Con un riferimento
 senza vertici ogni geometria esce invariata ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 

@@ -65,7 +65,7 @@ const fn dimension(g: &Geometry<f64>) -> Result<u8, PointBooleanError> {
 /// # Errors
 /// Tipi non supportati, filtro invalido, geometrie invalide/non finite,
 /// limiti superati, allocazione fallita, cancellazione o deadline.
-pub fn boolean_with_limits(
+pub(crate) fn boolean_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     operation: PointBooleanOp,
@@ -293,7 +293,7 @@ fn site_cmp(a: &Point<f64>, b: &Point<f64>) -> std::cmp::Ordering {
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn union_with_limits(
+pub(crate) fn union_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -314,7 +314,7 @@ pub fn union_with_limits(
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn intersection_with_limits(
+pub(crate) fn intersection_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -335,7 +335,7 @@ pub fn intersection_with_limits(
 ///
 /// # Errors
 /// Gli stessi errori di [`boolean_with_limits`].
-pub fn difference_with_limits(
+pub(crate) fn difference_with_limits(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     output_dimension: Option<u8>,
@@ -350,4 +350,22 @@ pub fn difference_with_limits(
         limits,
         cancelled,
     )
+}
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{AtomicBool, Geometry, PointBooleanError, PointBooleanOp, RelateLimits};
+
+    crate::crs::checked_kernel!(boolean_with_limits, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, operation: PointBooleanOp, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PointBooleanError),
+        |context| {  super::boolean_with_limits(left, right, operation, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(union_with_limits, "geo.union", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PointBooleanError),
+        |context| {  super::union_with_limits(left, right, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(intersection_with_limits, "geo.intersection", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PointBooleanError),
+        |context| {  super::intersection_with_limits(left, right, output_dimension, limits, cancelled) });
+    crate::crs::checked_kernel!(difference_with_limits, "geo.difference", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, output_dimension: Option<u8>, limits: RelateLimits, cancelled: Option<&AtomicBool>) -> (Geometry<f64>, PointBooleanError),
+        |context| {  super::difference_with_limits(left, right, output_dimension, limits, cancelled) });
 }

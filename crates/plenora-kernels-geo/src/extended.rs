@@ -121,7 +121,7 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, ExtendedErr
 ///   d'ingresso o d'uscita, non conclude;
 /// - `ExtendedError::CalcoloNonConcluso`: il calcolo di `geo` va in
 ///   panico.
-pub fn affine_transform(
+pub(crate) fn affine_transform(
     geometry: &Geometry<f64>,
     coefficients: [f64; 6],
 ) -> Result<Geometry<f64>, ExtendedError> {
@@ -144,7 +144,7 @@ pub fn affine_transform(
 /// # Errors
 ///
 /// Come [`affine_transform`], eccetto `InvalidInput` (gate omesso).
-pub fn affine_transform_validated(
+pub(crate) fn affine_transform_validated(
     geometry: &Geometry<f64>,
     coefficients: [f64; 6],
 ) -> Result<Geometry<f64>, ExtendedError> {
@@ -166,7 +166,7 @@ pub fn affine_transform_validated(
 ///
 /// Come [`affine_transform`]: un offset non finito e'
 /// `InvalidParameter { name: "coefficients", .. }`.
-pub fn translate(
+pub(crate) fn translate(
     geometry: &Geometry<f64>,
     x_offset: f64,
     y_offset: f64,
@@ -180,7 +180,7 @@ pub fn translate(
 /// # Errors
 ///
 /// Come [`translate`], eccetto `InvalidInput` (gate omesso).
-pub fn translate_validated(
+pub(crate) fn translate_validated(
     geometry: &Geometry<f64>,
     x_offset: f64,
     y_offset: f64,
@@ -201,7 +201,7 @@ pub fn translate_validated(
 /// Come [`affine_transform`]: fattori e origine entrano nei coefficienti, e
 /// un valore non finito (anche per overflow del prodotto) e'
 /// `InvalidParameter { name: "coefficients", .. }`.
-pub fn scale_about(
+pub(crate) fn scale_about(
     geometry: &Geometry<f64>,
     x_factor: f64,
     y_factor: f64,
@@ -218,7 +218,7 @@ pub fn scale_about(
 /// # Errors
 ///
 /// Come [`scale_about`], eccetto `InvalidInput` (gate omesso).
-pub fn scale_about_validated(
+pub(crate) fn scale_about_validated(
     geometry: &Geometry<f64>,
     x_factor: f64,
     y_factor: f64,
@@ -243,7 +243,7 @@ pub fn scale_about_validated(
 /// finito; in piu'
 /// come [`affine_transform`] per input non valido, coefficienti risultanti
 /// non finiti o output non valido.
-pub fn rotate_about(
+pub(crate) fn rotate_about(
     geometry: &Geometry<f64>,
     degrees: f64,
     origin: Point<f64>,
@@ -258,7 +258,7 @@ pub fn rotate_about(
 /// # Errors
 ///
 /// Come [`rotate_about`], eccetto `InvalidInput` (gate omesso).
-pub fn rotate_about_validated(
+pub(crate) fn rotate_about_validated(
     geometry: &Geometry<f64>,
     degrees: f64,
     origin: Point<f64>,
@@ -320,7 +320,7 @@ fn rotate_coefficients(
 ///   d'ingresso o d'uscita, non conclude;
 /// - `ExtendedError::CalcoloNonConcluso`: il calcolo di `geo` va in
 ///   panico (per esempio con coordinate vicine al massimo di `f64`).
-pub fn concave_hull(
+pub(crate) fn concave_hull(
     geometry: &Geometry<f64>,
     concavity: f64,
     length_threshold: f64,
@@ -344,7 +344,7 @@ pub fn concave_hull(
 /// # Errors
 ///
 /// Come [`concave_hull`], eccetto `InvalidInput` (gate omesso).
-pub fn concave_hull_validated(
+pub(crate) fn concave_hull_validated(
     geometry: &Geometry<f64>,
     concavity: f64,
     length_threshold: f64,
@@ -403,7 +403,7 @@ pub fn concave_hull_validated(
 ///   ingresso non conclude;
 /// - `ExtendedError::CalcoloNonConcluso`: il calcolo di `geo` va in
 ///   panico.
-pub fn hausdorff_distance(
+pub(crate) fn hausdorff_distance(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     max_coordinate_pairs: u64,
@@ -424,7 +424,7 @@ pub fn hausdorff_distance(
 /// # Errors
 ///
 /// Come [`hausdorff_distance`], eccetto `InvalidInput` (gate omesso).
-pub fn hausdorff_distance_validated(
+pub(crate) fn hausdorff_distance_validated(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
     max_coordinate_pairs: u64,
@@ -484,7 +484,7 @@ fn validate_geographic_point(point: Point<f64>) -> Result<(), ExtendedError> {
 /// `ExtendedError::InvalidOutput` se la distanza non e' finita (mai
 /// atteso); `ExtendedError::CalcoloNonConcluso` se il calcolo va in
 /// panico.
-pub fn haversine_distance_m(
+pub(crate) fn haversine_distance_m(
     left: Point<f64>,
     right: Point<f64>,
     ellissoide: &EllissoideGeodetico,
@@ -515,7 +515,7 @@ pub fn haversine_distance_m(
 /// `ExtendedError::InvalidOutput` se la distanza non e' finita (mai
 /// atteso); `ExtendedError::CalcoloNonConcluso` se il calcolo va in
 /// panico.
-pub fn geodesic_distance_m(
+pub(crate) fn geodesic_distance_m(
     left: Point<f64>,
     right: Point<f64>,
     ellissoide: &EllissoideGeodetico,
@@ -540,7 +540,7 @@ pub fn geodesic_distance_m(
 /// `ExtendedError::InvalidOutput` se la lunghezza non e' finita (mai
 /// attesa); `ExtendedError::CalcoloNonConcluso` se il calcolo va in
 /// panico.
-pub fn geodesic_line_length_m(
+pub(crate) fn geodesic_line_length_m(
     line: &geo::LineString<f64>,
     ellissoide: &EllissoideGeodetico,
 ) -> Result<f64, ExtendedError> {
@@ -809,4 +809,56 @@ mod tests {
             ));
         }
     }
+}
+
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{ExtendedError, Geometry, Point};
+
+    crate::crs::checked_kernel!(affine_transform, "geo.affine_transform", 1,
+        (geometry: &Geometry<f64>, coefficients: [f64; 6]) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::affine_transform(geometry, coefficients) });
+    crate::crs::checked_kernel!(affine_transform_validated, "geo.affine_transform", 1,
+        (geometry: &Geometry<f64>, coefficients: [f64; 6]) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::affine_transform_validated(geometry, coefficients) });
+    crate::crs::checked_kernel!(translate, "geo.translate", 1,
+        (geometry: &Geometry<f64>, x_offset: f64, y_offset: f64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::translate(geometry, x_offset, y_offset) });
+    crate::crs::checked_kernel!(translate_validated, "geo.translate", 1,
+        (geometry: &Geometry<f64>, x_offset: f64, y_offset: f64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::translate_validated(geometry, x_offset, y_offset) });
+    crate::crs::checked_kernel!(scale_about, "geo.scale", 1,
+        (geometry: &Geometry<f64>, x_factor: f64, y_factor: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::scale_about(geometry, x_factor, y_factor, origin) });
+    crate::crs::checked_kernel!(scale_about_validated, "geo.scale", 1,
+        (geometry: &Geometry<f64>, x_factor: f64, y_factor: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::scale_about_validated(geometry, x_factor, y_factor, origin) });
+    crate::crs::checked_kernel!(rotate_about, "geo.rotate", 1,
+        (geometry: &Geometry<f64>, degrees: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::rotate_about(geometry, degrees, origin) });
+    crate::crs::checked_kernel!(rotate_about_validated, "geo.rotate", 1,
+        (geometry: &Geometry<f64>, degrees: f64, origin: Point<f64>) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::rotate_about_validated(geometry, degrees, origin) });
+    crate::crs::checked_kernel!(concave_hull, "geo.concave_hull", 1,
+        (geometry: &Geometry<f64>, concavity: f64, length_threshold: f64, max_coordinates: u64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::concave_hull(geometry, concavity, length_threshold, max_coordinates) });
+    crate::crs::checked_kernel!(concave_hull_validated, "geo.concave_hull", 1,
+        (geometry: &Geometry<f64>, concavity: f64, length_threshold: f64, max_coordinates: u64) -> (Geometry<f64>, ExtendedError),
+        |context| {  super::concave_hull_validated(geometry, concavity, length_threshold, max_coordinates) });
+    crate::crs::checked_kernel!(hausdorff_distance, "geo.hausdorff_distance", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, max_coordinate_pairs: u64) -> (Option<f64>, ExtendedError),
+        |context| {  super::hausdorff_distance(left, right, max_coordinate_pairs) });
+    crate::crs::checked_kernel!(hausdorff_distance_validated, "geo.hausdorff_distance", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>, max_coordinate_pairs: u64) -> (Option<f64>, ExtendedError),
+        |context| {  super::hausdorff_distance_validated(left, right, max_coordinate_pairs) });
+    crate::crs::checked_kernel!(haversine_distance_m, "geo.haversine_distance", 2,
+        (left: Point<f64>, right: Point<f64>) -> (f64, ExtendedError),
+        |context| { let ellissoide = context.ellipsoid()?; super::haversine_distance_m(left, right, &ellissoide) });
+    crate::crs::checked_kernel!(geodesic_distance_m, "geo.geodesic_distance", 2,
+        (left: Point<f64>, right: Point<f64>) -> (f64, ExtendedError),
+        |context| { let ellissoide = context.ellipsoid()?; super::geodesic_distance_m(left, right, &ellissoide) });
+    crate::crs::checked_kernel!(geodesic_line_length_m, "geo.geodesic_line_length", 1,
+        (line: &geo::LineString<f64>) -> (f64, ExtendedError),
+        |context| { let ellissoide = context.ellipsoid()?; super::geodesic_line_length_m(line, &ellissoide) });
 }

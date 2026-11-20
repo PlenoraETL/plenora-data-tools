@@ -1,7 +1,9 @@
 use geo::{
     Geometry, GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon, Simplify,
 };
-use plenora_kernels_geo::{construction::geometry_from_wkt, operations};
+use plenora_kernels_geo::construction::with_crs::geometry_from_wkt;
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::operations;
 
 fn linee_a_scale_diverse() -> Geometry<f64> {
     Geometry::MultiLineString(MultiLineString(vec![
@@ -13,11 +15,25 @@ fn linee_a_scale_diverse() -> Geometry<f64> {
 fn rifiuto_numerico(geometry: &Geometry<f64>, tolerance: f64, vertici: u64) {
     // Il contatore pubblico esegue ensure_valid prima di contare.
     assert_eq!(
-        (operations::vertex_count(geometry)).expect("successo atteso"),
+        (operations::with_crs::vertex_count(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            geometry
+        )
+        .map_err(kernel_error_fixture))
+        .expect("successo atteso"),
         vertici
     );
     assert!(matches!(
-        operations::simplify(geometry, tolerance),
+        operations::with_crs::simplify(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            geometry,
+            tolerance
+        )
+        .map_err(kernel_error_fixture),
         Err(operations::OperationError::Internal(
             "semplificazione: distanza non rappresentabile"
         ))
@@ -77,7 +93,14 @@ fn simplify_poligoni_a_scale_diverse_con_coordinate_finite() {
 
 #[test]
 fn simplify_wkt_finito_attraversa_parser_e_validazione() {
-    let geometry = geometry_from_wkt("MULTILINESTRING((0 0,0 1e-200,1e-200 0),(1 1,2 2))").unwrap();
+    let geometry = geometry_from_wkt(
+        CrsContext::new(&[
+            &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+        ]),
+        "MULTILINESTRING((0 0,0 1e-200,1e-200 0),(1 1,2 2))",
+    )
+    .map_err(kernel_error_fixture)
+    .unwrap();
     rifiuto_numerico(&geometry, 1.0, 5);
 }
 
@@ -93,7 +116,18 @@ fn simplify_collezione_non_restituisce_componenti_parziali() {
 #[test]
 fn simplify_tolleranza_zero_non_calcola_distanze() {
     let geometry = linee_a_scale_diverse();
-    assert_eq!(operations::simplify(&geometry, 0.0).unwrap(), geometry);
+    assert_eq!(
+        operations::with_crs::simplify(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            &geometry,
+            0.0
+        )
+        .map_err(kernel_error_fixture)
+        .unwrap(),
+        geometry
+    );
 }
 
 #[test]
@@ -104,7 +138,15 @@ fn simplify_componente_minuscola_normalizzata_resta_ammessa() {
         (1e-200, 0.0),
     ]));
     assert_eq!(
-        (operations::simplify(&geometry, 1e-220)).expect("successo atteso"),
+        (operations::with_crs::simplify(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            &geometry,
+            1e-220
+        )
+        .map_err(kernel_error_fixture))
+        .expect("successo atteso"),
         geometry
     );
 }
@@ -119,9 +161,24 @@ fn simplify_ordinario_conserva_oracolo_geo_e_spareggi() {
         );
         for tolerance in [0.0, 0.1, 1.0, 2.0, 10.0] {
             assert_eq!(
-                operations::simplify(&Geometry::LineString(line.clone()), tolerance).unwrap(),
+                operations::with_crs::simplify(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    &Geometry::LineString(line.clone()),
+                    tolerance
+                )
+                .map_err(kernel_error_fixture)
+                .unwrap(),
                 Geometry::LineString(line.simplify(tolerance)),
             );
         }
+    }
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
     }
 }

@@ -9,7 +9,7 @@ alto, di lato `cell_size`) escono solo se stanno per intero dentro il
 rettangolo. La tabella d'ingresso serve solo da innesco: né le sue colonne
 né le sue righe entrano nell'uscita.
 
-Il calcolo è `extensions2::generate_grid_rows`, che il runner chiama una
+Il calcolo è `extensions2::with_crs::generate_grid_rows`, che il runner chiama una
 volta per passo, qualunque sia l'ingresso ([Runner, «Operazioni geo»](runner.md#operazioni-geo)); il numero di
 celle calcolato a secco entra nel modello di costo del passo.
 

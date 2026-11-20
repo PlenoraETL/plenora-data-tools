@@ -25,7 +25,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1: un conteggio per riga, dal kernel `operations::vertex_count`; una
+1:1: un conteggio per riga, dal kernel `operations::with_crs::vertex_count`; una
 geometria nulla dà una cella nulla.
 
 ### Ordine

@@ -66,7 +66,7 @@ use crate::ValidazioneProtetta as _;
 ///
 /// `ConstructionError::NonFiniteCoordinate` se `lon` o `lat` e' NaN o
 /// infinita.
-pub fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, ConstructionError> {
+pub(crate) fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, ConstructionError> {
     if !lon.is_finite() {
         return Err(ConstructionError::NonFiniteCoordinate { name: "lon" });
     }
@@ -90,7 +90,7 @@ pub fn point_from_lon_lat(lon: f64, lat: f64) -> Result<Geometry<f64>, Construct
 ///   supera la validazione OGC;
 /// - `ConstructionError::ValidazioneNonConclusa`: la validazione OGC va in
 ///   panico dentro la barriera.
-pub fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError> {
+pub(crate) fn geometry_from_wkt(value: &str) -> Result<Geometry<f64>, ConstructionError> {
     const MAX_WKT_BYTES: usize = 64 * 1024 * 1024;
     if value.len() > MAX_WKT_BYTES {
         return Err(ConstructionError::InvalidWkt(
@@ -257,7 +257,7 @@ fn collect_points(
 ///   validazione OGC (per esempio tutti i punti coincidono);
 /// - `ConstructionError::ValidazioneNonConclusa`: la validazione OGC va in
 ///   panico dentro la barriera.
-pub fn line_from_ordered_points(
+pub(crate) fn line_from_ordered_points(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ConstructionError> {
     let points = collect_points(geometries)?;
@@ -291,7 +291,7 @@ pub fn line_from_ordered_points(
 ///   la validazione OGC (es. auto-intersezione, punti collineari);
 /// - `ConstructionError::ValidazioneNonConclusa`: la validazione OGC va in
 ///   panico dentro la barriera.
-pub fn polygon_from_ordered_points(
+pub(crate) fn polygon_from_ordered_points(
     geometries: &[Option<Geometry<f64>>],
 ) -> Result<Option<Geometry<f64>>, ConstructionError> {
     let points = collect_points(geometries)?;
@@ -434,4 +434,22 @@ mod tests {
             ));
         }
     }
+}
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{ConstructionError, Geometry};
+
+    crate::crs::checked_kernel!(point_from_lon_lat, "geo.from_coords", 1,
+        (lon: f64, lat: f64) -> (Geometry<f64>, ConstructionError),
+        |context| {  super::point_from_lon_lat(lon, lat) });
+    crate::crs::checked_kernel!(geometry_from_wkt, "geo.from_wkt", 1,
+        (value: &str) -> (Geometry<f64>, ConstructionError),
+        |context| {  super::geometry_from_wkt(value) });
+    crate::crs::checked_kernel!(line_from_ordered_points, "geo.line_builder", 1,
+        (geometries: &[Option<Geometry<f64>>]) -> (Option<Geometry<f64>>, ConstructionError),
+        |context| {  super::line_from_ordered_points(geometries) });
+    crate::crs::checked_kernel!(polygon_from_ordered_points, "geo.polygon_builder", 1,
+        (geometries: &[Option<Geometry<f64>>]) -> (Option<Geometry<f64>>, ConstructionError),
+        |context| {  super::polygon_from_ordered_points(geometries) });
 }

@@ -28,7 +28,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1: il runner chiama il kernel (`extended::translate`) su ogni cella non
+1:1: il runner chiama il kernel (`extended::with_crs::translate`) su ogni cella non
 nulla, in parallelo, e rimette la geometria al suo posto; una cella
 nulla resta nulla ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
@@ -56,7 +56,7 @@ fuori dal dominio di validità del CRS della colonna, `Schema` per una
 geometria di un tipo che il contratto d'ingresso non dichiara, quando li
 dichiara con un elenco ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
-Poi il kernel (`extended::translate`) rende `ExtendedError`, che il
+Poi il kernel (`extended::with_crs::translate`) rende `ExtendedError`, che il
 runner porta in `Internal` per `ValidazioneNonConclusa` e
 `CalcoloNonConcluso`, in `InvalidPlan` per le altre: `InvalidInput`
 (coordinate non finite o geometria non valida OGC), `InvalidOutput`

@@ -44,7 +44,6 @@ use plenora_core::crs::ResolvedCrs;
 use plenora_core::limits::Limits;
 use plenora_core::{PlenoraError, Result};
 use plenora_kernels_geo::arrow_adapter::{batch_geometry_cells, map_nullable};
-use plenora_kernels_geo::geodetica::EllissoideGeodetico;
 use plenora_kernels_geo::margine::MargineMemoria;
 use plenora_kernels_geo::rust_backend::precision::Precision;
 use serde::de::DeserializeOwned;
@@ -95,14 +94,6 @@ impl Lato {
     /// colonna: 1 cm a terra.
     fn precisione(&self) -> Result<Precision> {
         Precision::from_crs(&self.crs).map_err(PlenoraError::from)
-    }
-
-    /// L'ellissoide del datum del CRS della colonna, per le misure
-    /// geodetiche: `Crs` (`ELLIPSOID_REQUIRED`) se il CRS non lo porta
-    /// (l'analisi lo ha gia' chiesto: qui e' una seconda difesa).
-    fn ellissoide(&self, op: &str) -> Result<EllissoideGeodetico> {
-        EllissoideGeodetico::da_crs(&self.crs)
-            .map_err(|errore| PlenoraError::from(errore).con_contesto(op))
     }
 
     /// Dominio di validita' e tipi dichiarati di ogni cella non-null, dopo la
@@ -338,7 +329,9 @@ impl PassoGeo {
             KernelUnario::prepara(op, valore, &lati, ingressi, uscita, righe)?
         {
             Kernel::Unario(Box::new(unario))
-        } else if let Some(collettivo) = KernelCollettivo::prepara(op, valore, &lati, ingressi)? {
+        } else if let Some(collettivo) =
+            KernelCollettivo::prepara(op, valore, &lati, ingressi, uscita)?
+        {
             Kernel::Collettivo(Box::new(collettivo), righe)
         } else if let Some(binario) = KernelBinario::prepara(op, valore, &lati, limiti)? {
             Kernel::Binario(Box::new(binario), righe)

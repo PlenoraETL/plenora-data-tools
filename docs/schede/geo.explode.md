@@ -35,7 +35,7 @@ assente o `unresolved` resta tale.
 ### Righe
 
 Espansione 1:N: da 0 righe per madre (un multi o una collezione vuoti) a
-una per parte. Il kernel (`operations::explode`) lavora su una geometria
+una per parte. Il kernel (`operations::with_crs::explode`) lavora su una geometria
 alla volta; il runner lo chiama su ogni cella non nulla e ripete sulle
 parti le altre colonne della madre. Una cella nulla non produce righe.
 `__parent_index` è la posizione della madre nella tabella d'ingresso del

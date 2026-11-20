@@ -28,7 +28,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 ### Righe
 
 1:1: un perimetro per riga; una geometria nulla dà una cella nulla. Il
-runner chiama `operations::length`, di cui il kernel `operations::perimeter`
+runner chiama `operations::with_crs::length`, di cui il kernel `operations::with_crs::perimeter`
 è un alias: stessa semantica, stessi errori.
 
 ### Ordine

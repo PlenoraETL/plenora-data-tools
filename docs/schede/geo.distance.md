@@ -33,7 +33,7 @@ proprietà del contratto (`sorted_by`, `row_count`) passano invariati.
 
 ### Righe
 
-1:1: una distanza per riga, dal kernel `operations::distance` (riga,
+1:1: una distanza per riga, dal kernel `operations::with_crs::distance` (riga,
 `other_wkb`). Una geometria nulla dà una distanza nulla; una geometria
 vuota, da una parte o dall'altra, anche: il kernel non ha una distanza da
 rendere.

@@ -43,7 +43,7 @@ contratto (`sorted_by`, `row_count`) restano.
 
 ### Righe
 
-1:1: un referto per riga. Il kernel (`extended_algorithms::geometry_diagnostics`)
+1:1: un referto per riga. Il kernel (`extended_algorithms::with_crs::geometry_diagnostics`)
 descrive una geometria alla volta. Una geometria nulla dà dieci celle
 nulle. Il runner verifica solo la struttura WKB e il dominio del CRS, non
 la validità OGC: una geometria non valida si descrive, non si rifiuta.

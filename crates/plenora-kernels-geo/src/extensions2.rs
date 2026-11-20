@@ -263,7 +263,7 @@ fn hex_centers(
 ///   [`MAX_GRID_CELLS`].
 /// - `ExtensionError::IndexOverflow`: il numero di celle non e'
 ///   rappresentabile come `u64`.
-pub fn grid_cell_count(
+pub(crate) fn grid_cell_count(
     extent: &GridExtent,
     cell_size: f64,
     shape: GridShape,
@@ -335,7 +335,7 @@ fn hex_cell(cell_i: u64, cell_j: u64, cx: f64, cy: f64, cell_size: f64) -> GridC
 ///   (verificato prima dell'allocazione).
 /// - `ExtensionError::IndexOverflow`: il numero di celle per asse non
 ///   e' rappresentabile come `u64`.
-pub fn generate_grid(
+pub(crate) fn generate_grid(
     extent: &GridExtent,
     cell_size: f64,
     shape: GridShape,
@@ -392,7 +392,7 @@ fn grid_error(error: &ExtensionError) -> PlenoraError {
 /// con prefisso `geo.generate_grid:`);
 /// `PlenoraError::ResourceLimit` per una cella oltre il limite di byte per
 /// cella (anche l'unico modo in cui la codifica WKB fallisce).
-pub fn generate_grid_rows(
+pub(crate) fn generate_grid_rows(
     extent: &GridExtent,
     cell_size: f64,
     shape: GridShape,
@@ -607,7 +607,7 @@ fn subdivide_validated(
 /// - `ExtensionError::ValidazioneNonConclusa`,
 ///   `ExtensionError::CalcoloNonConcluso`: una validazione OGC che non
 ///   conclude o un panico di `geo`/`i_overlay` (interni).
-pub fn subdivide(
+pub(crate) fn subdivide(
     geometry: &Geometry<f64>,
     max_vertices: usize,
     precision: Precision,
@@ -636,7 +636,7 @@ fn subdivide_error(error: &ExtensionError) -> PlenoraError {
 /// `InvalidPlan` per un WKB malformato o OGC-invalido, `Unsupported` per
 /// dimensioni Z/M o SRID, `ResourceLimit` per una cella oltre il limite di
 /// byte.
-pub fn subdivide_wkb(
+pub(crate) fn subdivide_wkb(
     payload: &[u8],
     max_vertices: usize,
     precision: Precision,
@@ -710,7 +710,7 @@ fn snap_validated(
 /// - `ExtensionError::ValidazioneNonConclusa`,
 ///   `ExtensionError::CalcoloNonConcluso`: una validazione OGC che non
 ///   conclude o un panico nell'R-tree o in `geo` (interni).
-pub fn snap(
+pub(crate) fn snap(
     geometry: &Geometry<f64>,
     reference: &Geometry<f64>,
     tolerance: f64,
@@ -742,7 +742,7 @@ fn snap_error(error: &ExtensionError) -> PlenoraError {
 /// `PlenoraError::ResourceLimit` per una cella oltre il limite di byte;
 /// `PlenoraError::Internal` per un panico o una validazione che non
 /// conclude. Vince la prima cella che fallisce in ordine di riga.
-pub fn snap_column(
+pub(crate) fn snap_column(
     cells: &BinaryArray,
     reference: &Geometry<f64>,
     tolerance: f64,
@@ -1393,4 +1393,35 @@ mod tests {
             Geometry::Point(Point::new(50.0, 50.0))
         );
     }
+}
+
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{
+        BinaryArray, ExtensionError, Geometry, GridCell, GridExtent, GridRow, GridShape,
+        PlenoraError,
+    };
+
+    crate::crs::checked_kernel!(grid_cell_count, "geo.generate_grid", 1,
+        (extent: &GridExtent, cell_size: f64, shape: GridShape) -> (u64, ExtensionError),
+        |context| {  super::grid_cell_count(extent, cell_size, shape) });
+    crate::crs::checked_kernel!(generate_grid, "geo.generate_grid", 1,
+        (extent: &GridExtent, cell_size: f64, shape: GridShape) -> (Vec<GridCell>, ExtensionError),
+        |context| {  super::generate_grid(extent, cell_size, shape) });
+    crate::crs::checked_kernel!(generate_grid_rows, "geo.generate_grid", 1,
+        (extent: &GridExtent, cell_size: f64, shape: GridShape) -> (Vec<GridRow>, PlenoraError),
+        |context| {  super::generate_grid_rows(extent, cell_size, shape) });
+    crate::crs::checked_kernel!(subdivide, "geo.subdivide", 1,
+        (geometry: &Geometry<f64>, max_vertices: usize) -> (Vec<Geometry<f64>>, ExtensionError),
+        |context| { let precision = context.precision()?; super::subdivide(geometry, max_vertices, precision) });
+    crate::crs::checked_kernel!(subdivide_wkb, "geo.subdivide", 1,
+        (payload: &[u8], max_vertices: usize) -> (Vec<Vec<u8>>, PlenoraError),
+        |context| { let precision = context.precision()?; super::subdivide_wkb(payload, max_vertices, precision) });
+    crate::crs::checked_kernel!(snap, "geo.snap", 2,
+        (geometry: &Geometry<f64>, reference: &Geometry<f64>, tolerance: f64) -> (Geometry<f64>, ExtensionError),
+        |context| {  super::snap(geometry, reference, tolerance) });
+    crate::crs::checked_kernel!(snap_column, "geo.snap", 2,
+        (cells: &BinaryArray, reference: &Geometry<f64>, tolerance: f64) -> (Vec<Option<Vec<u8>>>, PlenoraError),
+        |context| {  super::snap_column(cells, reference, tolerance) });
 }

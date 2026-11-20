@@ -151,7 +151,7 @@ fn classifica_cella(esito: crate::EsitoValidazione) -> AdvancedError {
 ///   in panico;
 /// - `InvalidOutput`: una cella prodotta non supera la validazione OGC;
 /// - `UnmatchedPoint`: nessuna cella interseca un punto d'ingresso.
-pub fn voronoi_cells(
+pub(crate) fn voronoi_cells(
     geometries: &[Geometry<f64>],
     max_points: usize,
     precision: Precision,
@@ -1841,4 +1841,14 @@ mod tests {
             }
         }
     }
+}
+
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{AdvancedError, Geometry};
+
+    crate::crs::checked_kernel!(voronoi_cells, "geo.voronoi", 1,
+        (geometries: &[Geometry<f64>], max_points: usize) -> (Vec<Geometry<f64>>, AdvancedError),
+        |context| { let precision = context.precision()?; super::voronoi_cells(geometries, max_points, precision) });
 }

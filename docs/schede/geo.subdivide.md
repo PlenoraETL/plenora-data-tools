@@ -8,7 +8,7 @@ lungo, finché ogni pezzo sta sotto la soglia; linee e `MultiPoint` si
 dividono a blocchi. Una geometria sotto la soglia passa invariata, in una
 riga sola.
 
-Il calcolo per cella è `extensions2::subdivide_wkb`; il runner lo chiama
+Il calcolo per cella è `extensions2::with_crs::subdivide_wkb`; il runner lo chiama
 su ogni cella non nulla, con la precisione del CRS della colonna, e scrive
 l'indice della riga d'origine.
 

@@ -140,7 +140,7 @@ fn validate_output(geometry: Geometry<f64>) -> Result<Geometry<f64>, OperationEr
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
 ///   calcolo di `geo` vanno in panico dentro la barriera.
-pub fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
+pub(crate) fn area(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
     protetto(|| geometry.unsigned_area())
 }
@@ -161,7 +161,7 @@ fn protetto<T>(calcolo: impl FnOnce() -> T) -> Result<T, OperationError> {
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
 ///   calcolo di `geo` vanno in panico dentro la barriera.
-pub fn length(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
+pub(crate) fn length(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     ensure_valid(geometry)?;
     protetto(|| length_unchecked(geometry))
 }
@@ -197,7 +197,7 @@ fn length_unchecked(geometry: &Geometry<f64>) -> f64 {
 /// # Errors
 ///
 /// Come [`length`].
-pub fn perimeter(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
+pub(crate) fn perimeter(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
     length(geometry)
 }
 
@@ -210,7 +210,7 @@ pub fn perimeter(geometry: &Geometry<f64>) -> Result<f64, OperationError> {
 /// - `InvalidInput`: una delle due geometrie non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
 ///   calcolo di `geo` vanno in panico dentro la barriera.
-pub fn distance(
+pub(crate) fn distance(
     left: &Geometry<f64>,
     right: &Geometry<f64>,
 ) -> Result<Option<f64>, OperationError> {
@@ -231,7 +231,7 @@ pub fn distance(
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
 ///   barriera.
-pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationError> {
+pub(crate) fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationError> {
     ensure_valid(geometry)?;
     Ok(geometry.bounding_rect().map(|rect| {
         let min = rect.min();
@@ -250,7 +250,7 @@ pub fn bounds(geometry: &Geometry<f64>) -> Result<Option<[f64; 4]>, OperationErr
 ///   barriera.
 /// - `Internal`: invariante interna violata (`usize` non rappresentabile in
 ///   `u64`; mai sui target supportati).
-pub fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
+pub(crate) fn vertex_count(geometry: &Geometry<f64>) -> Result<u64, OperationError> {
     ensure_valid(geometry)?;
     u64::try_from(geometry.coords_count())
         .map_err(|_| OperationError::Internal("usize always fits in u64 on supported targets"))
@@ -302,7 +302,9 @@ fn is_negative_zero(value: f64) -> bool {
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
 ///   calcolo di `geo` vanno in panico dentro la barriera.
-pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>>, OperationError> {
+pub(crate) fn point_on_surface(
+    geometry: &Geometry<f64>,
+) -> Result<Option<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
 
     // Con `-0.0` e `0.0` presenti insieme la sweep line di `interior_point`
@@ -343,7 +345,7 @@ pub fn point_on_surface(geometry: &Geometry<f64>) -> Result<Option<Geometry<f64>
 ///   barriera.
 /// - `WktSerialization`: l'encoder ha rifiutato la geometria (es. anello
 ///   interno orfano) — testo statico, nessun dettaglio della dipendenza.
-pub fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError> {
+pub(crate) fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError> {
     ensure_valid(geometry)?;
     geometry
         .try_wkt_string()
@@ -356,7 +358,7 @@ pub fn to_wkt(geometry: &Geometry<f64>) -> Result<String, OperationError> {
 /// # Errors
 ///
 /// Come [`buffer_with_cap`].
-pub fn buffer(
+pub(crate) fn buffer(
     geometry: &Geometry<f64>,
     distance: f64,
     precision: Precision,
@@ -389,7 +391,7 @@ pub fn buffer(
 /// - `InvalidOutput`: la geometria prodotta non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
 ///   calcolo di `geo` vanno in panico dentro la barriera.
-pub fn buffer_with_cap(
+pub(crate) fn buffer_with_cap(
     geometry: &Geometry<f64>,
     distance: f64,
     cap_style: BufferCapStyle,
@@ -417,7 +419,7 @@ pub fn buffer_with_cap(
 ///
 /// Come [`buffer_with_cap`]; in piu' `MargineMemoria` se il buffer non
 /// starebbe nel margine.
-pub fn buffer_with_cap_con_margine(
+pub(crate) fn buffer_with_cap_con_margine(
     geometry: &Geometry<f64>,
     distance: f64,
     cap_style: BufferCapStyle,
@@ -461,7 +463,10 @@ fn verifica_indici_simplify(coordinates: usize) -> Result<(), OperationError> {
 /// # Errors
 ///
 /// Come [`simplify_with_policy`].
-pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64>, OperationError> {
+pub(crate) fn simplify(
+    geometry: &Geometry<f64>,
+    tolerance: f64,
+) -> Result<Geometry<f64>, OperationError> {
     simplify_with_policy(geometry, tolerance, SimplifyPolicy::DouglasPeucker)
 }
 
@@ -495,7 +500,7 @@ pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64
 ///   rappresentabile; nessun risultato parziale viene restituito;
 /// - `ValidazioneNonConclusa`, `CalcoloNonConcluso`: la validazione OGC o il
 ///   calcolo di `geo` vanno in panico dentro la barriera.
-pub fn simplify_with_policy(
+pub(crate) fn simplify_with_policy(
     geometry: &Geometry<f64>,
     tolerance: f64,
     policy: SimplifyPolicy,
@@ -613,7 +618,7 @@ pub fn simplify_with_policy(
 /// - `InvalidInput`: la geometria di input non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
 ///   barriera.
-pub fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, OperationError> {
+pub(crate) fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, OperationError> {
     ensure_valid(geometry)?;
     Ok(match geometry {
         Geometry::MultiPoint(values) => values.iter().copied().map(Geometry::Point).collect(),
@@ -639,7 +644,7 @@ pub fn explode(geometry: &Geometry<f64>) -> Result<Vec<Geometry<f64>>, Operation
 /// - `InvalidOutput`: il boundary prodotto non supera la validazione OGC;
 /// - `ValidazioneNonConclusa`: la validazione OGC va in panico dentro la
 ///   barriera.
-pub fn boundary(geometry: &Geometry<f64>) -> Result<Geometry<f64>, OperationError> {
+pub(crate) fn boundary(geometry: &Geometry<f64>) -> Result<Geometry<f64>, OperationError> {
     ensure_valid(geometry)?;
     let output = boundary_unchecked(geometry);
     validate_output(output)
@@ -1494,4 +1499,56 @@ mod tests {
             prop_assert!(geometry.contains(&interior));
         }
     }
+}
+
+/// Ingressi pubblici con requisito CRS verificato; coordinate planari solo
+/// con consenso esplicito su SR geografico. Vedi [`crate::crs::CrsContext`].
+pub mod with_crs {
+    use super::{BufferCapStyle, Geometry, MargineMemoria, OperationError, SimplifyPolicy};
+
+    crate::crs::checked_kernel!(area, "geo.area", 1,
+        (geometry: &Geometry<f64>) -> (f64, OperationError),
+        |context| {  super::area(geometry) });
+    crate::crs::checked_kernel!(length, "geo.length", 1,
+        (geometry: &Geometry<f64>) -> (f64, OperationError),
+        |context| {  super::length(geometry) });
+    crate::crs::checked_kernel!(perimeter, "geo.perimeter", 1,
+        (geometry: &Geometry<f64>) -> (f64, OperationError),
+        |context| {  super::perimeter(geometry) });
+    crate::crs::checked_kernel!(distance, "geo.distance", 2,
+        (left: &Geometry<f64>, right: &Geometry<f64>) -> (Option<f64>, OperationError),
+        |context| {  super::distance(left, right) });
+    crate::crs::checked_kernel!(bounds, "geo.bounds_extractor", 1,
+        (geometry: &Geometry<f64>) -> (Option<[f64; 4]>, OperationError),
+        |context| {  super::bounds(geometry) });
+    crate::crs::checked_kernel!(vertex_count, "geo.vertex_count", 1,
+        (geometry: &Geometry<f64>) -> (u64, OperationError),
+        |context| {  super::vertex_count(geometry) });
+    crate::crs::checked_kernel!(point_on_surface, "geo.point_on_surface", 1,
+        (geometry: &Geometry<f64>) -> (Option<Geometry<f64>>, OperationError),
+        |context| {  super::point_on_surface(geometry) });
+    crate::crs::checked_kernel!(to_wkt, "geo.to_wkt", 1,
+        (geometry: &Geometry<f64>) -> (String, OperationError),
+        |context| {  super::to_wkt(geometry) });
+    crate::crs::checked_kernel!(buffer, "geo.buffer", 1,
+        (geometry: &Geometry<f64>, distance: f64) -> (Geometry<f64>, OperationError),
+        |context| { let precision = context.precision()?; super::buffer(geometry, distance, precision) });
+    crate::crs::checked_kernel!(buffer_with_cap, "geo.buffer", 1,
+        (geometry: &Geometry<f64>, distance: f64, cap_style: BufferCapStyle) -> (Geometry<f64>, OperationError),
+        |context| { let precision = context.precision()?; super::buffer_with_cap(geometry, distance, cap_style, precision) });
+    crate::crs::checked_kernel!(buffer_with_cap_con_margine, "geo.buffer", 1,
+        (geometry: &Geometry<f64>, distance: f64, cap_style: BufferCapStyle, margine: MargineMemoria) -> (Geometry<f64>, OperationError),
+        |context| { let precision = context.precision()?; super::buffer_with_cap_con_margine(geometry, distance, cap_style, precision, margine) });
+    crate::crs::checked_kernel!(simplify, "geo.simplify", 1,
+        (geometry: &Geometry<f64>, tolerance: f64) -> (Geometry<f64>, OperationError),
+        |context| {  super::simplify(geometry, tolerance) });
+    crate::crs::checked_kernel!(simplify_with_policy, "geo.simplify", 1,
+        (geometry: &Geometry<f64>, tolerance: f64, policy: SimplifyPolicy) -> (Geometry<f64>, OperationError),
+        |context| {  super::simplify_with_policy(geometry, tolerance, policy) });
+    crate::crs::checked_kernel!(explode, "geo.explode", 1,
+        (geometry: &Geometry<f64>) -> (Vec<Geometry<f64>>, OperationError),
+        |context| {  super::explode(geometry) });
+    crate::crs::checked_kernel!(boundary, "geo.boundary", 1,
+        (geometry: &Geometry<f64>) -> (Geometry<f64>, OperationError),
+        |context| {  super::boundary(geometry) });
 }

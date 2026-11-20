@@ -6,21 +6,44 @@
 //! piu' di quel che viene letto sarebbe accettato, e la parte in piu' scartata
 //! in silenzio.
 
-use plenora_kernels_geo::construction::{geometry_from_wkt, ConstructionError};
+use plenora_kernels_geo::construction::with_crs::geometry_from_wkt;
+use plenora_kernels_geo::construction::ConstructionError;
+use plenora_kernels_geo::crs::CrsContext;
 
 fn rifiutato(testo: &str) {
     assert!(
         matches!(
-            geometry_from_wkt(testo),
+            geometry_from_wkt(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                testo
+            )
+            .map_err(kernel_error_fixture),
             Err(ConstructionError::InvalidWkt(_))
         ),
         "{testo:?} deve essere rifiutato come WKT non valido, ottenuto {:?}",
-        geometry_from_wkt(testo)
+        geometry_from_wkt(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            testo
+        )
+        .map_err(kernel_error_fixture)
     );
 }
 
 fn accettato(testo: &str, atteso: &geo::Geometry<f64>) {
-    assert_eq!(geometry_from_wkt(testo).expect("WKT valido"), *atteso);
+    assert_eq!(
+        geometry_from_wkt(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            testo
+        )
+        .map_err(kernel_error_fixture)
+        .expect("WKT valido"),
+        *atteso
+    );
 }
 
 #[test]
@@ -132,11 +155,21 @@ fn le_dimensioni_oltre_xy_sono_rifiutate_ovunque() {
     ] {
         assert!(
             matches!(
-                geometry_from_wkt(testo),
+                geometry_from_wkt(
+                    CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                        .expect("CRS fixture metrico")]),
+                    testo
+                )
+                .map_err(kernel_error_fixture),
                 Err(ConstructionError::UnsupportedWktDimension)
             ),
             "{testo:?} deve essere rifiutato per dimensione: {:?}",
-            geometry_from_wkt(testo)
+            geometry_from_wkt(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                testo
+            )
+            .map_err(kernel_error_fixture)
         );
     }
     accettato(
@@ -146,4 +179,12 @@ fn le_dimensioni_oltre_xy_sono_rifiutate_ovunque() {
             geo::Geometry::LineString(geo::LineString::from(vec![(0.0, 0.0), (1.0, 1.0)])),
         ])),
     );
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
 }

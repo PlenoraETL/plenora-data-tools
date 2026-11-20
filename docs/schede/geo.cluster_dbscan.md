@@ -6,7 +6,7 @@ compreso) ci sono almeno `min_points` punti; i cluster sono i core
 collegati per densità più i punti di bordo che raggiungono; gli altri punti
 sono rumore ed escono con etichetta nulla. Accetta solo geometrie `Point`.
 
-La conversione di colonna è `cluster::dbscan_column`, che il runner
+La conversione di colonna è `cluster::with_crs::dbscan_column`, che il runner
 chiama su tutta la colonna e aggiunge in coda l'etichetta ([Runner, «Operazioni geo»](runner.md#operazioni-geo)).
 
 ### Parametri

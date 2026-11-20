@@ -12,8 +12,12 @@
 #![deny(clippy::disallowed_methods)]
 
 use geo::{Geometry, LineString, MultiLineString};
-use plenora_kernels_geo::extended_algorithms::{polygonize_with_limits, split_line_with_limits};
-use plenora_kernels_geo::predicates::{relate_matrix_with_limits, PredicateError, RelateLimits};
+use plenora_kernels_geo::crs::CrsContext;
+use plenora_kernels_geo::extended_algorithms::with_crs::polygonize_with_limits;
+use plenora_kernels_geo::extended_algorithms::with_crs::split_line_with_limits;
+use plenora_kernels_geo::predicates::with_crs::relate_matrix_with_limits;
+use plenora_kernels_geo::predicates::PredicateError;
+use plenora_kernels_geo::predicates::RelateLimits;
 use std::alloc::System;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracking_allocator::{
@@ -168,7 +172,9 @@ fn extreme_linework(extent: f64) -> Vec<LineString<f64>> {
 
 #[test]
 #[deny(clippy::disallowed_methods)]
+#[allow(clippy::too_many_lines)] // Matrice degli oracoli con contesti CRS espliciti.
 fn real_heap_certification() {
+    let _ = crs_fixture_metrico();
     AllocationRegistry::set_global_tracker(HeapProbe).expect("unico tracker");
     AllocationRegistry::enable_tracking();
     let bytes = std::mem::size_of::<RelateLimits>();
@@ -214,13 +220,34 @@ fn real_heap_certification() {
         let linework = Geometry::MultiLineString(MultiLineString(lines));
         let operand = Geometry::LineString(source.clone());
         certify(name, "relate", |limits| {
-            relate_matrix_with_limits(&operand, &linework, limits, None)
+            relate_matrix_with_limits(
+                CrsContext::new(&[crs_fixture_metrico(); 2]),
+                &operand,
+                &linework,
+                limits,
+                None,
+            )
+            .map_err(kernel_error_fixture)
         });
         certify(name, "split", |limits| {
-            split_line_with_limits(&source, &linework, limits, None)
+            split_line_with_limits(
+                CrsContext::new(&[crs_fixture_metrico(); 2]),
+                &source,
+                &linework,
+                limits,
+                None,
+            )
+            .map_err(kernel_error_fixture)
         });
         certify(name, "polygonize", |limits| {
-            polygonize_with_limits(&linework, limits, None)
+            polygonize_with_limits(
+                CrsContext::new(&[&plenora_core::crs::resolve_crs("EPSG:3857", "crs")
+                    .expect("CRS fixture metrico")]),
+                &linework,
+                limits,
+                None,
+            )
+            .map_err(kernel_error_fixture)
         });
     }
     let source = segment((0.0, 0.0), (1.0, 0.0));
@@ -233,12 +260,48 @@ fn real_heap_certification() {
     let linework = Geometry::MultiLineString(MultiLineString(lines));
     let operand = Geometry::LineString(source.clone());
     certify("sparso4096", "relate", |limits| {
-        relate_matrix_with_limits(&operand, &linework, limits, None)
+        relate_matrix_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
+            &operand,
+            &linework,
+            limits,
+            None,
+        )
+        .map_err(kernel_error_fixture)
     });
     certify("sparso4096", "split", |limits| {
-        split_line_with_limits(&source, &linework, limits, None)
+        split_line_with_limits(
+            CrsContext::new(&[crs_fixture_metrico(); 2]),
+            &source,
+            &linework,
+            limits,
+            None,
+        )
+        .map_err(kernel_error_fixture)
     });
     certify("sparso4096", "polygonize", |limits| {
-        polygonize_with_limits(&linework, limits, None)
+        polygonize_with_limits(
+            CrsContext::new(&[
+                &plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture metrico")
+            ]),
+            &linework,
+            limits,
+            None,
+        )
+        .map_err(kernel_error_fixture)
     });
+}
+
+// Un rifiuto CRS inatteso deve far fallire la fixture, senza mascherare l'oracolo del kernel.
+fn kernel_error_fixture<E>(error: plenora_kernels_geo::crs::DirectError<E>) -> E {
+    match error {
+        plenora_kernels_geo::crs::DirectError::Kernel(error) => error,
+        plenora_kernels_geo::crs::DirectError::Crs(_) => panic!("CRS della fixture rifiutato"),
+    }
+}
+
+// SR esplicito e stabile delle coordinate di questa fixture.
+fn crs_fixture_metrico() -> &'static plenora_core::crs::ResolvedCrs {
+    static CRS: std::sync::OnceLock<plenora_core::crs::ResolvedCrs> = std::sync::OnceLock::new();
+    CRS.get_or_init(|| plenora_core::crs::resolve_crs("EPSG:3857", "crs").expect("CRS fixture"))
 }

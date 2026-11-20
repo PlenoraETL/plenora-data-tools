@@ -34,7 +34,11 @@ use std::cmp::Ordering;
 /// nodi o prenotazioni, allocazione fallita, cancellazione e deadline.
 /// `CalcoloNonConcluso` per splitter Line/Rect/Triangle non supportati;
 /// `InvalidRoundedTopology` se la pubblicazione altera la topologia.
-pub fn split_line_with_limits(
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "La visibilita' impedisce riesportazioni accidentali senza CRS"
+)]
+pub(crate) fn split_line_with_limits(
     source: &LineString<f64>,
     splitter: &Geometry<f64>,
     limits: RelateLimits,
@@ -398,3 +402,12 @@ fn certify_paths(
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests;
+
+/// Ingressi con CRS verificato e consenso planare esplicito.
+pub mod with_crs {
+    use super::{Geometry, LineString, PredicateError, RelateLimits};
+
+    crate::crs::checked_kernel!(split_line_with_limits, "geo.split", 2,
+        (source: &LineString<f64>, splitter: &Geometry<f64>, limits: RelateLimits, cancelled: Option<&std::sync::atomic::AtomicBool>) -> (Vec<LineString<f64>>, PredicateError),
+        |context| {  super::split_line_with_limits(source, splitter, limits, cancelled) });
+}
