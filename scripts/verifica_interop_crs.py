@@ -183,11 +183,14 @@ def main():
     parser.add_argument("--io-tools", type=Path, required=True)
     parser.add_argument("--data-tools", type=Path, required=True)
     parser.add_argument("--lavoro", type=Path, required=True)
+    parser.add_argument("--pin", type=Path, required=True)
     args = parser.parse_args()
     args.lavoro.mkdir(parents=True, exist_ok=False)
     rapporto = {"cella": "data-crs-definizione", "stato": "fallito", "casi": [],
                 "pyarrow": pa.__version__}
     try:
+        import strict_json
+        rapporto["io_release"] = strict_json.loads(args.pin.read_text("utf-8"))
         rapporto["binari"] = {nome: {"sha256": sha256(p), "versione": esegui([p, "--version"])}
                               for nome, p in (("io", args.io_tools), ("data", args.data_tools))}
         paths = ("scripts/verifica_interop_crs.py", "scripts/campagna.py",

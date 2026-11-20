@@ -220,8 +220,16 @@ collegamenti dei runner. Soglie, pin storici e oracoli indipendenti non si
 rigenerano dall'output del prodotto.
 
 `interop.yml` esegue su richiesta (`workflow_dispatch`) le sonde CRS e multigeometria contro il
-produttore IO storico fissato nella provenienza della fixture: verifica
-la compatibilita' con quel produttore, non con tutte le release IO.
+produttore IO dell'ultima release stabile pubblicata (`releases/latest`).
+La risoluzione avviene una sola volta per corsa: tag e SHA del commit
+(tag annotati dereferenziati) sono salvati in `target/interop-pin.json`
+e nei rapporti; il checkout usa soltanto lo SHA. Non si usa un branch mobile.
+La catena multigeometria genera un ingresso Arrow indipendente e lo fa
+scrivere dalla IO corrente prima di passarlo a data. Le fixture storiche
+restano soltanto vettori del contratto attuale (primaria, metadati per
+colonna e rifiuto di CRS ridotti), non una promessa di retrocompatibilita'.
+Il controllo YAML/contesti e i self-test del risolutore girano nelle PR
+tramite `scripts/esegui_guardie.py`, senza scaricare o compilare IO.
 I rapporti restano artefatti anche in caso di fallimento; ogni catena CRS
 indipendente viene tentata, mentre un passo dipendente senza ingresso e'
 dichiarato bloccato.
