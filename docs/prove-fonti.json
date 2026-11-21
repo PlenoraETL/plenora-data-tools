@@ -2226,6 +2226,11 @@
       "boolean_area_identities_hold_for_generated_rectangles"
     ],
     "crates/plenora-kernels-geo/src/triangolazione/bounded.rs": [
+      "raw_cell_convex_profile_deterministic_corpus",
+      "clipping_grid_matches_backend_unintersected_vertices",
+      "clipping_grid_roundtrip_outside_float_bounds_and_scale_cap",
+      "clipping_grid_thresholds_and_interruptions",
+      "clipping_grid_rejects_outside_domain_before_casts",
       "clipping_exact_fractional_vertices",
       "clipping_exact_area_partition_and_winding",
       "clipping_rejects_nonconvex_repeated_and_nonfinite_rings",

@@ -380,13 +380,13 @@ fn costruisci_celle(
     protetto(|| celle_da_spade(&coordinate, precision))?
 }
 
-// Il corpo ricopia `build_raw_voronoi_cells` di `geo` riga per riga: spezzarlo
-// renderebbe piu' difficile il confronto con il sorgente.
+// Costruzione grezza separata dal clipping per qualificare entrambi i passaggi
+// contro la baseline congelata, senza duplicare la costruzione delle celle.
 #[allow(clippy::too_many_lines)]
-fn celle_da_spade(
+pub(crate) fn celle_grezze_da_spade(
     coordinate: &[Coord<f64>],
     precision: Precision,
-) -> Result<Vec<Polygon<f64>>, AdvancedError> {
+) -> Result<(Vec<Polygon<f64>>, Rect<f64>), AdvancedError> {
     let costruita =
         crate::triangolazione::triangola(coordinate).map_err(|errore| match errore {
             crate::triangolazione::ErroreTriangolazione::Inserimento(inserimento) => {
@@ -557,8 +557,16 @@ fn celle_da_spade(
         return Err(AdvancedError::PrecisionInsufficient);
     }
 
+    Ok((raw_cells, padded))
+}
+
+fn celle_da_spade(
+    coordinate: &[Coord<f64>],
+    precision: Precision,
+) -> Result<Vec<Polygon<f64>>, AdvancedError> {
+    let (raw_cells, padded) = celle_grezze_da_spade(coordinate, precision)?;
     // Ritaglio `VoronoiClip::Padded`, come `voronoi_cells_with_params`.
-    let clip_poly: Polygon<f64> = padded_bounds(base_bounds, 0.5).to_polygon();
+    let clip_poly: Polygon<f64> = padded.to_polygon();
     let clip_rect = clip_poly.bounding_rect();
 
     let mut celle = Vec::with_capacity(raw_cells.len());

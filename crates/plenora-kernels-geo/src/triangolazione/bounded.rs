@@ -127,6 +127,142 @@ mod clipping {
         Resource(#[from] PredicateError),
     }
 
+    /// Trasformazione della griglia conservativa i64 storica. Non esegue
+    /// noding, agganci o pulizia degli anelli: questi restano da qualificare.
+    pub struct Grid {
+        bounds: Rect<f64>,
+        center: Coord<f64>,
+        scale: f64,
+        step: f64,
+        integer_min: [i64; 2],
+        integer_max: [i64; 2],
+    }
+
+    impl Grid {
+        pub fn new(
+            coordinates: &[Coord<f64>],
+            envelope: Rect<f64>,
+            work: &mut Work<'_>,
+        ) -> Result<Self, ClipError> {
+            work.step()?;
+            let mut min = envelope.min();
+            let mut max = envelope.max();
+            let valid = |p: Coord<f64>| {
+                [p.x, p.y]
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 2_f64.powi(500))
+            };
+            if !valid(min) || !valid(max) || min.x >= max.x || min.y >= max.y {
+                return Err(ClipError::InvalidEnvelope);
+            }
+            for &point in coordinates {
+                work.step()?;
+                if !valid(point) {
+                    return Err(ClipError::UnsupportedRing);
+                }
+                min.x = min.x.min(point.x);
+                min.y = min.y.min(point.y);
+                max.x = max.x.max(point.x);
+                max.y = max.y.max(point.y);
+            }
+            let bounds = Rect::new(min, max);
+            // Stesse operazioni del backend: midpoint e mul_add cambiano i bit.
+            #[allow(clippy::manual_midpoint)]
+            let center = Coord {
+                x: (min.x + max.x) * 0.5,
+                y: (min.y + max.y) * 0.5,
+            };
+            let step = crate::rust_backend::griglia::passo_griglia(bounds)
+                .filter(|step| *step > 0.0 && step.is_finite())
+                .ok_or(ClipError::InvalidEnvelope)?;
+            let scale = 1.0 / step;
+            let integer_min = [
+                Self::integer(((min.x - center.x) * scale).floor())?,
+                Self::integer(((min.y - center.y) * scale).floor())?,
+            ];
+            let integer_max = [
+                Self::integer(((max.x - center.x) * scale).ceil())?,
+                Self::integer(((max.y - center.y) * scale).ceil())?,
+            ];
+            Ok(Self {
+                bounds,
+                center,
+                scale,
+                step,
+                integer_min,
+                integer_max,
+            })
+        }
+
+        // Valore gia arrotondato a intero; conversione non saturante.
+        #[allow(clippy::cast_possible_truncation)]
+        fn integer(value: f64) -> Result<i64, ClipError> {
+            if !value.is_finite() || value.abs() > 2_f64.powi(61) {
+                return Err(ClipError::UnsupportedRing);
+            }
+            Ok(value as i64)
+        }
+
+        fn quantize(&self, point: Coord<f64>) -> Result<[i64; 2], ClipError> {
+            Ok([
+                Self::integer(((point.x - self.center.x) * self.scale).round())?,
+                Self::integer(((point.y - self.center.y) * self.scale).round())?,
+            ])
+        }
+
+        /// Solo per punti gia prodotti sulla griglia. La somma floating del
+        /// centro puo pubblicarli fuori dalle bounds floating dell'ingresso.
+        pub fn requantize(
+            &self,
+            point: [i64; 2],
+            work: &mut Work<'_>,
+        ) -> Result<[i64; 2], ClipError> {
+            let published = self.decode(point, work)?;
+            work.step()?;
+            self.quantize(published)
+        }
+
+        pub fn encode(
+            &self,
+            point: Coord<f64>,
+            work: &mut Work<'_>,
+        ) -> Result<[i64; 2], ClipError> {
+            work.step()?;
+            let min = self.bounds.min();
+            let max = self.bounds.max();
+            if !point.x.is_finite()
+                || !point.y.is_finite()
+                || point.x < min.x
+                || point.x > max.x
+                || point.y < min.y
+                || point.y > max.y
+            {
+                return Err(ClipError::UnsupportedRing);
+            }
+            self.quantize(point)
+        }
+
+        #[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
+        pub fn decode(
+            &self,
+            point: [i64; 2],
+            work: &mut Work<'_>,
+        ) -> Result<Coord<f64>, ClipError> {
+            work.step()?;
+            // Conversione nearest-even di Rust seguita da prodotto e somma
+            // separati, come int_to_float; non si fondono le operazioni.
+            if (0..2).any(|axis| {
+                point[axis] < self.integer_min[axis] || point[axis] > self.integer_max[axis]
+            }) {
+                return Err(ClipError::UnsupportedRing);
+            }
+            Ok(Coord {
+                x: point[0] as f64 * self.step + self.center.x,
+                y: point[1] as f64 * self.step + self.center.y,
+            })
+        }
+    }
+
     fn ordinate(point: &P, axis: usize) -> &Q {
         if axis == 0 {
             &point.x
@@ -293,6 +429,252 @@ mod clipping_tests {
     use crate::predicates::{PredicateError, RelateLimits};
     use geo::{Coord, Rect};
     use std::sync::atomic::AtomicBool;
+
+    /// Qualifica soltanto questo corpus; non assume convessita universale.
+    #[test]
+    fn raw_cell_convex_profile_deterministic_corpus() {
+        use crate::advanced::celle_grezze_da_spade;
+        use crate::rust_backend::precision::Precision;
+        use geo::{CoordsIter, Geometry, Point};
+        let fingerprint = |cells: Vec<Geometry<f64>>| -> Vec<Vec<(u64, u64)>> {
+            cells
+                .iter()
+                .map(|cell| {
+                    cell.coords_iter()
+                        .map(|p| (p.x.to_bits(), p.y.to_bits()))
+                        .collect()
+                })
+                .collect()
+        };
+        let mut state = 620_u64;
+        let mut rejected = 0;
+        let mut accepted = 0;
+        for _ in 0..64 {
+            let mut points = Vec::new();
+            for _ in 0..12 {
+                let mut next = || {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    f64::from(u32::try_from((state >> 32) % 100).unwrap())
+                };
+                points.push(Coord {
+                    x: next(),
+                    y: next(),
+                });
+            }
+            let (cells, envelope) =
+                celle_grezze_da_spade(&points, Precision::new(0.01).unwrap()).unwrap();
+            let input: Vec<_> = points
+                .iter()
+                .map(|&point| Geometry::Point(Point(point)))
+                .collect();
+            let current = crate::advanced::voronoi_cells(&input, 12, Precision::new(0.01).unwrap())
+                .map(&fingerprint)
+                .map_err(|error| error.to_string());
+            let baseline = crate::triangolazione::voronoi_610::voronoi_cells(
+                &input,
+                12,
+                Precision::new(0.01).unwrap(),
+            )
+            .map(&fingerprint)
+            .map_err(|error| error.to_string());
+            assert_eq!(current, baseline);
+            for cell in cells {
+                let mut work = Work::new(RelateLimits::default(), None);
+                match convex_ring(&cell.exterior().0, envelope, &mut work) {
+                    Ok(_) => accepted += 1,
+                    Err(ClipError::UnsupportedRing) => rejected += 1,
+                    Err(error) => panic!("unexpected profile failure: {error}"),
+                }
+            }
+        }
+        assert_eq!((accepted, rejected), (768, 0));
+    }
+
+    /// Il backend e' l'oracolo della sola trasformazione: triangoli strettamente
+    /// interni all'inviluppo non richiedono intersezioni o agganci.
+    /// Nessuna pretesa su ordine degli anelli o pulizia dei contorni.
+    #[test]
+    fn clipping_grid_matches_backend_unintersected_vertices() {
+        use super::clipping::Grid;
+        use geo::{BooleanOps, LineString, Polygon};
+        for exponent in [-500, -60, -1, 0, 20, 60, 490] {
+            let scale = 2_f64.powi(exponent);
+            for offset in [-17.3, -0.1, 0.0, 13.7] {
+                let point = |x: f64, y: f64| Coord {
+                    x: (x + offset) * scale,
+                    y: (y - offset) * scale,
+                };
+                let coordinates = [point(0.1, 0.3), point(2.7, 0.4), point(1.3, 3.1)];
+                let envelope = Rect::new(point(-1.1, -1.2), point(4.3, 4.7));
+                let polygon = Polygon::new(LineString::new(coordinates.to_vec()), vec![]);
+                let historic = polygon.intersection(&envelope.to_polygon());
+                assert_eq!(historic.0.len(), 1);
+                let mut work = Work::new(RelateLimits::default(), None);
+                let grid = Grid::new(&coordinates, envelope, &mut work).unwrap();
+                let mut expected = Vec::new();
+                for coordinate in coordinates {
+                    let integer = grid.encode(coordinate, &mut work).unwrap();
+                    let first = grid.decode(integer, &mut work).unwrap();
+                    let integer = grid.requantize(integer, &mut work).unwrap();
+                    let second = grid.decode(integer, &mut work).unwrap();
+                    assert_eq!(
+                        (first.x.to_bits(), first.y.to_bits()),
+                        (second.x.to_bits(), second.y.to_bits())
+                    );
+                    expected.push((first.x.to_bits(), first.y.to_bits()));
+                }
+                let ring = &historic.0[0].exterior().0;
+                assert_eq!(ring.len(), 4);
+                let mut actual: Vec<_> = ring[..3]
+                    .iter()
+                    .map(|p| (p.x.to_bits(), p.y.to_bits()))
+                    .collect();
+                actual.sort_unstable();
+                expected.sort_unstable();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn clipping_grid_roundtrip_outside_float_bounds_and_scale_cap() {
+        use super::clipping::Grid;
+        let mut work = Work::new(RelateLimits::default(), None);
+        let envelope = Rect::new((1.0e-20, 0.), (1., 1.));
+        let grid = Grid::new(&[], envelope, &mut work).unwrap();
+        let encoded = grid.encode(envelope.min(), &mut work).unwrap();
+        let decoded = grid.decode(encoded, &mut work).unwrap();
+        assert!(decoded.x < envelope.min().x);
+        assert!(matches!(
+            grid.encode(decoded, &mut work),
+            Err(ClipError::UnsupportedRing)
+        ));
+        assert_eq!(grid.requantize(encoded, &mut work).unwrap(), encoded);
+        for exponent in [-1074, -1023, -1000, -963] {
+            let tiny = if exponent == -1074 {
+                f64::from_bits(1)
+            } else {
+                2_f64.powi(exponent)
+            };
+            let envelope = Rect::new((-tiny, -tiny), (tiny, tiny));
+            let grid = Grid::new(&[], envelope, &mut work).unwrap();
+            let encoded = grid.encode(envelope.max(), &mut work).unwrap();
+            let decoded = grid.decode(encoded, &mut work).unwrap();
+            // Quando la scala e' limitata a 2^1023, il passo e' 2^-1023.
+            let expected = (tiny * 2_f64.powi(1023)).round() * 2_f64.powi(-1023);
+            assert_eq!(decoded.x.to_bits(), expected.to_bits());
+            assert_eq!(decoded.y.to_bits(), expected.to_bits());
+            for zero in [0., -0.] {
+                let encoded = grid.encode(Coord { x: zero, y: zero }, &mut work).unwrap();
+                let decoded = grid.decode(encoded, &mut work).unwrap();
+                assert_eq!((decoded.x.to_bits(), decoded.y.to_bits()), (0, 0));
+            }
+        }
+        let grid = Grid::new(&[], Rect::new((-1., -0.01), (1., 0.01)), &mut work).unwrap();
+        assert!(matches!(
+            grid.decode([0, 1_i64 << 61], &mut work),
+            Err(ClipError::UnsupportedRing)
+        ));
+    }
+
+    /// La trasformazione usa solo scalari sullo stack; il lavoro cresce con
+    /// le coordinate e tutte le primitive osservano il checkpoint comune.
+    #[test]
+    fn clipping_grid_thresholds_and_interruptions() {
+        use super::clipping::Grid;
+        let envelope = Rect::new((0., 0.), (4., 4.));
+        let run = |work: &mut Work<'_>| -> Result<(), ClipError> {
+            let grid = Grid::new(&triangle(), envelope, work)?;
+            let point = grid.encode(Coord { x: 1., y: 2. }, work)?;
+            grid.decode(point, work)?;
+            Ok(())
+        };
+        let mut work = Work::new(RelateLimits::default(), None);
+        run(&mut work).unwrap();
+        let steps = work.steps;
+        assert_eq!(steps, 6);
+        assert_eq!((work.nodes, work.pairs, work.peak_bytes()), (0, 0, 0));
+        for limit in [steps - 1, steps, steps + 1] {
+            let limits = RelateLimits {
+                max_steps: limit,
+                ..RelateLimits::default()
+            };
+            let result = run(&mut Work::new(limits, None));
+            if limit < steps {
+                assert!(matches!(
+                    result,
+                    Err(ClipError::Resource(PredicateError::WorkLimit))
+                ));
+            } else {
+                result.unwrap();
+            }
+        }
+        for at in 0..steps {
+            for deadline in [false, true] {
+                let flag = AtomicBool::new(false);
+                let mut work = Work::new(RelateLimits::default(), Some(&flag));
+                work.interrupt_at = Some((at, deadline));
+                let result = run(&mut work);
+                if deadline {
+                    assert!(matches!(
+                        result,
+                        Err(ClipError::Resource(PredicateError::DeadlineExceeded))
+                    ));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ClipError::Resource(PredicateError::Cancelled))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipping_grid_rejects_outside_domain_before_casts() {
+        use super::clipping::Grid;
+        let mut work = Work::new(RelateLimits::default(), None);
+        let envelope = Rect::new((-1., -1.), (1., 1.));
+        let grid = Grid::new(&[], envelope, &mut work).unwrap();
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 2., -2.] {
+            assert!(matches!(
+                grid.encode(Coord { x: value, y: 0. }, &mut work),
+                Err(ClipError::UnsupportedRing)
+            ));
+        }
+        for value in [i64::MIN, i64::MAX, (1_i64 << 61) + 1, -(1_i64 << 61) - 1] {
+            assert!(matches!(
+                grid.decode([value, 0], &mut work),
+                Err(ClipError::UnsupportedRing)
+            ));
+        }
+        assert!(matches!(
+            Grid::new(
+                &[Coord {
+                    x: 2_f64.powi(501),
+                    y: 0.
+                }],
+                envelope,
+                &mut work
+            ),
+            Err(ClipError::UnsupportedRing)
+        ));
+        assert!(matches!(
+            Grid::new(&[], Rect::new((0., 0.), (0., 1.)), &mut work),
+            Err(ClipError::InvalidEnvelope)
+        ));
+        let flag = AtomicBool::new(true);
+        let limits = RelateLimits {
+            deadline: Some(std::time::Instant::now()),
+            ..RelateLimits::default()
+        };
+        assert!(matches!(
+            Grid::new(&[], envelope, &mut Work::new(limits, Some(&flag))),
+            Err(ClipError::Resource(PredicateError::DeadlineExceeded))
+        ));
+    }
 
     fn triangle() -> [Coord<f64>; 3] {
         [(0., 0.), (7., 2.), (1., 9.)].map(|(x, y)| Coord { x, y })

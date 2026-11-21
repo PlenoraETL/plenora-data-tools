@@ -30,6 +30,14 @@ la cui versione non ha qui una voce datata.
 
 ### Prove
 
+- Voronoi: costruzione grezza separata dal clipping per la qualifica delle
+  fasi; corpus deterministico di 768 celle per il profilo convesso.
+  Trasformazione della griglia storica in `cfg(test)`, con differenziale
+  dei bit dei vertici non intersecati, limiti e checkpoint. Comprende
+  riconversione dei punti pubblicati fuori dall'inviluppo floating e
+  limite della scala per subnormali. Noding, agganci e pubblicazione
+  completa non ancora integrati: il passo clipping resta aperto.
+
 - Nucleo sperimentale del clipping convesso all'inviluppo, compilato solo
   nelle prove: quattro semipiani razionali con lavoro, memoria e nodi
   contati nel contesto comune. Oracoli analitici, partizione esatta,
