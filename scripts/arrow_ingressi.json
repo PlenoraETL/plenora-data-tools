@@ -9415,6 +9415,12 @@
       "reason": "Indice geometrico interno su inviluppi razionali con Work e CountedVec; nessun ingresso Arrow.",
       "signature": "pub fn edges<'a>( edges: impl Iterator<Item = &'a Edge>, work: &mut Work<'_>, ) -> Result<Self, PredicateError>"
     },
+    "crates/plenora-kernels-geo/src/segment_index.rs::edges_for_rays": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Indice geometrico interno su inviluppi razionali con Work e CountedVec; nessun ingresso Arrow.",
+      "signature": "pub fn edges_for_rays<'a>( edges: impl Iterator<Item = &'a Edge>, work: &mut Work<'_>, ) -> Result<Self, PredicateError>"
+    },
     "crates/plenora-kernels-geo/src/segment_index.rs::new": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",

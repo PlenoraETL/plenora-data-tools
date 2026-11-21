@@ -416,7 +416,7 @@ fn cycle(ids: &[usize], edges: &[Edge], work: &mut Work<'_>) -> Result<Cycle, Pr
     if sign.is_eq() {
         return Err(PredicateError::CalcoloNonConcluso("orientamento anello"));
     }
-    let index = crate::segment_index::SegmentIndex::edges(ring.iter(), work)?;
+    let index = crate::segment_index::SegmentIndex::edges_for_rays(ring.iter(), work)?;
     Ok(Cycle {
         shell: sign.is_gt(),
         index,

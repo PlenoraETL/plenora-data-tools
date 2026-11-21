@@ -50,36 +50,93 @@ fn distance_to_segment(p: Coord, a: Coord, b: Coord, ellipsoid: &EllissoideGeode
         .min(distance(1.0))
 }
 
+// L'indice si costruisce una volta per superficie. Le distanze floating
+// point scelgono solo il candidato iniziale; il raggio e il minimo sono esatti.
+struct BoundaryWitness {
+    edges: Vec<(Coord, Coord)>,
+    tree: rstar::RTree<
+        rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, usize>,
+    >,
+}
+
 #[deny(clippy::disallowed_methods)]
-fn boundary_witness(point: Coord, geometry: &Geometry, ellipsoid: &EllissoideGeodetico) -> f64 {
-    let polygons = match geometry {
-        Geometry::Polygon(p) => std::slice::from_ref(p),
-        Geometry::MultiPolygon(p) => p.0.as_slice(),
-        _ => panic!("superficie richiesta"),
-    };
-    let mut best: Option<crate::segment_index::DistanceKey> = None;
-    let mut work = Work::new(limits().overlay.work, None);
-    let mut witness = (point, point);
-    for polygon in polygons {
-        for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
-            for pair in ring.0.windows(2) {
-                let a = pair[0];
-                let b = pair[1];
-                // Qualunque punto del lato e' un testimone valido: la scelta
-                // in coordinate non presume che sia il minimo geodetico.
-                let distance =
-                    crate::segment_index::DistanceKey::coordinates(point, a, b, &mut work).unwrap();
-                if best
-                    .as_ref()
-                    .is_none_or(|previous| distance.compare(previous).unwrap().is_lt())
-                {
-                    best = Some(distance);
-                    witness = (a, b);
-                }
+impl BoundaryWitness {
+    fn new(geometry: &Geometry) -> Self {
+        let polygons = match geometry {
+            Geometry::Polygon(p) => std::slice::from_ref(p),
+            Geometry::MultiPolygon(p) => p.0.as_slice(),
+            _ => panic!("superficie richiesta"),
+        };
+        let edges: Vec<_> = polygons
+            .iter()
+            .flat_map(|p| {
+                std::iter::once(p.exterior())
+                    .chain(p.interiors())
+                    .flat_map(|ring| ring.0.windows(2).map(|pair| (pair[0], pair[1])))
+            })
+            .collect();
+        let tree = rstar::RTree::bulk_load(
+            edges
+                .iter()
+                .enumerate()
+                .map(|(id, (a, b))| {
+                    rstar::primitives::GeomWithData::new(
+                        rstar::primitives::Rectangle::from_corners(
+                            [a.x.min(b.x), a.y.min(b.y)],
+                            [a.x.max(b.x), a.y.max(b.y)],
+                        ),
+                        id,
+                    )
+                })
+                .collect(),
+        );
+        Self { edges, tree }
+    }
+
+    fn distance(&self, point: Coord, ellipsoid: &EllissoideGeodetico, indexed: bool) -> f64 {
+        let mut work = Work::new(limits().overlay.work, None);
+        let candidates = if indexed {
+            let Some(seed) = self.tree.nearest_neighbor(&[point.x, point.y]) else {
+                return f64::INFINITY;
+            };
+            let (a, b) = self.edges[seed.data];
+            let key =
+                crate::segment_index::DistanceKey::coordinates(point, a, b, &mut work).unwrap();
+            // Se la radice non e' rappresentabile, nessun pruning: il minimo
+            // razionale resta definito e viene confrontato senza arrotondarlo.
+            let radius = match key.rounded(&mut work) {
+                Ok(value) => value.next_up(),
+                Err(PredicateError::AccuracyUnproven) => f64::INFINITY,
+                Err(error) => panic!("{error}"),
+            };
+            let window = crate::segment_index::metric_window([point.x, point.y], radius);
+            let mut ids: Vec<_> = self
+                .tree
+                .locate_in_envelope_intersecting(&window)
+                .map(|e| e.data)
+                .collect();
+            ids.sort_unstable();
+            ids
+        } else {
+            (0..self.edges.len()).collect()
+        };
+        let mut best: Option<crate::segment_index::DistanceKey> = None;
+        let mut witness = (point, point);
+        for id in candidates {
+            let (a, b) = self.edges[id];
+            let distance =
+                crate::segment_index::DistanceKey::coordinates(point, a, b, &mut work).unwrap();
+            if best
+                .as_ref()
+                .is_none_or(|previous| distance.compare(previous).unwrap().is_lt())
+            {
+                best = Some(distance);
+                witness = (a, b);
             }
         }
-    }
-    if best.is_some() {
+        if best.is_none() {
+            return f64::INFINITY;
+        }
         let (a, b) = witness;
         let fraction = crate::segment_index::projection_parameter(point, a, b, &mut work).unwrap();
         let witness = Coord {
@@ -89,8 +146,45 @@ fn boundary_witness(point: Coord, geometry: &Geometry, ellipsoid: &EllissoideGeo
         ellipsoid
             .geodetica()
             .inverse(point.y, point.x, witness.y, witness.x)
-    } else {
-        f64::INFINITY
+    }
+}
+
+#[test]
+#[deny(clippy::disallowed_methods)]
+fn indexed_boundary_witness_matches_exhaustive_bits() {
+    // C1: identico lato vincente, tie in ordine d'ingresso, piede e Karney;
+    // foro, lati degeneri/obliqui e punti dentro, fuori e sul bordo.
+    let crs = resolve_crs("EPSG:4326", "crs").unwrap();
+    let ellipsoid = EllissoideGeodetico::da_crs(&crs).unwrap();
+    let geometry = Geometry::Polygon(Polygon::new(
+        LineString::from(vec![
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (0.04, 0.0),
+            (0.05, 0.04),
+            (0.0, 0.04),
+            (0.0, 0.0),
+        ]),
+        vec![LineString::from(vec![
+            (0.01, 0.01),
+            (0.02, 0.01),
+            (0.02, 0.02),
+            (0.01, 0.02),
+            (0.01, 0.01),
+        ])],
+    ));
+    let boundary = BoundaryWitness::new(&geometry);
+    for x in -1..=6 {
+        for y in -1..=5 {
+            let point = Coord {
+                x: f64::from(x) / 100.0,
+                y: f64::from(y) / 100.0,
+            };
+            assert_eq!(
+                boundary.distance(point, &ellipsoid, true).to_bits(),
+                boundary.distance(point, &ellipsoid, false).to_bits()
+            );
+        }
     }
 }
 
@@ -106,6 +200,7 @@ fn dense_exact_boundary(
     let geodesic = ellipsoid.geodetica();
     let (length, azimuth, end_azimuth, _): (f64, f64, f64, f64) =
         geodesic.inverse(latitude, 9.0, latitude, 9.00001);
+    let boundary = BoundaryWitness::new(&surface.geometry);
     let mut measured = 0.0_f64;
     for i in 0..=512 {
         let fraction = f64::from(i) / 512.0;
@@ -116,7 +211,7 @@ fn dense_exact_boundary(
                 180.0_f64.mul_add(fraction, start),
                 radius,
             );
-            let error = boundary_witness(Coord { x, y }, &surface.geometry, ellipsoid);
+            let error = boundary.distance(Coord { x, y }, ellipsoid, true);
             measured = measured.max(error);
             assert!(error <= surface.certificate.absolute_m);
         }
@@ -124,7 +219,7 @@ fn dense_exact_boundary(
             geodesic.direct(latitude, 9.0, azimuth, length * fraction);
         for side in [-90.0, 90.0] {
             let (y, x): (f64, f64) = geodesic.direct(lat, lon, tangent + side, radius);
-            let error = boundary_witness(Coord { x, y }, &surface.geometry, ellipsoid);
+            let error = boundary.distance(Coord { x, y }, ellipsoid, true);
             measured = measured.max(error);
             assert!(error <= surface.certificate.absolute_m);
         }
@@ -480,11 +575,12 @@ fn dense_surface_boundary(
     // ai vertici (Karney G1). Si tengono i campioni esposti all'unione.
     let mut measured = 0.0_f64;
     let mut accepted = 0;
+    let boundary = BoundaryWitness::new(&surface.geometry);
     let mut check = |point: Coord| {
         if !source.contains(&geo::Point(point))
             && (distance_to_boundary(point, source, ellipsoid) - radius).abs() < 1e-6
         {
-            let error = boundary_witness(point, &surface.geometry, ellipsoid);
+            let error = boundary.distance(point, ellipsoid, true);
             assert!(error <= surface.certificate.absolute_m);
             measured = measured.max(error);
             accepted += 1;

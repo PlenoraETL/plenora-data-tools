@@ -38,6 +38,32 @@ impl ErosionRange {
             hi: v.into_iter().fold(f64::NEG_INFINITY, f64::max).next_up(),
         }
     }
+    fn square(self) -> Self {
+        let lower = if self.lo <= 0.0 && self.hi >= 0.0 {
+            0.0
+        } else {
+            self.lo.abs().min(self.hi.abs())
+        };
+        let upper = self.lo.abs().max(self.hi.abs());
+        Self {
+            lo: (lower * lower).next_down().max(0.0),
+            hi: (upper * upper).next_up(),
+        }
+    }
+    fn divide(self, b: Self) -> Result<Self, UnionBufferError> {
+        if b.lo <= 0.0 || !(1.0 / b.lo).is_finite() || !self.lo.is_finite() || !self.hi.is_finite()
+        {
+            return Err(BufferFailure::AccuracyUnproven.into());
+        }
+        let reciprocal = Self {
+            lo: (1.0 / b.hi).next_down(),
+            hi: (1.0 / b.lo).next_up(),
+        };
+        if !reciprocal.lo.is_finite() || !reciprocal.hi.is_finite() {
+            return Err(BufferFailure::AccuracyUnproven.into());
+        }
+        Ok(self.mul(reciprocal))
+    }
 }
 
 struct Boundary<'a> {
@@ -154,6 +180,146 @@ fn signed_distance_impl(
     }
 }
 
+fn distance_filter(
+    point: Coord,
+    geometry: &Geometry,
+    work: &mut Work<'_>,
+) -> Result<Option<ErosionRange>, UnionBufferError> {
+    let mut distance = ErosionRange::exact(f64::INFINITY);
+    let mut inside = false;
+    let mut uncertain = false;
+    for ring in parts(geometry)? {
+        for edge in ring.0.windows(2) {
+            work.step()?;
+            let a = edge[0];
+            let b = edge[1];
+            if a == b {
+                continue;
+            }
+            let dx = ErosionRange::exact(b.x).sub(ErosionRange::exact(a.x));
+            let dy = ErosionRange::exact(b.y).sub(ErosionRange::exact(a.y));
+            let px = ErosionRange::exact(point.x).sub(ErosionRange::exact(a.x));
+            let py = ErosionRange::exact(point.y).sub(ErosionRange::exact(a.y));
+            let Ok(t) = px
+                .mul(dx)
+                .add(py.mul(dy))
+                .divide(dx.square().add(dy.square()))
+            else {
+                return Ok(None);
+            };
+            let t = ErosionRange {
+                lo: t.lo.clamp(0.0, 1.0),
+                hi: t.hi.clamp(0.0, 1.0),
+            };
+            let squared = px.sub(t.mul(dx)).square().add(py.sub(t.mul(dy)).square());
+            if !squared.lo.is_finite() || !squared.hi.is_finite() {
+                return Ok(None);
+            }
+            distance.lo = distance
+                .lo
+                .min(squared.lo.max(0.0).sqrt().next_down().max(0.0));
+            distance.hi = distance.hi.min(squared.hi.sqrt().next_up());
+            if (a.y > point.y) != (b.y > point.y) {
+                let cross = dx.mul(py).sub(dy.mul(px));
+                if cross.lo > 0.0 {
+                    inside ^= b.y > a.y;
+                } else if cross.hi < 0.0 {
+                    inside ^= b.y < a.y;
+                } else {
+                    uncertain = true;
+                }
+            }
+        }
+    }
+    if uncertain
+        || distance.lo < f64::MIN_POSITIVE
+        || !distance.lo.is_finite()
+        || !distance.hi.is_finite()
+        || distance.hi >= f64::MAX
+    {
+        return Ok(None);
+    }
+    // Racchiude anche RN(d).next_down() e RN(d).next_up(), non solo d.
+    distance.lo = distance.lo.next_down().next_down().max(0.0);
+    distance.hi = distance.hi.next_up().next_up();
+    if inside {
+        Ok(Some(distance))
+    } else {
+        Ok(Some(ErosionRange {
+            lo: -distance.hi,
+            hi: -distance.lo,
+        }))
+    }
+}
+
+// Il filtro racchiude gli endpoint prodotti dal percorso razionale: una
+// decisione si prende solo quando tutto l'intervallo sta dallo stesso lato.
+fn above(
+    point: Coord,
+    boundary: &Boundary<'_>,
+    limit: f64,
+    lower: bool,
+    work: &mut Work<'_>,
+) -> Result<bool, UnionBufferError> {
+    work.step()?;
+    if let Some(range) = distance_filter(point, boundary.geometry, work)? {
+        if range.lo > limit {
+            return Ok(true);
+        }
+        if range.hi <= limit {
+            return Ok(false);
+        }
+    }
+    let distance = signed_distance(point, boundary, work)?;
+    Ok(if lower { distance.lo } else { distance.hi } > limit)
+}
+
+fn separated(
+    point: Coord,
+    boundary: &Boundary<'_>,
+    cell: ErosionCell,
+    limit: f64,
+    inside: bool,
+    work: &mut Work<'_>,
+) -> Result<bool, UnionBufferError> {
+    work.step()?;
+    if let (Some(distance), Some(half)) = (
+        distance_filter(point, boundary.geometry, work)?,
+        cell.reach_filter(point),
+    ) {
+        let value = if inside {
+            distance.sub(half)
+        } else {
+            distance.add(half)
+        };
+        // Un ulteriore vicino copre il next_down/next_up del confronto esatto.
+        let lo = value.lo.next_down();
+        let hi = value.hi.next_up();
+        if inside {
+            if lo > limit {
+                return Ok(true);
+            }
+            if hi <= limit {
+                return Ok(false);
+            }
+        } else {
+            if hi < limit {
+                return Ok(true);
+            }
+            if lo >= limit {
+                return Ok(false);
+            }
+        }
+    }
+    let distance = signed_distance(point, boundary, work)?;
+    let half = cell.reach(point, work)?;
+    Ok(if inside {
+        (distance.lo - half).next_down() > limit
+    } else {
+        (distance.hi + half).next_up() < limit
+    })
+}
+
 // La distanza firmata e' 1-Lipschitz: ogni cella copre l'intero segmento,
 // non soltanto il campione centrale. Il margine trasporta le due omotopie.
 pub(super) fn clearance(
@@ -211,6 +377,35 @@ impl ErosionCell {
             x: self.low.x.midpoint(self.high.x),
             y: self.low.y.midpoint(self.high.y),
         }
+    }
+    fn reach_filter(self, p: Coord) -> Option<ErosionRange> {
+        let x = (p.x - self.low.x)
+            .abs()
+            .next_up()
+            .max((p.x - self.high.x).abs().next_up());
+        let y = (p.y - self.low.y)
+            .abs()
+            .next_up()
+            .max((p.y - self.high.y).abs().next_up());
+        let squared = ErosionRange::exact(x)
+            .square()
+            .add(ErosionRange::exact(y).square());
+        let lo = squared.lo.max(0.0).sqrt().next_down().next_down().max(0.0);
+        let hi = squared.hi.sqrt().next_up().next_up().next_up();
+        (lo >= f64::MIN_POSITIVE && hi.is_finite() && hi < f64::MAX)
+            .then_some(ErosionRange { lo, hi })
+    }
+    fn reach_le(self, p: Coord, limit: f64, work: &mut Work<'_>) -> Result<bool, UnionBufferError> {
+        work.step()?;
+        if let Some(range) = self.reach_filter(p) {
+            if range.hi <= limit {
+                return Ok(true);
+            }
+            if range.lo > limit {
+                return Ok(false);
+            }
+        }
+        Ok(self.reach(p, work)? <= limit)
     }
     fn reach(self, p: Coord, work: &mut Work<'_>) -> Result<f64, UnionBufferError> {
         let x = (p.x - self.low.x)
@@ -274,19 +469,22 @@ pub(super) fn certify(
     while let Some(cell) = pending.pop() {
         work.step()?;
         let center = cell.center();
-        let half = cell.reach(center, work)?;
-        let source = signed_distance(center, &operand, work)?;
-        let output = signed_distance(center, &result, work)?;
-        if (source.hi + half).next_up() < lower && (output.hi + half).next_up() < 0.0 {
+        if separated(center, &operand, cell, lower, false, work)?
+            && separated(center, &result, cell, 0.0, false, work)?
+        {
             continue;
         }
-        if (source.lo - half).next_down() > upper && (output.lo - half).next_down() > 0.0 {
+        if separated(center, &operand, cell, upper, true, work)?
+            && separated(center, &result, cell, 0.0, true, work)?
+        {
             continue;
         }
-        if half <= reach / 8.0 && covered(cell, reach, upper, &operand, &result, work)? {
+        if cell.reach_le(center, reach / 8.0, work)?
+            && covered(cell, reach, upper, &operand, &result, work)?
+        {
             continue;
         }
-        if half <= reach / 128.0
+        if cell.reach_le(center, reach / 128.0, work)?
             || center.x == cell.low.x
             || center.x == cell.high.x
             || center.y == cell.low.y
@@ -331,9 +529,9 @@ fn covered(
                     x: distance.mul_add(x, center.x),
                     y: distance.mul_add(y, center.y),
                 };
-                if cell.reach(witness, work)? <= reach
-                    && signed_distance(witness, operand, work)?.lo > upper
-                    && signed_distance(witness, result, work)?.lo > 0.0
+                if cell.reach_le(witness, reach, work)?
+                    && above(witness, operand, upper, true, work)?
+                    && above(witness, result, 0.0, true, work)?
                 {
                     return Ok(true);
                 }
@@ -348,6 +546,155 @@ fn covered(
 mod tests {
     use super::*;
     use geo::{LineString, Polygon};
+
+    #[test]
+    fn filtered_decisions_match_exact_thresholds() {
+        // C1: stessi confronti razionali, soglie uguali e IEEE adiacenti;
+        // lati obliqui, foro, traslazione TM e scale fuori dal filtro.
+        for scale in [f64::from_bits(16), 1e-200, 1.0, 1e150] {
+            for shift in [0.0, 6e6] {
+                if scale < 1.0 && shift != 0.0 {
+                    continue;
+                }
+                let ring = |low: f64, high: f64| {
+                    LineString::from(vec![
+                        (low.mul_add(scale, shift), low.mul_add(scale, shift)),
+                        (high.mul_add(scale, shift), low.mul_add(scale, shift)),
+                        (
+                            (high + 0.5).mul_add(scale, shift),
+                            high.mul_add(scale, shift),
+                        ),
+                        (low.mul_add(scale, shift), high.mul_add(scale, shift)),
+                        (low.mul_add(scale, shift), low.mul_add(scale, shift)),
+                    ])
+                };
+                let geometry =
+                    Geometry::Polygon(Polygon::new(ring(0.0, 4.0), vec![ring(1.0, 2.0)]));
+                let mut work = Work::new(crate::predicates::RelateLimits::default(), None);
+                let boundary = Boundary::new(&geometry, &mut work).unwrap();
+                for (x, y) in [
+                    (-1.0_f64, 0.5_f64),
+                    (0.5, 0.75),
+                    (1.5, 1.5),
+                    (3.0, 3.0),
+                    (4.5, 4.0),
+                ] {
+                    let point = Coord {
+                        x: x.mul_add(scale, shift),
+                        y: y.mul_add(scale, shift),
+                    };
+                    let distance = signed_distance(point, &boundary, &mut work).unwrap();
+                    if let Some(range) = distance_filter(point, &geometry, &mut work).unwrap() {
+                        assert!(range.lo <= distance.lo && range.hi >= distance.hi);
+                    }
+                    for lower in [false, true] {
+                        let value = if lower { distance.lo } else { distance.hi };
+                        for limit in [
+                            value.next_down(),
+                            value,
+                            value.next_up(),
+                            -scale,
+                            0.0,
+                            scale,
+                        ] {
+                            assert_eq!(
+                                above(point, &boundary, limit, lower, &mut work).unwrap(),
+                                value > limit
+                            );
+                        }
+                    }
+                    let cell = ErosionCell {
+                        low: point,
+                        high: Coord {
+                            x: point.x + scale / 8.0,
+                            y: point.y + scale / 4.0,
+                        },
+                    };
+                    let half = cell.reach(point, &mut work).unwrap();
+                    for limit in [half.next_down(), half, half.next_up()] {
+                        assert_eq!(
+                            cell.reach_le(point, limit, &mut work).unwrap(),
+                            half <= limit
+                        );
+                    }
+                    for inside in [false, true] {
+                        let value = if inside {
+                            (distance.lo - half).next_down()
+                        } else {
+                            (distance.hi + half).next_up()
+                        };
+                        for limit in [value.next_down(), value, value.next_up()] {
+                            assert_eq!(
+                                separated(point, &boundary, cell, limit, inside, &mut work)
+                                    .unwrap(),
+                                if inside { value > limit } else { value < limit }
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filters_preserve_extreme_rejections_and_work_limits() {
+        // C1: underflow positivo, overflow e checkpoint prima del filtro.
+        let tiny = f64::from_bits(1);
+        let geometry = Geometry::Polygon(Polygon::new(
+            LineString::from(vec![(0.0, 0.0), (tiny, 1.0), (1.0, 1.0), (0.0, 0.0)]),
+            vec![],
+        ));
+        let mut work = Work::new(crate::predicates::RelateLimits::default(), None);
+        let boundary = Boundary::new(&geometry, &mut work).unwrap();
+        let point = Coord { x: 0.0, y: tiny };
+        assert!(matches!(
+            signed_distance(point, &boundary, &mut work),
+            Err(UnionBufferError::Overlay(
+                crate::polygon_boolean::PolygonBooleanError::Predicate(
+                    crate::predicates::PredicateError::AccuracyUnproven
+                )
+            ))
+        ));
+        assert!(matches!(
+            above(point, &boundary, 1.0, true, &mut work),
+            Err(UnionBufferError::Overlay(
+                crate::polygon_boolean::PolygonBooleanError::Predicate(
+                    crate::predicates::PredicateError::AccuracyUnproven
+                )
+            ))
+        ));
+        let cell = ErosionCell {
+            low: Coord {
+                x: -f64::MAX,
+                y: 0.0,
+            },
+            high: Coord {
+                x: f64::MAX,
+                y: 1.0,
+            },
+        };
+        assert!(matches!(
+            cell.reach_le(cell.low, 1.0, &mut work),
+            Err(UnionBufferError::Overlay(
+                crate::polygon_boolean::PolygonBooleanError::Predicate(
+                    crate::predicates::PredicateError::CalcoloNonConcluso("coordinata non finita")
+                )
+            ))
+        ));
+        let limits = crate::predicates::RelateLimits {
+            max_steps: 0,
+            ..Default::default()
+        };
+        let mut work = Work::new(limits, None);
+        assert!(matches!(
+            distance_filter(point, &geometry, &mut work),
+            Err(UnionBufferError::Overlay(
+                crate::polygon_boolean::PolygonBooleanError::Predicate(
+                    crate::predicates::PredicateError::WorkLimit
+                )
+            ))
+        ));
+    }
 
     #[test]
     #[deny(clippy::disallowed_methods)]

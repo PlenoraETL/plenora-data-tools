@@ -101,7 +101,7 @@ impl Shape {
         for rings in &self.polygons {
             let mut indices = CountedVec::new();
             for ring in rings {
-                let index = SegmentIndex::edges(ring.iter(), work)?;
+                let index = SegmentIndex::edges_for_rays(ring.iter(), work)?;
                 work.push(&mut indices, index)?;
             }
             work.push(&mut self.ring_indices, indices)?;

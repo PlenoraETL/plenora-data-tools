@@ -46,6 +46,98 @@ mod tests {
     use crate::noding::oracle;
 
     #[test]
+    fn dyadic_normalization_matches_euclidean_gcd() {
+        // C1: stessa forma canonica del gcd generale, inclusi zero,
+        // numeratori negativi, denominatori negativi e non diadici.
+        let budget = Rc::new(Budget::new(u64::MAX));
+        for numerator in [-8, -1, 0, 1, 8] {
+            for shift in [0, 53, 1074] {
+                for exponent in [0, 1, 52, 1074] {
+                    for factor in [-3, -1, 1, 3] {
+                        let make = |fast| {
+                            Q::new_impl(
+                                CountedInt::created(BigInt::from(numerator) << shift, &budget)
+                                    .expect("numeratore"),
+                                CountedInt::created(BigInt::from(factor) << exponent, &budget)
+                                    .expect("denominatore"),
+                                fast,
+                            )
+                            .expect("normalizzazione")
+                        };
+                        assert_eq!(make(true), make(false));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn equal_denominator_comparison_matches_products() {
+        // C1: confronto senza allocazioni contro i prodotti generici,
+        // segni, zeri, denominatori uguali/diversi e scale IEEE estreme.
+        let budget = Rc::new(Budget::new(u64::MAX));
+        let mut values = Vec::new();
+        for value in [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            0.5,
+            -0.5,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            1e-200,
+            1e200,
+            f64::MAX,
+        ] {
+            values.push(Q::float_in(value, &budget).expect("coordinata"));
+        }
+        for denominator in [3, 7, 9] {
+            for numerator in [-8, -1, 0, 1, 8] {
+                values.push(
+                    Q::int_in(numerator, &budget)
+                        .expect("numeratore")
+                        .try_div(&Q::int_in(denominator, &budget).expect("denominatore"))
+                        .expect("razionale"),
+                );
+            }
+        }
+        for a in &values {
+            for b in &values {
+                assert_eq!(
+                    a.try_cmp_impl(b, true).expect("filtro"),
+                    a.try_cmp_impl(b, false).expect("prodotti")
+                );
+            }
+        }
+        let near_limit = Q::new(
+            CountedInt::created((BigInt::from(1) << (MAX_BITS - 1)) + 1, &budget)
+                .expect("numeratore limite"),
+            CountedInt::int(2, &budget).expect("denominatore limite"),
+        )
+        .expect("razionale al limite");
+        assert!(matches!(
+            near_limit.try_cmp_impl(&near_limit, false),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        assert!(matches!(
+            near_limit.try_cmp_impl(&near_limit, true),
+            Err(PredicateError::AccuracyUnproven)
+        ));
+        let other = Rc::new(Budget::new(u64::MAX));
+        let foreign = Q::int_in(1, &other).expect("altro bilancio");
+        assert_eq!(
+            values[2]
+                .try_cmp_impl(&foreign, true)
+                .map_err(|e| e.to_string()),
+            values[2]
+                .try_cmp_impl(&foreign, false)
+                .map_err(|e| e.to_string())
+        );
+    }
+
+    #[test]
     fn streamed_sum_proves_rational_equalities_and_close_signs() {
         let mut work = super::super::Work::new(crate::predicates::RelateLimits::default(), None);
         let mut terms = super::super::CountedVec::new();
@@ -487,7 +579,11 @@ impl Q {
         (self.n.value.bits(), self.d.value.bits())
     }
 
-    fn new(mut n: CountedInt, mut d: CountedInt) -> Result<Self, PredicateError> {
+    fn new(n: CountedInt, d: CountedInt) -> Result<Self, PredicateError> {
+        Self::new_impl(n, d, true)
+    }
+
+    fn new_impl(mut n: CountedInt, mut d: CountedInt, fast: bool) -> Result<Self, PredicateError> {
         n.same_budget(&d)?;
         if d.value.sign() == Sign::NoSign {
             return Err(PredicateError::CalcoloNonConcluso("denominatore nullo"));
@@ -495,6 +591,23 @@ impl Q {
         if d.value.sign() == Sign::Minus {
             n = n.neg()?;
             d = d.neg()?;
+        }
+        if fast && d.value.trailing_zeros() == Some(d.value.bits() - 1) {
+            // Per un denominatore 2^k il gcd e' 2^min(v2(n), k).
+            // Il numeratore e' divisibile per quel fattore anche se negativo;
+            // zero si normalizza a 0/1. Nessuna divisione euclidea e' necessaria.
+            crate::noding::check_interruption(
+                n.lease.budget().deadline,
+                None,
+                PredicateError::DeadlineExceeded,
+                PredicateError::Cancelled,
+            )?;
+            let exponent = d.value.bits() - 1;
+            let common = n.value.trailing_zeros().unwrap_or(exponent).min(exponent);
+            return Ok(Self {
+                n: CountedInt::created(&n.value >> common, n.lease.budget())?,
+                d: CountedInt::created(&d.value >> common, d.lease.budget())?,
+            });
         }
         let mut a = if n.value.sign() == Sign::Minus {
             n.neg()?
@@ -598,6 +711,26 @@ impl Q {
     }
 
     pub fn try_cmp(&self, b: &Self) -> Result<Ordering, PredicateError> {
+        self.try_cmp_impl(b, true)
+    }
+
+    fn try_cmp_impl(&self, b: &Self, fast: bool) -> Result<Ordering, PredicateError> {
+        if fast && self.d.value == b.d.value {
+            // Denominatori canonici positivi: l'ordine dei numeratori e'
+            // l'ordine razionale, senza prodotti temporanei. Anche questo
+            // percorso rifiuta operandi appartenenti a bilanci diversi.
+            self.n.same_budget(&b.d)?;
+            CountedInt::check_bits(
+                self.n.value.bits() + b.d.value.bits(),
+                BitCheck::BeforeCreation,
+            )?;
+            b.n.same_budget(&self.d)?;
+            CountedInt::check_bits(
+                b.n.value.bits() + self.d.value.bits(),
+                BitCheck::BeforeCreation,
+            )?;
+            return Ok(self.n.value.cmp(&b.n.value));
+        }
         let left = self.n.mul(&b.d)?;
         let right = b.n.mul(&self.d)?;
         Ok(left.value.cmp(&right.value))

@@ -1593,11 +1593,14 @@
       "global_surface_is_rejected_before_generation"
     ],
     "crates/plenora-kernels-geo/src/geodesic_buffer/projected/erosion.rs": [
+      "filtered_decisions_match_exact_thresholds",
+      "filters_preserve_extreme_rejections_and_work_limits",
       "indexed_signed_distance_against_exhaustive_and_square",
       "indexed_signed_distance_preserves_tiny_positive_clearance",
       "acute_sector_has_a_continuous_common_witness"
     ],
     "crates/plenora-kernels-geo/src/geodesic_buffer/projected/tests.rs": [
+      "indexed_boundary_witness_matches_exhaustive_bits",
       "equatorial_width_and_dense_boundary",
       "metric_matrix_and_typed_accuracy_rejections",
       "angles_multiline_distance_major_and_zero",
@@ -1776,6 +1779,8 @@
       "normalized_intersections_fit_the_per_object_bound"
     ],
     "crates/plenora-kernels-geo/src/noding/exact.rs": [
+      "dyadic_normalization_matches_euclidean_gcd",
+      "equal_denominator_comparison_matches_products",
       "streamed_sum_proves_rational_equalities_and_close_signs",
       "bounded_sum_matches_rational_oracle",
       "clone_drop_and_arithmetic_share_the_live_budget",
@@ -2190,6 +2195,7 @@
       "line_rect_e_triangle_come_l_encoder_canonico"
     ],
     "crates/plenora-kernels-geo/src/segment_index.rs": [
+      "projection_endpoint_filter_matches_exact_bits",
       "point_query_distance_matches_generic_segment_path",
       "metric_rounding_certification_and_nonrepresentable_values",
       "metric_thresholds_compare_before_rounding",

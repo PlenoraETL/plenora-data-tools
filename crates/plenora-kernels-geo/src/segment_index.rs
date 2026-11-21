@@ -21,6 +21,14 @@ pub struct SegmentIndex {
 
 impl SegmentIndex {
     pub fn new(bounds: CountedVec<[Q; 4]>, work: &mut Work<'_>) -> Result<Self, PredicateError> {
+        Self::new_along(bounds, 0, work)
+    }
+
+    fn new_along(
+        bounds: CountedVec<[Q; 4]>,
+        axis: usize,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
         let mut ids = CountedVec::new();
         for id in 0..bounds.len() {
             work.push(&mut ids, id)?;
@@ -28,9 +36,9 @@ impl SegmentIndex {
         sorted(
             &mut ids,
             |a, b| {
-                Ok(bounds[*a][0]
-                    .try_cmp(&bounds[*b][0])?
-                    .then(bounds[*a][2].try_cmp(&bounds[*b][2])?)
+                Ok(bounds[*a][axis]
+                    .try_cmp(&bounds[*b][axis])?
+                    .then(bounds[*a][2 - axis].try_cmp(&bounds[*b][2 - axis])?)
                     .then(a.cmp(b)))
             },
             work,
@@ -48,6 +56,23 @@ impl SegmentIndex {
 
     pub fn edges<'a>(
         edges: impl Iterator<Item = &'a Edge>,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
+        Self::edges_along(edges, 0, work)
+    }
+
+    /// L'asse Y raggruppa i lati attraversati da un raggio orizzontale;
+    /// inviluppi, confronti inclusivi e ID restituiti restano esatti.
+    pub fn edges_for_rays<'a>(
+        edges: impl Iterator<Item = &'a Edge>,
+        work: &mut Work<'_>,
+    ) -> Result<Self, PredicateError> {
+        Self::edges_along(edges, 2, work)
+    }
+
+    fn edges_along<'a>(
+        edges: impl Iterator<Item = &'a Edge>,
+        axis: usize,
         work: &mut Work<'_>,
     ) -> Result<Self, PredicateError> {
         let mut bounds = CountedVec::new();
@@ -73,7 +98,7 @@ impl SegmentIndex {
                 ],
             )?;
         }
-        Self::new(bounds, work)
+        Self::new_along(bounds, axis, work)
     }
 
     pub fn points<'a>(
@@ -529,7 +554,22 @@ pub fn projection_parameter(
     end: geo::Coord<f64>,
     work: &mut Work<'_>,
 ) -> Result<f64, PredicateError> {
+    projection_parameter_impl(point, start, end, work, true)
+}
+
+fn projection_parameter_impl(
+    point: geo::Coord<f64>,
+    start: geo::Coord<f64>,
+    end: geo::Coord<f64>,
+    work: &mut Work<'_>,
+    filtered: bool,
+) -> Result<f64, PredicateError> {
     work.step()?;
+    if filtered {
+        if let Some(value) = projection_endpoint(point, start, end) {
+            return Ok(value);
+        }
+    }
     let direction = P::of_in(end, work)?.try_sub(&P::of_in(start, work)?)?;
     let offset = P::of_in(point, work)?.try_sub(&P::of_in(start, work)?)?;
     let length = norm_squared(&direction)?;
@@ -560,12 +600,93 @@ pub fn projection_parameter(
     }
 }
 
+// Filtro dei soli clamp: i prodotti scalari agli estremi sono valutati
+// con intervalli IEEE diretti. Nessun parametro interno e' approssimato.
+fn projection_endpoint(
+    point: geo::Coord<f64>,
+    start: geo::Coord<f64>,
+    end: geo::Coord<f64>,
+) -> Option<f64> {
+    if ![point, start, end]
+        .iter()
+        .all(|p| p.x.is_finite() && p.y.is_finite())
+    {
+        return None;
+    }
+    if start == end {
+        return Some(0.0);
+    }
+    let sub = |a: f64, b: f64| [(a - b).next_down(), (a - b).next_up()];
+    let mul = |a: [f64; 2], b: [f64; 2]| -> Option<[f64; 2]> {
+        let values = [a[0] * b[0], a[0] * b[1], a[1] * b[0], a[1] * b[1]];
+        if !values.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        Some([
+            values.into_iter().fold(f64::INFINITY, f64::min).next_down(),
+            values
+                .into_iter()
+                .fold(f64::NEG_INFINITY, f64::max)
+                .next_up(),
+        ])
+    };
+    let dx = sub(end.x, start.x);
+    let dy = sub(end.y, start.y);
+    let dot = |origin: geo::Coord<f64>| -> Option<[f64; 2]> {
+        let x = mul(sub(point.x, origin.x), dx)?;
+        let y = mul(sub(point.y, origin.y), dy)?;
+        Some([(x[0] + y[0]).next_down(), (x[1] + y[1]).next_up()])
+    };
+    if dot(start)?[1] < 0.0 {
+        return Some(0.0);
+    }
+    if dot(end)?[0] > 0.0 {
+        return Some(1.0);
+    }
+    None
+}
+
 #[cfg(test)]
 #[deny(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::predicates::RelateLimits;
     use proptest::prelude::*;
+
+    #[test]
+    fn projection_endpoint_filter_matches_exact_bits() {
+        // C1: clamp certificato contro proiezione razionale senza filtro,
+        // segmenti degeneri, perpendicolari, obliqui e scale IEEE estreme.
+        for scale in [f64::from_bits(1), 1e-200, 1.0, 1e200, f64::MAX / 16.0] {
+            for (a, b) in [
+                ((0.0, 0.0), (0.0, 0.0)),
+                ((0.0, 0.0), (2.0, 1.0)),
+                ((0.0, 0.0), (0.0, 2.0)),
+            ] {
+                for (x, y) in [
+                    (-2.0, -1.0),
+                    (0.0, 0.0),
+                    (1.0, 0.5),
+                    (2.0, 1.0),
+                    (3.0, 2.0),
+                    (0.0, 1.0),
+                ] {
+                    let mut work = Work::new(RelateLimits::default(), None);
+                    let point = (x * scale, y * scale).into();
+                    let a = (a.0 * scale, a.1 * scale).into();
+                    let b = (b.0 * scale, b.1 * scale).into();
+                    assert_eq!(
+                        projection_parameter_impl(point, a, b, &mut work, true)
+                            .map(f64::to_bits)
+                            .map_err(|e| e.to_string()),
+                        projection_parameter_impl(point, a, b, &mut work, false)
+                            .map(f64::to_bits)
+                            .map_err(|e| e.to_string())
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn point_query_distance_matches_generic_segment_path() {
@@ -701,35 +822,40 @@ mod tests {
             };
             work.push(&mut edges, e).expect("edge");
         }
-        let index = SegmentIndex::edges(edges.iter(), &mut work).expect("index");
-        for &(x, y) in queries {
-            let p = point(x, y, &work);
-            let candidates = index.point_candidates(&p, &mut work).expect("point query");
-            let actual: Vec<_> = candidates
-                .iter()
-                .copied()
-                .filter(|&i| edges[i].contains(&p).expect("exact"))
-                .collect();
-            let expected: Vec<_> = edges
-                .iter()
-                .enumerate()
-                .filter_map(|(i, e)| e.contains(&p).expect("exact").then_some(i))
-                .collect();
-            assert_eq!(actual, expected);
-            let rays: Vec<_> = index
-                .ray_candidates(&p, &mut work)
-                .expect("ray query")
-                .into_iter()
-                .collect();
-            let expected: Vec<_> = (0..lines.len())
-                .filter(|&i| {
-                    let b = index.at(i);
-                    b[1].try_cmp(&p.x).expect("x").is_ge()
-                        && b[2].try_cmp(&p.y).expect("y").is_le()
-                        && b[3].try_cmp(&p.y).expect("y").is_ge()
-                })
-                .collect();
-            assert_eq!(rays, expected);
+        // C1: entrambi gli assi contro la scansione esatta, stessi ID e parita'.
+        for index in [
+            SegmentIndex::edges(edges.iter(), &mut work).expect("index X"),
+            SegmentIndex::edges_for_rays(edges.iter(), &mut work).expect("index Y"),
+        ] {
+            for &(x, y) in queries {
+                let p = point(x, y, &work);
+                let candidates = index.point_candidates(&p, &mut work).expect("point query");
+                let actual: Vec<_> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|&i| edges[i].contains(&p).expect("exact"))
+                    .collect();
+                let expected: Vec<_> = edges
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, e)| e.contains(&p).expect("exact").then_some(i))
+                    .collect();
+                assert_eq!(actual, expected);
+                let rays: Vec<_> = index
+                    .ray_candidates(&p, &mut work)
+                    .expect("ray query")
+                    .into_iter()
+                    .collect();
+                let expected: Vec<_> = (0..lines.len())
+                    .filter(|&i| {
+                        let b = index.at(i);
+                        b[1].try_cmp(&p.x).expect("x").is_ge()
+                            && b[2].try_cmp(&p.y).expect("y").is_le()
+                            && b[3].try_cmp(&p.y).expect("y").is_ge()
+                    })
+                    .collect();
+                assert_eq!(rays, expected);
+            }
         }
     }
 
