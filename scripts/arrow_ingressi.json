@@ -3704,6 +3704,30 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub const fn with_normalization(mut self, normalize: bool) -> Self"
     },
+    "crates/plenora-kernels-geo/src/equality.rs::geo_equals_with_tolerance_with_limits": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto su Geometry Rust e controllo GOP-028 interno: nessun buffer o cella Arrow ricevuto.",
+      "signature": "pub fn geo_equals_with_tolerance_with_limits( left: &Geometry<f64>, right: &Geometry<f64>, comparison: GeometryComparison, limits: EqualityLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<bool, EqualityError>"
+    },
+    "crates/plenora-kernels-geo/src/equality.rs::normalize_geometry_with_limits": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto su Geometry Rust e controllo GOP-028 interno: nessun buffer o cella Arrow ricevuto.",
+      "signature": "pub fn normalize_geometry_with_limits( geometry: &Geometry<f64>, limits: EqualityLimits, cancelled: Option<&std::sync::atomic::AtomicBool>, ) -> Result<Geometry<f64>, EqualityError>"
+    },
+    "crates/plenora-kernels-geo/src/equality/controlled.rs::step": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto su Geometry Rust e controllo GOP-028 interno: nessun buffer o cella Arrow ricevuto.",
+      "signature": "fn step(&mut self) -> Result<(), Infallible>"
+    },
+    "crates/plenora-kernels-geo/src/equality/controlled.rs::step#2": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Confronto su Geometry Rust e controllo GOP-028 interno: nessun buffer o cella Arrow ricevuto.",
+      "signature": "fn step(&mut self) -> Result<(), EqualityError>"
+    },
     "crates/plenora-kernels-geo/src/extended.rs::affine_transform": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",

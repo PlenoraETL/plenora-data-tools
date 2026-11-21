@@ -1453,6 +1453,15 @@
       "l_ordine_dei_figli_della_collection_e_preservato",
       "anelli_aperti_e_vuoti_sono_canonizzati_senza_chiusura"
     ],
+    "crates/plenora-kernels-geo/src/equality/qualification.rs": [
+      "exhaustive_rotations_match_independent_oracle",
+      "legacy_bits_and_results",
+      "rotations_reversals_transitivity_and_positive_counterexample",
+      "periodic_and_long_prefix_work_is_linear",
+      "limits_are_cumulative_and_errors_explicit",
+      "ties_preserve_legacy_bits_in_rings_and_components",
+      "controlled_comparison_matches_legacy_across_structures"
+    ],
     "crates/plenora-kernels-geo/src/extended.rs": [
       "un_panico_di_concave_hull_diventa_calcolo_non_concluso",
       "affine_wrappers_preserve_expected_coordinates_and_area",
@@ -2342,6 +2351,9 @@
       "l_adapter_wkt_su_reperto_concluso_resta_datamapping",
       "una_cella_ordinariamente_invalida_resta_tale",
       "le_celle_valide_passano"
+    ],
+    "crates/plenora-kernels-geo/tests/equals_scale.rs": [
+      "linear_allocations_and_scale"
     ],
     "crates/plenora-kernels-geo/tests/geo_rust_assurance.rs": [
       "il_totale_dei_controlli_e_quello_del_laboratorio",
