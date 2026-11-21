@@ -5050,6 +5050,12 @@
       "reason": "Firma senza ingresso di buffer o celle Arrow; parametri di controllo, valori Rust o receiver interno.",
       "signature": "pub fn simplify(geometry: &Geometry<f64>, tolerance: f64) -> Result<Geometry<f64>, OperationError>"
     },
+    "crates/plenora-kernels-geo/src/operations.rs::simplify_with_output_policy": {
+      "arrow_arguments": [],
+      "classification": "non riceve dati esterni",
+      "reason": "Firma senza ingresso di buffer o celle Arrow; geometria Rust e politiche esplicite.",
+      "signature": "pub fn simplify_with_output_policy( geometry: &Geometry<f64>, tolerance: f64, policy: SimplifyPolicy, output_policy: SimplifyOutputPolicy, ) -> Result<SimplifyOutcome, SimplifyError>"
+    },
     "crates/plenora-kernels-geo/src/operations.rs::simplify_with_policy": {
       "arrow_arguments": [],
       "classification": "non riceve dati esterni",

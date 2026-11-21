@@ -50,6 +50,46 @@ pub enum SimplifyPolicy {
     PreserveTopology,
 }
 
+/// Politica esplicita per un risultato topologicamente non valido.
+/// Non cambia l'algoritmo o la soglia di semplificazione.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum SimplifyOutputPolicy {
+    /// Rifiuta l'uscita non valida, come [`simplify`].
+    #[default]
+    Reject,
+    /// Invoca il `make_valid` del motore soltanto dopo invalidita' accertata.
+    /// La riparazione puo' introdurre vertici e cambiare dimensione o tipo.
+    Repair {
+        /// Metodo del motore; nessuna interpretazione specifica di un servizio.
+        method: crate::rust_backend::RepairMethod,
+        /// Conserva i residui lineari e puntuali secondo il metodo scelto.
+        keep_collapsed: bool,
+        /// Precisione nelle unita' delle coordinate, risolta dal chiamante.
+        precision: Precision,
+    },
+}
+
+/// Risultato verificato della semplificazione con politica d'uscita.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SimplifyOutcome {
+    /// Geometria che ha superato il verificatore topologico del workspace.
+    pub geometry: Geometry<f64>,
+    /// Vero solo se il risultato semplificato era invalido e `make_valid`
+    /// ha concluso con successo. Non indica una riparazione dell'ingresso.
+    pub repaired: bool,
+}
+
+/// Errori distinti della semplificazione e della riparazione opt-in.
+#[derive(Debug, Error)]
+pub enum SimplifyError {
+    /// Include `InvalidOutput` quando la politica rifiuta l'uscita.
+    #[error(transparent)]
+    Simplification(#[from] OperationError),
+    /// Fallimento del `make_valid`: nessun ripiego o risultato parziale.
+    #[error(transparent)]
+    Repair(#[from] crate::rust_backend::RustBackendError),
+}
+
 /// Gli errori dei kernel di questo modulo. Nessun messaggio porta
 /// coordinate o valori delle geometrie.
 #[derive(Debug, Error)]
@@ -500,6 +540,82 @@ pub fn simplify_with_policy(
     tolerance: f64,
     policy: SimplifyPolicy,
 ) -> Result<Geometry<f64>, OperationError> {
+    validate_output(simplify_candidate(geometry, tolerance, policy)?)
+}
+
+/// Semplifica e verifica l'uscita; ripara solo con opt-in esplicito.
+///
+/// L'ingresso deve essere valido anche con `Repair`. Una validazione non
+/// conclusa non autorizza mai la riparazione. I risultati gia' validi restano
+/// identici a [`simplify_with_policy`], con `repaired = false`.
+/// Collezioni e multi sono verificate e riparate come un unico risultato.
+///
+/// Limiti: quelli di [`simplify_with_policy`] e, solo se serve riparare,
+/// di [`crate::rust_backend::make_valid_geometry`] (profilo storico
+/// `MAKE_VALID_LIMITS`, non cooperativo, senza budget cumulativo di memoria).
+/// Non e' un'API con limiti di lavoro effettivo. Il risultato riparato puo'
+/// essere misto o vuoto; la soglia RDP non certifica lo spostamento dovuto
+/// alla riparazione, che puo' creare nuovi vertici.
+///
+/// # Errors
+///
+/// Gli errori di semplificazione, incluso `InvalidOutput` con `Reject`,
+/// oppure l'errore tipizzato del `make_valid`. Nessun errore viene ignorato.
+pub fn simplify_with_output_policy(
+    geometry: &Geometry<f64>,
+    tolerance: f64,
+    policy: SimplifyPolicy,
+    output_policy: SimplifyOutputPolicy,
+) -> Result<SimplifyOutcome, SimplifyError> {
+    let candidate = simplify_candidate(geometry, tolerance, policy)?;
+    finish_simplify(candidate, output_policy)
+}
+
+fn finish_simplify(
+    candidate: Geometry<f64>,
+    policy: SimplifyOutputPolicy,
+) -> Result<SimplifyOutcome, SimplifyError> {
+    match candidate.validazione_protetta() {
+        Ok(()) => Ok(SimplifyOutcome {
+            geometry: candidate,
+            repaired: false,
+        }),
+        Err(error) => {
+            let error = error.separa(
+                |reason| OperationError::InvalidOutput(reason.to_string()),
+                OperationError::ValidazioneNonConclusa,
+            );
+            match (error, policy) {
+                (
+                    OperationError::InvalidOutput(_),
+                    SimplifyOutputPolicy::Repair {
+                        method,
+                        keep_collapsed,
+                        precision,
+                    },
+                ) => {
+                    let repaired = crate::rust_backend::make_valid_geometry(
+                        &candidate,
+                        method,
+                        keep_collapsed,
+                        precision,
+                    )?;
+                    Ok(SimplifyOutcome {
+                        geometry: validate_output(repaired)?,
+                        repaired: true,
+                    })
+                }
+                (error, _) => Err(error.into()),
+            }
+        }
+    }
+}
+
+fn simplify_candidate(
+    geometry: &Geometry<f64>,
+    tolerance: f64,
+    policy: SimplifyPolicy,
+) -> Result<Geometry<f64>, OperationError> {
     if policy == SimplifyPolicy::PreserveTopology {
         verifica_indici_simplify(geometry.coords_count())?;
     }
@@ -511,10 +627,10 @@ pub fn simplify_with_policy(
         });
     }
     if let Geometry::GeometryCollection(values) = geometry {
-        return validate_output(Geometry::GeometryCollection(
+        return Ok(Geometry::GeometryCollection(
             values
                 .iter()
-                .map(|value| simplify_with_policy(value, tolerance, policy))
+                .map(|value| simplify_candidate(value, tolerance, policy))
                 .collect::<Result<Vec<_>, _>>()?
                 .into(),
         ));
@@ -598,7 +714,7 @@ pub fn simplify_with_policy(
     } else {
         simplified
     };
-    validate_output(simplified)
+    Ok(simplified)
 }
 
 /// Spezza un livello di multi-parte o di collezione, nell'ordine delle parti
@@ -987,6 +1103,264 @@ mod tests {
         let preserved =
             simplify_with_policy(&rectangle(), 0.5, SimplifyPolicy::PreserveTopology).unwrap();
         assert_eq!(preserved, rectangle());
+    }
+
+    fn repair_policy(method: crate::rust_backend::RepairMethod) -> SimplifyOutputPolicy {
+        SimplifyOutputPolicy::Repair {
+            method,
+            keep_collapsed: true,
+            precision: Precision::new(0.01).unwrap(),
+        }
+    }
+
+    /// C1: il quadrato diventa il triangolo y >= x; il buco sta in y < x.
+    /// LINEWORK conserva entrambe le regioni (50 + 4); STRUCTURE promuove
+    /// il buco esterno a guscio, secondo il contratto del `make_valid`.
+    #[test]
+    fn generalize_hole_outside_shell_requires_explicit_repair() {
+        use crate::rust_backend::RepairMethod::{Linework, Structure};
+        let input = Geometry::Polygon(geo::Polygon::new(
+            LineString::from(vec![(0., 0.), (10., 0.), (10., 10.), (0., 10.), (0., 0.)]),
+            vec![LineString::from(vec![
+                (7., 1.),
+                (9., 1.),
+                (9., 3.),
+                (7., 3.),
+                (7., 1.),
+            ])],
+        ));
+        ensure_valid(&input).unwrap();
+        assert!(matches!(
+            simplify(&input, 8.),
+            Err(OperationError::InvalidOutput(_))
+        ));
+        assert!(matches!(
+            simplify_with_output_policy(
+                &input,
+                8.,
+                SimplifyPolicy::DouglasPeucker,
+                SimplifyOutputPolicy::default()
+            ),
+            Err(SimplifyError::Simplification(
+                OperationError::InvalidOutput(_)
+            ))
+        ));
+        for (method, area) in [(Linework, 54.), (Structure, 54.)] {
+            let result = simplify_with_output_policy(
+                &input,
+                8.,
+                SimplifyPolicy::DouglasPeucker,
+                repair_policy(method),
+            )
+            .unwrap();
+            assert!(result.repaired);
+            result.geometry.validazione_protetta().unwrap();
+            assert_eq!(result.geometry.unsigned_area(), area);
+            let repeated = simplify_with_output_policy(
+                &input,
+                8.,
+                SimplifyPolicy::DouglasPeucker,
+                repair_policy(method),
+            )
+            .unwrap();
+            assert_eq!(result, repeated);
+            // La collection deve arrivare al gate d'uscita prima di riparare.
+            let collection = Geometry::GeometryCollection(vec![input.clone()].into());
+            let result = simplify_with_output_policy(
+                &collection,
+                8.,
+                SimplifyPolicy::DouglasPeucker,
+                repair_policy(method),
+            )
+            .unwrap();
+            assert!(result.repaired);
+            result.geometry.validazione_protetta().unwrap();
+        }
+    }
+
+    /// C1: due triangoli di area 1 nel bow-tie; collassi razionali su X
+    /// e nell'origine. Fixture del gate, indipendenti dal selettore RDP.
+    #[test]
+    fn generalize_output_gate_checks_crossings_and_dimensional_collapses() {
+        use crate::rust_backend::RepairMethod::Linework;
+        for (coords, dimension) in [
+            (vec![(0., 0.), (2., 2.), (0., 2.), (2., 0.), (0., 0.)], 2),
+            (vec![(0., 0.), (1., 0.), (2., 0.), (0., 0.)], 1),
+            (vec![(0., 0.); 4], 0),
+        ] {
+            let candidate = Geometry::Polygon(geo::Polygon::new(LineString::from(coords), vec![]));
+            assert!(matches!(
+                finish_simplify(candidate.clone(), SimplifyOutputPolicy::Reject),
+                Err(SimplifyError::Simplification(
+                    OperationError::InvalidOutput(_)
+                ))
+            ));
+            let output = finish_simplify(candidate, repair_policy(Linework)).unwrap();
+            assert!(output.repaired);
+            output.geometry.validazione_protetta().unwrap();
+            match dimension {
+                2 => assert_eq!(output.geometry.unsigned_area(), 2.),
+                1 => assert!(matches!(
+                    output.geometry,
+                    Geometry::LineString(_) | Geometry::MultiLineString(_)
+                )),
+                _ => assert_eq!(output.geometry, Geometry::Point(geo::Point::new(0., 0.))),
+            }
+        }
+    }
+
+    /// C1: una linea chiusa generalizzata sopra il suo diametro collassa
+    /// nei due estremi uguali; `make_valid` la rappresenta come punto.
+    #[test]
+    fn generalize_closed_line_collapses_to_point_only_with_repair() {
+        let input = Geometry::LineString(LineString::from(vec![
+            (0., 0.),
+            (1., 0.),
+            (1., 1.),
+            (0., 0.),
+        ]));
+        assert!(matches!(
+            simplify(&input, 10.),
+            Err(OperationError::InvalidOutput(_))
+        ));
+        let result = simplify_with_output_policy(
+            &input,
+            10.,
+            SimplifyPolicy::DouglasPeucker,
+            repair_policy(crate::rust_backend::RepairMethod::Structure),
+        )
+        .unwrap();
+        assert!(result.repaired);
+        assert_eq!(result.geometry, Geometry::Point(geo::Point::new(0., 0.)));
+    }
+
+    /// C1: il nuovo lato (6,1)-(0,7) incrocia (4,2)-(9,8).
+    /// Gli estremi del secondo lato stanno sui due lati di x+y=7.
+    #[test]
+    fn generalize_creates_crossing_ring_but_never_publishes_it() {
+        let input = Geometry::Polygon(geo::Polygon::new(
+            LineString::from(vec![
+                (6., 1.),
+                (1., 0.),
+                (0., 7.),
+                (4., 2.),
+                (6., 4.),
+                (4., 7.),
+                (9., 8.),
+                (8., 7.),
+                (6., 1.),
+            ]),
+            vec![],
+        ));
+        ensure_valid(&input).unwrap();
+        assert!(matches!(
+            simplify(&input, 5.),
+            Err(OperationError::InvalidOutput(_))
+        ));
+        for method in [
+            crate::rust_backend::RepairMethod::Linework,
+            crate::rust_backend::RepairMethod::Structure,
+        ] {
+            let result = simplify_with_output_policy(
+                &input,
+                5.,
+                SimplifyPolicy::DouglasPeucker,
+                repair_policy(method),
+            )
+            .unwrap();
+            assert!(result.repaired);
+            result.geometry.validazione_protetta().unwrap();
+        }
+    }
+
+    /// C1: un triangolo chiuso ridotto ai due estremi uguali viene scartato
+    /// da STRUCTURE quando la conservazione dei collassati e' disattivata.
+    #[test]
+    fn generalize_can_explicitly_discard_collapsed_output() {
+        let input = Geometry::LineString(LineString::from(vec![
+            (0., 0.),
+            (1., 0.),
+            (1., 1.),
+            (0., 0.),
+        ]));
+        let result = simplify_with_output_policy(
+            &input,
+            10.,
+            SimplifyPolicy::DouglasPeucker,
+            SimplifyOutputPolicy::Repair {
+                method: crate::rust_backend::RepairMethod::Structure,
+                keep_collapsed: false,
+                precision: Precision::new(0.01).unwrap(),
+            },
+        )
+        .unwrap();
+        assert!(result.repaired);
+        assert_eq!(
+            result.geometry,
+            Geometry::LineString(LineString::new(vec![]))
+        );
+        result.geometry.validazione_protetta().unwrap();
+    }
+
+    /// C1: un incrocio razionale non binario non puo' essere pubblicato
+    /// con precisione minore della spaziatura binary64 delle coordinate.
+    #[test]
+    fn generalize_propagates_repair_precision_failure() {
+        let candidate = Geometry::Polygon(geo::Polygon::new(
+            LineString::from(vec![(0., 0.), (3., 2.), (0., 2.), (2., 0.), (0., 0.)]),
+            vec![],
+        ));
+        let result = finish_simplify(
+            candidate,
+            SimplifyOutputPolicy::Repair {
+                method: crate::rust_backend::RepairMethod::Linework,
+                keep_collapsed: true,
+                precision: Precision::new(1e-30).unwrap(),
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(SimplifyError::Repair(
+                crate::rust_backend::RustBackendError::PrecisionInsufficient
+            ))
+        ));
+    }
+
+    /// C1: opt-in senza invalidita' non ripara, e non sana ingressi invalidi.
+    #[test]
+    fn generalize_preserves_valid_results_and_rejects_invalid_inputs() {
+        let repair = repair_policy(crate::rust_backend::RepairMethod::Linework);
+        for policy in [
+            SimplifyPolicy::DouglasPeucker,
+            SimplifyPolicy::PreserveTopology,
+        ] {
+            for tolerance in [0., 0.5, 100.] {
+                let expected = simplify_with_policy(&rectangle(), tolerance, policy).unwrap();
+                for output_policy in [SimplifyOutputPolicy::Reject, repair] {
+                    let result =
+                        simplify_with_output_policy(&rectangle(), tolerance, policy, output_policy)
+                            .unwrap();
+                    assert!(!result.repaired);
+                    assert_eq!(
+                        crate::rust_backend::wkb::wkb_xy(&result.geometry).unwrap(),
+                        crate::rust_backend::wkb::wkb_xy(&expected).unwrap()
+                    );
+                }
+            }
+        }
+        let invalid = Geometry::LineString(LineString::from(vec![(0., 0.), (0., 0.)]));
+        assert!(matches!(
+            simplify_with_output_policy(&invalid, 1., SimplifyPolicy::DouglasPeucker, repair),
+            Err(SimplifyError::Simplification(OperationError::InvalidInput(
+                _
+            )))
+        ));
+        assert!(matches!(
+            simplify_with_output_policy(&rectangle(), -1., SimplifyPolicy::DouglasPeucker, repair),
+            Err(SimplifyError::Simplification(
+                OperationError::InvalidParameter { .. }
+            ))
+        ));
     }
 
     #[test]
