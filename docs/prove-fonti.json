@@ -2225,6 +2225,14 @@
       "validated_variants_document_the_caller_precondition",
       "boolean_area_identities_hold_for_generated_rectangles"
     ],
+    "crates/plenora-kernels-geo/src/triangolazione/bounded.rs": [
+      "clipping_exact_fractional_vertices",
+      "clipping_exact_area_partition_and_winding",
+      "clipping_rejects_nonconvex_repeated_and_nonfinite_rings",
+      "clipping_closed_duplicate_and_lower_dimensional_results",
+      "clipping_exact_resource_thresholds",
+      "clipping_interrupts_inside_and_at_delivery"
+    ],
     "crates/plenora-kernels-geo/src/triangolazione/tests.rs": [
       "dedup_preserves_total_order",
       "zero_bits_through_collinear_transition",

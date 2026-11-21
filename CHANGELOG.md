@@ -10,7 +10,7 @@ voce è «non rilasciata» finché il tag non esiste; prima di pubblicare la
 release si sostituisce con la data, e `rilascio.yml` rifiuta una release
 la cui versione non ha qui una voce datata.
 
-## [6.2.0] - non rilasciata
+## [7.0.0] - non rilasciata
 
 ### Aggiunte
 
@@ -29,6 +29,13 @@ la cui versione non ha qui una voce datata.
   triangolazione, il clipping o la serializzazione.
 
 ### Prove
+
+- Nucleo sperimentale del clipping convesso all'inviluppo, compilato solo
+  nelle prove: quattro semipiani razionali con lavoro, memoria e nodi
+  contati nel contesto comune. Oracoli analitici, partizione esatta,
+  soglie delle risorse e interruzioni interne. Non ancora collegato a
+  Voronoi: pubblicazione storica e anelli generici restano da qualificare.
+  Nessun cambiamento del comportamento delle API di produzione.
 
 - Triangolazioni: controprove di compatibilita' per clipping Voronoi e
   validazione Delaunay generica. I backend razionali con limiti non sono
