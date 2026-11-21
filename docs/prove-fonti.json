@@ -2226,6 +2226,13 @@
       "boolean_area_identities_hold_for_generated_rectangles"
     ],
     "crates/plenora-kernels-geo/src/triangolazione/bounded.rs": [
+      "grid_fraction_matches_bigint_oracle",
+      "grid_crossings_match_exact_parameter_oracle",
+      "grid_marks_contacts_snapping_and_order",
+      "grid_marks_resource_thresholds_and_checkpoints",
+      "grid_noding_simultaneous_splits_merge_and_idempotence",
+      "grid_noding_resource_thresholds_and_checkpoints",
+      "grid_noded_vertices_cover_backend_clipped_vertices",
       "raw_cell_convex_profile_deterministic_corpus",
       "clipping_grid_matches_backend_unintersected_vertices",
       "clipping_grid_roundtrip_outside_float_bounds_and_scale_cap",

@@ -263,6 +263,395 @@ mod clipping {
         }
     }
 
+    /// Segmento canonico della griglia; il costruttore verifica il dominio.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Edge {
+        a: [i64; 2],
+        b: [i64; 2],
+    }
+
+    impl Edge {
+        pub fn new(a: [i64; 2], b: [i64; 2]) -> Result<Self, ClipError> {
+            if a == b || a.into_iter().chain(b).any(|v| v.unsigned_abs() > 1 << 61) {
+                return Err(ClipError::UnsupportedRing);
+            }
+            Ok(Self {
+                a: a.min(b),
+                b: a.max(b),
+            })
+        }
+
+        pub fn ends(self) -> [[i64; 2]; 2] {
+            [self.a, self.b]
+        }
+    }
+
+    // Coordinate entro 2^61: differenze entro 2^62, determinanti e distanze
+    // quadrate entro 2^125. Tutte queste operazioni sono esatte in i128.
+    fn delta(a: [i64; 2], b: [i64; 2]) -> [i128; 2] {
+        [
+            i128::from(a[0]) - i128::from(b[0]),
+            i128::from(a[1]) - i128::from(b[1]),
+        ]
+    }
+
+    fn cross(a: [i128; 2], b: [i128; 2]) -> i128 {
+        a[0] * b[1] - a[1] * b[0]
+    }
+
+    fn side(edge: Edge, point: [i64; 2]) -> i128 {
+        cross(delta(edge.b, edge.a), delta(point, edge.a))
+    }
+
+    fn distance(a: [i64; 2], b: [i64; 2]) -> u128 {
+        let d = delta(a, b);
+        (d[0] * d[0] + d[1] * d[1]).unsigned_abs()
+    }
+
+    /// Quoziente e resto di magnitude*n/d senza allocazioni o prodotto a
+    /// 189 bit. Ogni iterazione mantiene r < d e q <= magnitude; il dominio
+    /// del determinante garantisce 2*r+n < 3*2^125.
+    pub fn scaled_fraction(
+        magnitude: u64,
+        n: u128,
+        d: u128,
+        round: bool,
+        work: &mut Work<'_>,
+    ) -> Result<u64, ClipError> {
+        work.step()?;
+        if magnitude > 1 << 62 || d == 0 || d > 1 << 125 || n > d {
+            return Err(ClipError::UnsupportedRing);
+        }
+        let (mut q, mut r) = (0_u64, 0_u128);
+        for bit in (0..63).rev() {
+            work.step()?;
+            r = r * 2 + u128::from((magnitude >> bit) & 1) * n;
+            q = q * 2 + u64::try_from(r / d).map_err(|_| ClipError::UnsupportedRing)?;
+            r %= d;
+        }
+        if round && r >= d.div_ceil(2) {
+            q += 1;
+        }
+        Ok(q)
+    }
+
+    /// Incrocio proprio: assiali troncati, obliqui arrotondati a meta'
+    /// lontano dall'origine target.a, come il backend storico.
+    pub fn crossing(target: Edge, other: Edge, work: &mut Work<'_>) -> Result<[i64; 2], ClipError> {
+        work.step()?;
+        let direction = delta(target.b, target.a);
+        let other_start = delta(other.a, target.a);
+        let other_end = delta(other.b, target.a);
+        let numerator = cross(other_start, other_end);
+        let denominator = cross(
+            direction,
+            [other_end[0] - other_start[0], other_end[1] - other_start[1]],
+        );
+        if numerator.signum() != denominator.signum()
+            || numerator == 0
+            || numerator.unsigned_abs() >= denominator.unsigned_abs()
+            || side(target, other.a).signum() == side(target, other.b).signum()
+            || side(target, other.a) == 0
+            || side(target, other.b) == 0
+        {
+            return Err(ClipError::UnsupportedRing);
+        }
+        let round = direction[0] != 0 && direction[1] != 0;
+        let mut point = [0; 2];
+        for axis in 0..2 {
+            let magnitude = u64::try_from(direction[axis].unsigned_abs())
+                .map_err(|_| ClipError::UnsupportedRing)?;
+            let offset = scaled_fraction(
+                magnitude,
+                numerator.unsigned_abs(),
+                denominator.unsigned_abs(),
+                round,
+                work,
+            )?;
+            point[axis] = i64::try_from(
+                i128::from(target.a[axis]) + direction[axis].signum() * i128::from(offset),
+            )
+            .map_err(|_| ClipError::UnsupportedRing)?;
+        }
+        Ok(point)
+    }
+
+    /// Marcature da applicare simultaneamente: target=0, other=1.
+    /// La coppia e' normalizzata secondo AB prima del calcolo.
+    pub struct Marks {
+        pub edges: [Edge; 2],
+        pub points: CountedVec<(usize, [i64; 2])>,
+        pub rounded: bool,
+    }
+
+    fn mark(
+        marks: &mut Marks,
+        index: usize,
+        point: [i64; 2],
+        work: &mut Work<'_>,
+    ) -> Result<(), ClipError> {
+        work.nodes(1)?;
+        work.push(&mut marks.points, (index, point))?;
+        Ok(())
+    }
+
+    /// Fase locale del noding storico: incroci, contatti, sovrapposizioni e
+    /// agganci. Il raggio e' gia' quadrato; non viene elevato di nuovo.
+    pub fn pair_marks(
+        a: Edge,
+        b: Edge,
+        radius: u128,
+        work: &mut Work<'_>,
+    ) -> Result<Marks, ClipError> {
+        work.pair()?;
+        if radius > 1 << 120 {
+            return Err(ClipError::UnsupportedRing);
+        }
+        let (a, b) = if (a.a, a.b) <= (b.a, b.b) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let mut marks = Marks {
+            edges: [a, b],
+            points: CountedVec::new(),
+            rounded: false,
+        };
+        // Il backend applica questo filtro prima di CrossSolver.
+        if a.b[0] < b.a[0]
+            || a.a[1].min(a.b[1]) > b.a[1].max(b.b[1])
+            || b.a[1].min(b.b[1]) > a.a[1].max(a.b[1])
+        {
+            work.step()?;
+            return Ok(marks);
+        }
+        let signs = [
+            side(a, b.a).signum(),
+            side(a, b.b).signum(),
+            side(b, a.a).signum(),
+            side(b, a.b).signum(),
+        ];
+        let zeros = signs.iter().filter(|&&v| v == 0).count();
+        if zeros == 4 {
+            for (index, edge, point) in [(1, b, a.a), (1, b, a.b), (0, a, b.a), (0, a, b.b)] {
+                work.step()?;
+                if edge.a < point && point < edge.b {
+                    mark(&mut marks, index, point, work)?;
+                }
+            }
+        } else if zeros <= 1 && signs[0] != signs[1] && signs[2] != signs[3] {
+            if zeros == 1 {
+                let (index, point) = if signs[0] == 0 {
+                    (0, b.a)
+                } else if signs[1] == 0 {
+                    (0, b.b)
+                } else if signs[2] == 0 {
+                    (1, a.a)
+                } else {
+                    (1, a.b)
+                };
+                mark(&mut marks, index, point, work)?;
+            } else {
+                let point = crossing(a, b, work)?;
+                marks.rounded = side(a, point) != 0 || side(b, point) != 0;
+                if marks.rounded {
+                    let distances = [
+                        distance(a.a, point),
+                        distance(a.b, point),
+                        distance(b.a, point),
+                        distance(b.b, point),
+                    ];
+                    let r0 = distances[0].min(distances[1]);
+                    let r1 = distances[2].min(distances[3]);
+                    if r0.min(r1) <= radius {
+                        let (index, edge, snap) = if r0 <= r1 {
+                            (
+                                1,
+                                b,
+                                if distances[0] < distances[1] {
+                                    a.a
+                                } else {
+                                    a.b
+                                },
+                            )
+                        } else {
+                            (
+                                0,
+                                a,
+                                if distances[2] < distances[3] {
+                                    b.a
+                                } else {
+                                    b.b
+                                },
+                            )
+                        };
+                        if side(edge, snap) != 0 {
+                            mark(&mut marks, index, snap, work)?;
+                            work.step()?;
+                            return Ok(marks);
+                        }
+                    }
+                }
+                mark(&mut marks, 0, point, work)?;
+                mark(&mut marks, 1, point, work)?;
+            }
+        }
+        work.step()?;
+        Ok(marks)
+    }
+
+    /// Molteplicita' orientate di soggetto e rettangolo sulla stessa edge.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct WeightedEdge {
+        pub edge: Edge,
+        pub count: [i64; 2],
+    }
+
+    impl WeightedEdge {
+        pub fn new(a: [i64; 2], b: [i64; 2], count: [i64; 2]) -> Result<Self, ClipError> {
+            Ok(Self {
+                edge: Edge::new(a, b)?,
+                count: if a < b {
+                    count
+                } else {
+                    [
+                        count[0].checked_neg().ok_or(ClipError::UnsupportedRing)?,
+                        count[1].checked_neg().ok_or(ClipError::UnsupportedRing)?,
+                    ]
+                },
+            })
+        }
+    }
+
+    fn merge(
+        mut edges: CountedVec<WeightedEdge>,
+        work: &mut Work<'_>,
+    ) -> Result<CountedVec<WeightedEdge>, ClipError> {
+        crate::noding::sorted(
+            &mut edges,
+            |a, b| Ok(a.edge.ends().cmp(&b.edge.ends())),
+            work,
+        )?;
+        let mut result: CountedVec<WeightedEdge> = CountedVec::new();
+        for &edge in &edges {
+            work.step()?;
+            if let Some(last) = result.last_mut().filter(|last| last.edge == edge.edge) {
+                for axis in 0..2 {
+                    last.count[axis] = last.count[axis]
+                        .checked_add(edge.count[axis])
+                        .ok_or(ClipError::UnsupportedRing)?;
+                }
+            } else {
+                work.push(&mut result, edge)?;
+            }
+        }
+        // La somma nulla scompare solo dopo avere sommato l'intero gruppo.
+        let mut nonzero = CountedVec::new();
+        for &edge in &result {
+            work.step()?;
+            if edge.count != [0, 0] {
+                work.push(&mut nonzero, edge)?;
+            }
+        }
+        Ok(nonzero)
+    }
+
+    /// Scansione List contata, inclusi merge AB, marcature simultanee,
+    /// deduplicazione e raggio progressivo. Non classifica ancora le facce.
+    pub fn node(
+        input: &[WeightedEdge],
+        work: &mut Work<'_>,
+    ) -> Result<CountedVec<WeightedEdge>, ClipError> {
+        work.step()?;
+        let mut edges = CountedVec::new();
+        for &edge in input {
+            work.step()?;
+            if edge.count == [0, 0] {
+                return Err(ClipError::UnsupportedRing);
+            }
+            work.push(&mut edges, edge)?;
+        }
+        let mut edges = merge(edges, work)?;
+        let mut exponent = 0_u32;
+        loop {
+            work.step()?;
+            let mut marks = CountedVec::new();
+            let mut rounded = false;
+            for (i, a) in edges.iter().enumerate() {
+                for (j, b) in edges.iter().enumerate().skip(i + 1) {
+                    work.step()?;
+                    if a.edge.b[0] < b.edge.a[0] {
+                        break;
+                    }
+                    let pair = pair_marks(a.edge, b.edge, 1_u128 << exponent, work)?;
+                    rounded |= pair.rounded;
+                    for &(index, point) in &pair.points {
+                        work.push(&mut marks, (if index == 0 { i } else { j }, point))?;
+                    }
+                }
+            }
+            if marks.is_empty() {
+                break;
+            }
+            crate::noding::sorted(&mut marks, |a, b| Ok(a.cmp(b)), work)?;
+            marks.dedup_by(|a, b| Ok(a == b), work)?;
+            let mut next = CountedVec::new();
+            let mut cursor = 0;
+            for (index, &edge) in edges.iter().enumerate() {
+                work.step()?;
+                let start = cursor;
+                while cursor < marks.len() && marks[cursor].0 == index {
+                    work.step()?;
+                    cursor += 1;
+                }
+                // Stesso ordine dei gruppi con X uguale del backend: il verso
+                // Y dipende dai gruppi adiacenti, non dalla sola pendenza.
+                let mut group = start;
+                while group < cursor {
+                    work.step()?;
+                    let mut end = group + 1;
+                    while end < cursor && marks[end].1[0] == marks[group].1[0] {
+                        work.step()?;
+                        end += 1;
+                    }
+                    let y0 = if group == start {
+                        edge.edge.a[1]
+                    } else {
+                        marks[group - 1].1[1]
+                    };
+                    let y1 = if end == cursor {
+                        edge.edge.b[1]
+                    } else {
+                        marks[end].1[1]
+                    };
+                    if y0 > y1 {
+                        for offset in 0..(end - group) / 2 {
+                            work.step()?;
+                            marks.swap(group + offset, end - 1 - offset);
+                        }
+                    }
+                    group = end;
+                }
+                let mut previous = edge.edge.a;
+                for &(_, point) in &marks[start..cursor] {
+                    work.push(&mut next, WeightedEdge::new(previous, point, edge.count)?)?;
+                    previous = point;
+                }
+                work.push(
+                    &mut next,
+                    WeightedEdge::new(previous, edge.edge.b, edge.count)?,
+                )?;
+            }
+            edges = merge(next, work)?;
+            if !rounded {
+                break;
+            }
+            exponent = (exponent + 1).min(120);
+        }
+        work.step()?;
+        Ok(edges)
+    }
+
     fn ordinate(point: &P, axis: usize) -> &Q {
         if axis == 0 {
             &point.x
@@ -429,6 +818,427 @@ mod clipping_tests {
     use crate::predicates::{PredicateError, RelateLimits};
     use geo::{Coord, Rect};
     use std::sync::atomic::AtomicBool;
+
+    /// Oracolo `BigInt` indipendente dalla divisione binaria a spazio fisso.
+    #[test]
+    fn grid_fraction_matches_bigint_oracle() {
+        use super::clipping::scaled_fraction;
+        use num_bigint::BigUint;
+        let mut state = 700_u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            state
+        };
+        for index in 0..4096 {
+            let magnitude = if index % 8 == 0 { 1 << 62 } else { next() >> 2 };
+            let d = if index % 8 == 1 {
+                1 << 125
+            } else {
+                ((u128::from(next()) << 64 | u128::from(next())) >> 3).max(1)
+            };
+            let n = match index % 8 {
+                0 => 0,
+                1 => d,
+                2 => d / 2,
+                3 => d - 1,
+                _ => (u128::from(next()) << 64 | u128::from(next())) % d,
+            };
+            for round in [false, true] {
+                let product = BigUint::from(magnitude) * BigUint::from(n);
+                let divisor = BigUint::from(d);
+                let expected = (product
+                    + if round {
+                        &divisor / 2_u8
+                    } else {
+                        BigUint::from(0_u8)
+                    })
+                    / divisor;
+                let mut work = Work::new(RelateLimits::default(), None);
+                let actual = scaled_fraction(magnitude, n, d, round, &mut work).unwrap();
+                assert_eq!(BigUint::from(actual), expected);
+                assert_eq!(work.peak_bytes(), 0);
+                assert_eq!(work.steps, 64);
+            }
+        }
+        for (magnitude, n, d) in [
+            (1_u64 << 63, 1, 2),
+            (1, 1, 0),
+            (1, 3, 2),
+            (1, 1, (1_u128 << 125) + 1),
+        ] {
+            let mut work = Work::new(RelateLimits::default(), None);
+            assert!(matches!(
+                scaled_fraction(magnitude, n, d, true, &mut work),
+                Err(ClipError::UnsupportedRing)
+            ));
+        }
+    }
+
+    /// Incroci calcolati da parametri razionali indipendenti. Le coordinate
+    /// includono il limite intero della griglia, assiali e segni opposti.
+    #[test]
+    fn grid_crossings_match_exact_parameter_oracle() {
+        use super::clipping::{crossing, Edge};
+        use num_bigint::BigInt;
+        let limit = 1_i64 << 61;
+        let ys = [-limit, -limit + 1, -7, -1, 0, 1, 9, limit - 1, limit];
+        for a0 in ys {
+            for a1 in ys {
+                for b0 in ys {
+                    for b1 in ys {
+                        let n = i128::from(b0) - i128::from(a0);
+                        let d =
+                            (i128::from(a1) - i128::from(a0)) - (i128::from(b1) - i128::from(b0));
+                        if n == 0 || d == 0 || n.signum() != d.signum() || n.abs() >= d.abs() {
+                            continue;
+                        }
+                        let oracle = |delta: i128| {
+                            let product = BigInt::from(delta.abs()) * BigInt::from(n.abs());
+                            let divisor = BigInt::from(d.abs());
+                            let offset = (product
+                                + if a0 == a1 {
+                                    BigInt::from(0)
+                                } else {
+                                    &divisor / 2
+                                })
+                                / divisor;
+                            offset * BigInt::from(delta.signum())
+                        };
+                        let expected = [
+                            BigInt::from(-limit) + oracle(i128::from(limit) * 2),
+                            BigInt::from(a0) + oracle(i128::from(a1) - i128::from(a0)),
+                        ];
+                        let mut work = Work::new(RelateLimits::default(), None);
+                        let actual = crossing(
+                            Edge::new([-limit, a0], [limit, a1]).unwrap(),
+                            Edge::new([-limit, b0], [limit, b1]).unwrap(),
+                            &mut work,
+                        )
+                        .unwrap();
+                        assert_eq!(actual.map(BigInt::from), expected);
+                    }
+                }
+            }
+        }
+        let mut work = Work::new(RelateLimits::default(), None);
+        let horizontal = Edge::new([0, 0], [10, 0]).unwrap();
+        let outside = Edge::new([5, 5], [5, 10]).unwrap();
+        assert!(matches!(
+            crossing(horizontal, outside, &mut work),
+            Err(ClipError::UnsupportedRing)
+        ));
+        let vertical = Edge::new([0, -4], [0, 5]).unwrap();
+        let oblique = Edge::new([-2, 1], [3, 2]).unwrap();
+        assert_eq!(crossing(vertical, oblique, &mut work).unwrap(), [0, 1]);
+        assert!(matches!(
+            Edge::new([i64::MIN, 0], [0, 0]),
+            Err(ClipError::UnsupportedRing)
+        ));
+        assert!(matches!(
+            Edge::new([0, 0], [0, 0]),
+            Err(ClipError::UnsupportedRing)
+        ));
+    }
+
+    #[test]
+    fn grid_marks_contacts_snapping_and_order() {
+        use super::clipping::{pair_marks, Edge};
+        let edge = |a, b| Edge::new(a, b).unwrap();
+        let cases = [
+            (
+                edge([0, 0], [5, 5]),
+                edge([0, 3], [5, -2]),
+                4,
+                vec![(0, [2, 2]), (1, [2, 2])],
+                true,
+            ),
+            (
+                edge([0, 0], [5, 5]),
+                edge([0, 3], [5, -2]),
+                5,
+                vec![(0, [0, 3])],
+                true,
+            ),
+            (
+                edge([0, 0], [4, 4]),
+                edge([0, 4], [4, 0]),
+                16,
+                vec![(0, [2, 2]), (1, [2, 2])],
+                false,
+            ),
+            (
+                edge([0, 0], [4, 0]),
+                edge([2, 0], [6, 0]),
+                1,
+                vec![(1, [4, 0]), (0, [2, 0])],
+                false,
+            ),
+            (
+                edge([0, 0], [4, 0]),
+                edge([2, 0], [2, 3]),
+                1,
+                vec![(0, [2, 0])],
+                false,
+            ),
+            (edge([0, 0], [4, 0]), edge([4, 0], [4, 3]), 1, vec![], false),
+            (edge([0, 0], [4, 0]), edge([5, 0], [6, 0]), 1, vec![], false),
+        ];
+        for (a, b, radius, expected, rounded) in cases {
+            for (a, b) in [(a, b), (b, a), (edge(a.ends()[1], a.ends()[0]), b)] {
+                let mut work = Work::new(RelateLimits::default(), None);
+                let marks = pair_marks(a, b, radius, &mut work).unwrap();
+                assert_eq!(&*marks.points, expected);
+                assert_eq!(marks.rounded, rounded);
+                for &(index, point) in &marks.points {
+                    assert!(!marks.edges[index].ends().contains(&point));
+                }
+            }
+        }
+    }
+
+    /// Soglie esatte della singola coppia, inclusa consegna e precedenza
+    /// deadline. Non qualifica ancora un noder iterativo o la pubblicazione.
+    #[test]
+    fn grid_marks_resource_thresholds_and_checkpoints() {
+        use super::clipping::{pair_marks, Edge};
+        let a = Edge::new([0, 0], [5, 5]).unwrap();
+        let b = Edge::new([0, 3], [5, -2]).unwrap();
+        let mut work = Work::new(RelateLimits::default(), None);
+        let marks = pair_marks(a, b, 1, &mut work).unwrap();
+        assert_eq!(marks.points.len(), 2);
+        let measured = [work.steps, work.peak_bytes(), work.nodes, work.pairs];
+        for (axis, &measurement) in measured.iter().enumerate() {
+            for adjustment in [-1_i64, 0, 1] {
+                let mut limits = RelateLimits::default();
+                let threshold = measurement.checked_add_signed(adjustment).unwrap();
+                match axis {
+                    0 => limits.max_steps = threshold,
+                    1 => limits.max_reserved_bytes = threshold,
+                    2 => limits.max_nodes = threshold,
+                    _ => limits.max_segment_pairs = threshold,
+                }
+                let mut work = Work::new(limits, None);
+                let result = pair_marks(a, b, 1, &mut work);
+                if adjustment < 0 {
+                    if axis == 1 {
+                        assert!(matches!(
+                            result,
+                            Err(ClipError::Resource(PredicateError::ReservationLimit))
+                        ));
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(ClipError::Resource(PredicateError::WorkLimit))
+                        ));
+                    }
+                } else {
+                    assert_eq!(result.unwrap().points.len(), 2);
+                }
+            }
+        }
+        for at in [0, 1, measured[0] / 2, measured[0] - 1] {
+            for deadline in [false, true] {
+                let flag = AtomicBool::new(false);
+                let mut work = Work::new(RelateLimits::default(), Some(&flag));
+                work.interrupt_at = Some((at, deadline));
+                let result = pair_marks(a, b, 1, &mut work);
+                if deadline {
+                    assert!(matches!(
+                        result,
+                        Err(ClipError::Resource(PredicateError::DeadlineExceeded))
+                    ));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ClipError::Resource(PredicateError::Cancelled))
+                    ));
+                }
+            }
+        }
+        let flag = AtomicBool::new(true);
+        let limits = RelateLimits {
+            deadline: Some(std::time::Instant::now()),
+            ..RelateLimits::default()
+        };
+        let mut work = Work::new(limits, Some(&flag));
+        assert!(matches!(
+            pair_marks(a, b, 1, &mut work),
+            Err(ClipError::Resource(PredicateError::DeadlineExceeded))
+        ));
+    }
+
+    #[test]
+    fn grid_noding_simultaneous_splits_merge_and_idempotence() {
+        use super::clipping::{node, WeightedEdge};
+        let edge = |a, b, count| WeightedEdge::new(a, b, count).unwrap();
+        let input = [
+            edge([0, 0], [6, 0], [1, 0]),
+            edge([2, -2], [2, 2], [0, 1]),
+            edge([4, -2], [4, 2], [0, 1]),
+            edge([1, 0], [5, 0], [0, 1]),
+        ];
+        let mut expected = vec![
+            edge([0, 0], [1, 0], [1, 0]),
+            edge([1, 0], [2, 0], [1, 1]),
+            edge([2, 0], [4, 0], [1, 1]),
+            edge([4, 0], [5, 0], [1, 1]),
+            edge([5, 0], [6, 0], [1, 0]),
+            edge([2, -2], [2, 0], [0, 1]),
+            edge([2, 0], [2, 2], [0, 1]),
+            edge([4, -2], [4, 0], [0, 1]),
+            edge([4, 0], [4, 2], [0, 1]),
+        ];
+        expected.sort_by_key(|edge| edge.edge.ends());
+        let mut work = Work::new(RelateLimits::default(), None);
+        let output = node(&input, &mut work).unwrap();
+        assert_eq!(&*output, expected);
+        let again = node(&output, &mut work).unwrap();
+        assert_eq!(&*again, &*output);
+        assert!(matches!(
+            node(&[edge([0, 0], [6, 0], [0, 0])], &mut work),
+            Err(ClipError::UnsupportedRing)
+        ));
+        let cancel = [input[0], edge([6, 0], [0, 0], [1, 0])];
+        assert!(node(&cancel, &mut work).unwrap().is_empty());
+        let rounded = [edge([0, 0], [5, 5], [1, 0]), edge([0, 3], [5, -2], [0, 1])];
+        let output = node(&rounded, &mut work).unwrap();
+        let expected = [
+            edge([0, 0], [2, 2], [1, 0]),
+            edge([0, 3], [2, 2], [0, 1]),
+            edge([2, 2], [5, -2], [0, 1]),
+            edge([2, 2], [5, 5], [1, 0]),
+        ];
+        assert_eq!(&*output, expected);
+        assert_eq!(&*node(&output, &mut work).unwrap(), &*output);
+    }
+
+    #[test]
+    fn grid_noding_resource_thresholds_and_checkpoints() {
+        use super::clipping::{node, WeightedEdge};
+        let input = [
+            WeightedEdge::new([0, 0], [5, 5], [1, 0]).unwrap(),
+            WeightedEdge::new([0, 3], [5, -2], [0, 1]).unwrap(),
+        ];
+        let mut work = Work::new(RelateLimits::default(), None);
+        let output = node(&input, &mut work).unwrap();
+        assert_eq!(output.len(), 4);
+        let measured = [work.steps, work.peak_bytes(), work.nodes, work.pairs];
+        for (axis, &measurement) in measured.iter().enumerate() {
+            for adjustment in [-1_i64, 0, 1] {
+                let mut limits = RelateLimits::default();
+                let threshold = measurement.checked_add_signed(adjustment).unwrap();
+                match axis {
+                    0 => limits.max_steps = threshold,
+                    1 => limits.max_reserved_bytes = threshold,
+                    2 => limits.max_nodes = threshold,
+                    _ => limits.max_segment_pairs = threshold,
+                }
+                let result = node(&input, &mut Work::new(limits, None));
+                if adjustment < 0 {
+                    if axis == 1 {
+                        assert!(matches!(
+                            result,
+                            Err(ClipError::Resource(PredicateError::ReservationLimit))
+                        ));
+                    } else {
+                        assert!(matches!(
+                            result,
+                            Err(ClipError::Resource(PredicateError::WorkLimit))
+                        ));
+                    }
+                } else {
+                    assert_eq!(result.unwrap().len(), 4);
+                }
+            }
+        }
+        for at in [0, 1, measured[0] / 2, measured[0] - 1] {
+            for deadline in [false, true] {
+                let flag = AtomicBool::new(false);
+                let mut work = Work::new(RelateLimits::default(), Some(&flag));
+                work.interrupt_at = Some((at, deadline));
+                let result = node(&input, &mut work);
+                if deadline {
+                    assert!(matches!(
+                        result,
+                        Err(ClipError::Resource(PredicateError::DeadlineExceeded))
+                    ));
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ClipError::Resource(PredicateError::Cancelled))
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Differenziale parziale: ogni vertice pubblicato da geo deve provenire
+    /// da un estremo del grafo noded, prima o dopo `clean_result`. Non attesta
+    /// classificazione, ordine, assenza di vertici extra o componenti.
+    #[test]
+    fn grid_noded_vertices_cover_backend_clipped_vertices() {
+        use super::clipping::{node, Grid, WeightedEdge};
+        use crate::advanced::celle_grezze_da_spade;
+        use crate::rust_backend::precision::Precision;
+        use geo::BooleanOps;
+        let mut state = 701_u64;
+        let mut clipped = 0;
+        for _ in 0..32 {
+            let coordinates: Vec<_> = (0..12)
+                .map(|_| {
+                    let mut next = || {
+                        state = state
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1);
+                        f64::from(u32::try_from((state >> 32) % 100).unwrap())
+                    };
+                    Coord {
+                        x: next(),
+                        y: next(),
+                    }
+                })
+                .collect();
+            let (cells, envelope) =
+                celle_grezze_da_spade(&coordinates, Precision::new(0.01).unwrap()).unwrap();
+            for cell in cells {
+                let mut work = Work::new(RelateLimits::default(), None);
+                let grid = Grid::new(&cell.exterior().0, envelope, &mut work).unwrap();
+                let rect = envelope.to_polygon();
+                let mut input = Vec::new();
+                for (ring, count) in [(&cell, [1, 0]), (&rect, [0, 1])] {
+                    for pair in ring.exterior().0.windows(2) {
+                        let a = grid.encode(pair[0], &mut work).unwrap();
+                        let b = grid.encode(pair[1], &mut work).unwrap();
+                        if a != b {
+                            input.push(WeightedEdge::new(a, b, count).unwrap());
+                        }
+                    }
+                }
+                let graph = node(&input, &mut work).unwrap();
+                let mut vertices = std::collections::BTreeSet::new();
+                for edge in &graph {
+                    for point in edge.edge.ends() {
+                        let first = grid.decode(point, &mut work).unwrap();
+                        let reencoded = grid.requantize(point, &mut work).unwrap();
+                        let second = grid.decode(reencoded, &mut work).unwrap();
+                        for p in [first, second] {
+                            vertices.insert((p.x.to_bits(), p.y.to_bits()));
+                        }
+                    }
+                }
+                let expected = cell.intersection(&rect);
+                for polygon in expected {
+                    clipped += 1;
+                    for point in &polygon.exterior().0 {
+                        assert!(vertices.contains(&(point.x.to_bits(), point.y.to_bits())));
+                    }
+                }
+            }
+        }
+        assert_eq!(clipped, 384);
+    }
 
     /// Qualifica soltanto questo corpus; non assume convessita universale.
     #[test]

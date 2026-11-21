@@ -30,6 +30,13 @@ la cui versione non ha qui una voce datata.
 
 ### Prove
 
+- Clipping Voronoi, solo `cfg(test)`: noding intero contabile con incroci,
+  agganci, merge e giri simultanei della strategia List. Divisione a
+  spazio fisso verificata contro BigInt, soglie e checkpoint interni.
+  La pubblicazione bit per bit e il percorso unico restano da completare;
+  nessun cambiamento del comportamento delle API di produzione.
+
+
 - Voronoi: costruzione grezza separata dal clipping per la qualifica delle
   fasi; corpus deterministico di 768 celle per il profilo convesso.
   Trasformazione della griglia storica in `cfg(test)`, con differenziale
