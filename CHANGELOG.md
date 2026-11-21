@@ -14,6 +14,11 @@ la cui versione non ha qui una voce datata.
 
 ### Miglioramenti
 
+- API Rust `simplify_with_output_policy`: uscita non valida rifiutata con
+  errore tipizzato per default; riparazione opt-in tramite `make_valid`
+  del motore, con metodo e conservazione dei collassati espliciti ed esito
+  `repaired`. Validazione topologica prima della pubblicazione, anche dopo
+  riparazione. Restano i limiti storici del backend di riparazione.
 - Uguaglianza normalizzata di rappresentazione: ricerca della rotazione
   minima degli anelli in tempo lineare, senza copie per ogni candidato.
   Ordine totale, bit delle coordinate e comportamento delle API esistenti

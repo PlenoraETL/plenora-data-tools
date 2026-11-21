@@ -935,6 +935,32 @@ esse, ogni operazione tabellare e `geo.collect`.
 **Condizione di rientro.** Fusi a offset fisso nel profilo testuale,
 `date64` letto nativamente dalle operazioni su date, `date_trunc` con fuso.
 
+## Generalize: uscita non valida e riparazione esplicita
+
+`operations::simplify` e `simplify_with_policy` rifiutano un risultato
+topologicamente non valido con `OperationError::InvalidOutput`.
+`simplify_with_output_policy` aggiunge una politica d'uscita distinta
+dall'algoritmo: `Reject` è il default; `Repair` richiede metodo
+`Linework`/`Structure`, `keep_collapsed` e precisione nelle unità delle
+coordinate. L'esito contiene la geometria verificata e `repaired`, vero
+soltanto se la riparazione è stata necessaria ed è riuscita. Gli ingressi
+invalidi e le validazioni non concluse restano errori, anche con opt-in.
+
+Il verificatore topologico è quello unico del workspace. La riparazione
+usa `rust_backend::make_valid_geometry`, anche per collezioni, con il
+profilo storico `MAKE_VALID_LIMITS`: non aggiunge deadline, cancellazione
+o contabilità cumulativa di memoria/lavoro effettivo. Il limite di noding
+del backend resta il quadrato dei segmenti. Questa API non qualifica un
+nuovo percorso con budget GOP-027/028. I risultati già validi non passano
+dal make_valid e conservano coordinate, ordine e rappresentazione.
+
+La riparazione può introdurre vertici, geometrie miste, linee, punti o
+vuoti. `Linework` conserva i collassati secondo il contratto del backend;
+`keep_collapsed` governa `Structure`. La tolleranza di semplificazione
+non è una garanzia di distanza del risultato riparato dall'ingresso.
+Nessuna equivalenza con la traduzione Esri è dichiarata. La nuova API è
+Rust diretta: la config di catalogo `geo.simplify` resta sul rifiuto.
+
 ## `geo.make_valid`, `geo.polygonize`, `geo.split`: equivalenza a GEOS verificata, non dimostrata
 
 **Regola.** Le tre operazioni girano sui kernel Rust del laboratorio
